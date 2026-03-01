@@ -247,6 +247,11 @@ public class CommandTranslator
     }
 
     /// <summary>
+    /// Check if a command is registered (for syntax highlighting).
+    /// </summary>
+    public bool IsKnownCommand(string command) => _commands.ContainsKey(command);
+
+    /// <summary>
     /// Get all registered command names (for tab completion).
     /// </summary>
     public IEnumerable<string> GetCommandNames()

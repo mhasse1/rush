@@ -20,6 +20,9 @@ public class LineEditor
     public Func<string, int, (string newInput, int newCursor)?>? CompleteHandler { get; set; }
     public Action? ShowCompletionsHandler { get; set; }
 
+    // Syntax highlighting
+    public SyntaxHighlighter? Highlighter { get; set; }
+
     // Vi count prefix
     private int _viCount;
     private bool _viCountActive;
@@ -705,7 +708,16 @@ public class LineEditor
 
         Console.SetCursorPosition(_startLeft, _startTop);
         var text = new string(_buffer.ToArray());
-        Console.Write(text);
+
+        if (Highlighter != null)
+        {
+            Console.Write(Highlighter.Colorize(text));
+            Console.ResetColor(); // Sync .NET state after ANSI codes
+        }
+        else
+        {
+            Console.Write(text);
+        }
 
         // Draw autosuggestion ghost text (fish-style)
         int ghostLen = 0;

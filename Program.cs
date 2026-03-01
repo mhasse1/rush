@@ -7,7 +7,7 @@ var config = RushConfig.Load();
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine("rush v0.1.0 — a better shell");
+Console.WriteLine("rush v0.2.0 — a better shell");
 Console.ForegroundColor = ConsoleColor.DarkGray;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
@@ -25,12 +25,16 @@ var translator = new CommandTranslator();
 var lineEditor = new LineEditor();
 var prompt = new Prompt();
 var tabCompleter = new TabCompleter(runspace, translator);
+var highlighter = new SyntaxHighlighter(translator);
 
 // Apply config (sets edit mode, custom aliases)
 config.Apply(lineEditor, translator);
 
 // Load persistent history
 lineEditor.LoadHistory();
+
+// Wire syntax highlighting
+lineEditor.Highlighter = highlighter;
 
 // Wire tab completion into line editor
 lineEditor.CompleteHandler = (input, cursor) => tabCompleter.Complete(input, cursor);
@@ -91,100 +95,139 @@ while (true)
         }
     }
 
-    bool commandFailed = false;
+    // ── Split on Chain Operators (&&, ||) ────────────────────────────
+    var (chainSegments, chainOps) = SplitChainOperators(input);
 
-    // ── Built-in Commands ────────────────────────────────────────────
-    if (input.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
-        input.Equals("quit", StringComparison.OrdinalIgnoreCase))
-        break;
+    bool lastSegmentFailed = false;
+    bool shouldExit = false;
 
-    if (input.Equals("help", StringComparison.OrdinalIgnoreCase))
+    for (int ci = 0; ci < chainSegments.Count; ci++)
     {
-        ShowHelp(lineEditor, translator);
-        continue;
-    }
+        var segment = chainSegments[ci].Trim();
+        if (string.IsNullOrEmpty(segment)) continue;
 
-    if (input.Equals("set vi", StringComparison.OrdinalIgnoreCase))
-    {
-        lineEditor.Mode = EditMode.Vi;
-        Console.WriteLine("Switched to vi mode");
-        continue;
-    }
-    if (input.Equals("set emacs", StringComparison.OrdinalIgnoreCase))
-    {
-        lineEditor.Mode = EditMode.Emacs;
-        Console.WriteLine("Switched to emacs mode");
-        continue;
-    }
-
-    if (input.Equals("history", StringComparison.OrdinalIgnoreCase))
-    {
-        ShowHistory(lineEditor);
-        continue;
-    }
-
-    if (input.Equals("alias", StringComparison.OrdinalIgnoreCase))
-    {
-        ShowAliases(translator);
-        continue;
-    }
-
-    if (input.Equals("reload", StringComparison.OrdinalIgnoreCase))
-    {
-        config = RushConfig.Load();
-        config.Apply(lineEditor, translator);
-        Console.WriteLine("Config reloaded");
-        continue;
-    }
-
-    if (input.Equals("clear", StringComparison.OrdinalIgnoreCase))
-    {
-        Console.Clear();
-        continue;
-    }
-
-    // ── cd (with - support) ──────────────────────────────────────────
-    if (input.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) || input == "cd")
-    {
-        HandleCd(runspace, input, ref previousDirectory);
-        continue;
-    }
-
-    // ── Translate & Execute ──────────────────────────────────────────
-    var translated = translator.Translate(input);
-    var commandToRun = translated ?? input;
-
-    try
-    {
-        using var ps = PowerShell.Create();
-        ps.Runspace = runspace;
-        ps.AddScript(commandToRun);
-
-        var results = ps.Invoke();
-
-        if (ps.HadErrors)
+        // Chain logic: && skips on failure, || skips on success
+        if (ci > 0)
         {
-            OutputRenderer.RenderErrors(ps.Streams);
-            commandFailed = true;
+            if (chainOps[ci - 1] == "&&" && lastSegmentFailed) continue;
+            if (chainOps[ci - 1] == "||" && !lastSegmentFailed) continue;
         }
 
-        if (results.Count > 0)
-            OutputRenderer.Render(results.ToArray());
-    }
-    catch (Exception ex)
-    {
-        commandFailed = true;
-        // Clean error messages — strip .NET noise
-        var msg = ex.Message;
-        if (ex.InnerException != null)
-            msg = ex.InnerException.Message;
+        // ── Try Built-in Commands ───────────────────────────────────
+        if (segment.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("quit", StringComparison.OrdinalIgnoreCase))
+        {
+            shouldExit = true;
+            break;
+        }
 
-        Console.ForegroundColor = ConsoleColor.Red;
-        Console.Error.WriteLine($"error: {msg}");
-        Console.ResetColor();
+        if (segment.Equals("help", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowHelp(lineEditor, translator);
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("set vi", StringComparison.OrdinalIgnoreCase))
+        {
+            lineEditor.Mode = EditMode.Vi;
+            Console.WriteLine("Switched to vi mode");
+            lastSegmentFailed = false;
+            continue;
+        }
+        if (segment.Equals("set emacs", StringComparison.OrdinalIgnoreCase))
+        {
+            lineEditor.Mode = EditMode.Emacs;
+            Console.WriteLine("Switched to emacs mode");
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("history", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowHistory(lineEditor);
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("alias", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowAliases(translator);
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("reload", StringComparison.OrdinalIgnoreCase))
+        {
+            config = RushConfig.Load();
+            config.Apply(lineEditor, translator);
+            Console.WriteLine("Config reloaded");
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("clear", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Clear();
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── cd (with - support) ─────────────────────────────────────
+        if (segment.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) || segment == "cd")
+        {
+            var (cdFailed, newPrev) = HandleCd(runspace, segment, previousDirectory);
+            if (!cdFailed && newPrev != null) previousDirectory = newPrev;
+            lastSegmentFailed = cdFailed;
+            continue;
+        }
+
+        // ── Parse Redirection ─────────────────────────────────────
+        var (cmdPart, redirect) = ParseRedirection(segment);
+
+        // ── Translate & Execute ─────────────────────────────────────
+        var translated = translator.Translate(cmdPart);
+        var commandToRun = translated ?? cmdPart;
+
+        try
+        {
+            using var ps = PowerShell.Create();
+            ps.Runspace = runspace;
+            ps.AddScript(commandToRun);
+
+            var results = ps.Invoke();
+
+            if (ps.HadErrors)
+            {
+                OutputRenderer.RenderErrors(ps.Streams);
+                lastSegmentFailed = true;
+            }
+            else
+            {
+                lastSegmentFailed = false;
+            }
+
+            if (results.Count > 0)
+            {
+                if (redirect != null)
+                    WriteRedirectedOutput(results, redirect);
+                else
+                    OutputRenderer.Render(results.ToArray());
+            }
+        }
+        catch (Exception ex)
+        {
+            lastSegmentFailed = true;
+            var msg = ex.InnerException?.Message ?? ex.Message;
+            Console.ForegroundColor = ConsoleColor.Red;
+            Console.Error.WriteLine($"error: {msg}");
+            Console.ResetColor();
+        }
     }
 
-    prompt.SetLastCommandFailed(commandFailed);
+    if (shouldExit) break;
+
+    prompt.SetLastCommandFailed(lastSegmentFailed);
     lineEditor.SaveHistory();
 }
 
@@ -195,7 +238,56 @@ Console.WriteLine("bye.");
 // Helper Methods
 // ═══════════════════════════════════════════════════════════════════
 
-static void HandleCd(Runspace runspace, string input, ref string? previousDirectory)
+/// <summary>
+/// Split input on && and || operators, respecting quotes.
+/// Returns the segments and the operators between them.
+/// operators[i] is the operator between segments[i] and segments[i+1].
+/// </summary>
+static (List<string> segments, List<string> operators) SplitChainOperators(string input)
+{
+    var segments = new List<string>();
+    var operators = new List<string>();
+    var current = new System.Text.StringBuilder();
+    bool inSingleQuote = false;
+    bool inDoubleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        char ch = input[i];
+
+        if (ch == '\'' && !inDoubleQuote) { inSingleQuote = !inSingleQuote; current.Append(ch); continue; }
+        if (ch == '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; current.Append(ch); continue; }
+
+        if (!inSingleQuote && !inDoubleQuote)
+        {
+            if (ch == '&' && i + 1 < input.Length && input[i + 1] == '&')
+            {
+                segments.Add(current.ToString());
+                operators.Add("&&");
+                current.Clear();
+                i++; // skip second &
+                continue;
+            }
+            if (ch == '|' && i + 1 < input.Length && input[i + 1] == '|')
+            {
+                segments.Add(current.ToString());
+                operators.Add("||");
+                current.Clear();
+                i++; // skip second |
+                continue;
+            }
+        }
+
+        current.Append(ch);
+    }
+
+    if (current.Length > 0)
+        segments.Add(current.ToString());
+
+    return (segments, operators);
+}
+
+static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string input, string? previousDirectory)
 {
     var path = input.Length > 3 ? input[3..].Trim() : "~";
 
@@ -219,7 +311,7 @@ static void HandleCd(Runspace runspace, string input, ref string? previousDirect
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("cd: no previous directory");
             Console.ResetColor();
-            return;
+            return (true, null);
         }
         path = previousDirectory;
     }
@@ -241,11 +333,12 @@ static void HandleCd(Runspace runspace, string input, ref string? previousDirect
         if (ps.HadErrors)
         {
             OutputRenderer.RenderErrors(ps.Streams);
+            return (true, null);
         }
         else
         {
-            // Success — update previousDirectory
-            previousDirectory = currentDir;
+            // Success — return the pre-change dir as new previousDirectory
+            return (false, currentDir);
         }
     }
     catch (Exception ex)
@@ -253,6 +346,7 @@ static void HandleCd(Runspace runspace, string input, ref string? previousDirect
         Console.ForegroundColor = ConsoleColor.Red;
         Console.Error.WriteLine($"cd: {ex.Message}");
         Console.ResetColor();
+        return (true, null);
     }
 }
 
@@ -287,6 +381,82 @@ static void ShowAliases(CommandTranslator translator)
     }
 }
 
+// ── Redirection ──────────────────────────────────────────────────────
+
+/// <summary>
+/// Parse > or >> redirection from the end of a command.
+/// Returns the command without redirection, and the redirect info (or null).
+/// </summary>
+static (string command, RedirectInfo? redirect) ParseRedirection(string input)
+{
+    var trimmed = input.TrimEnd();
+    bool inSingleQuote = false;
+    bool inDoubleQuote = false;
+    int lastRedirectPos = -1;
+    bool lastIsAppend = false;
+
+    for (int i = 0; i < trimmed.Length; i++)
+    {
+        if (trimmed[i] == '\'' && !inDoubleQuote) inSingleQuote = !inSingleQuote;
+        else if (trimmed[i] == '"' && !inSingleQuote) inDoubleQuote = !inDoubleQuote;
+
+        if (!inSingleQuote && !inDoubleQuote)
+        {
+            if (i + 1 < trimmed.Length && trimmed[i] == '>' && trimmed[i + 1] == '>')
+            {
+                lastRedirectPos = i;
+                lastIsAppend = true;
+                i++; // skip second >
+            }
+            else if (trimmed[i] == '>' && (i == 0 || trimmed[i - 1] != '2'))
+            {
+                lastRedirectPos = i;
+                lastIsAppend = false;
+            }
+        }
+    }
+
+    if (lastRedirectPos < 0) return (input, null);
+
+    var commandPart = trimmed[..lastRedirectPos].TrimEnd();
+    var filePart = trimmed[(lastRedirectPos + (lastIsAppend ? 2 : 1))..].Trim();
+
+    if (string.IsNullOrEmpty(filePart)) return (input, null); // No filename yet
+
+    // Strip quotes from filename
+    if ((filePart.StartsWith('\'') && filePart.EndsWith('\'')) ||
+        (filePart.StartsWith('"') && filePart.EndsWith('"')))
+        filePart = filePart[1..^1];
+
+    // Expand ~
+    if (filePart == "~" || filePart.StartsWith("~/"))
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        filePart = filePart == "~" ? home : Path.Combine(home, filePart[2..]);
+    }
+
+    return (commandPart, new RedirectInfo(filePart, lastIsAppend));
+}
+
+static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo redirect)
+{
+    try
+    {
+        using var writer = redirect.Append
+            ? File.AppendText(redirect.FilePath)
+            : File.CreateText(redirect.FilePath);
+
+        foreach (var result in results)
+            writer.WriteLine(result.ToString());
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine($"redirect: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
 static void ShowHelp(LineEditor editor, CommandTranslator translator)
 {
     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -299,10 +469,12 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine(string.Join(", ", commands));
     Console.WriteLine();
 
-    Console.WriteLine("  Pipes:   ls | grep foo | head -5 | sort");
-    Console.WriteLine("  Flags:   ls -la → Get-ChildItem -Force");
-    Console.WriteLine("  Native:  git, docker, kubectl just work");
-    Console.WriteLine("  PS7:     Full PowerShell syntax works directly");
+    Console.WriteLine("  Pipes:    ls | grep foo | head -5 | sort");
+    Console.WriteLine("  Flags:    ls -la → Get-ChildItem -Force");
+    Console.WriteLine("  Native:   git, docker, kubectl just work");
+    Console.WriteLine("  PS7:      Full PowerShell syntax works directly");
+    Console.WriteLine("  Chain:    cmd1 && cmd2 || echo 'fallback'");
+    Console.WriteLine("  Redirect: ls > files.txt   echo hi >> log.txt");
     Console.WriteLine();
 
     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -318,6 +490,9 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  !!         — repeat last command");
     Console.WriteLine("  !$         — last argument of previous command");
     Console.WriteLine("  .property  — dot-notation in pipes: ps | .ProcessName");
+    Console.WriteLine("  &&         — run next command only if previous succeeded");
+    Console.WriteLine("  ||         — run next command only if previous failed");
+    Console.WriteLine("  > / >>     — redirect output to file (overwrite / append)");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings");
     Console.WriteLine("  reload     — reload config");
@@ -338,3 +513,6 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
     Console.ResetColor();
 }
+
+// ── Types ────────────────────────────────────────────────────────────
+record RedirectInfo(string FilePath, bool Append);
