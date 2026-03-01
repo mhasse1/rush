@@ -90,7 +90,21 @@ lineEditor.ShowCompletionsHandler = () =>
     }
 };
 
-// ── Run Startup Script ──────────────────────────────────────────────
+// ── Rush Environment Variables ───────────────────────────────────────
+// Expose os, hostname, rush_version as PS variables so Rush scripts can use them
+{
+    using var ps = PowerShell.Create();
+    ps.Runspace = runspace;
+    var osName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+        System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
+        System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+        System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
+    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'");
+    ps.Invoke();
+}
+
+// ── Run Startup Scripts ─────────────────────────────────────────────
+RunConfigRush(runspace, scriptEngine);
 RunStartupScript(runspace);
 
 // ── State ────────────────────────────────────────────────────────────
@@ -602,6 +616,16 @@ while (true)
             continue;
         }
 
+        // ── sync: GitHub config sync ────────────────────────────────
+        if (segment.Equals("sync", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("sync ", StringComparison.OrdinalIgnoreCase))
+        {
+            var syncArgs = segment.Length > 4 ? segment[4..].Trim() : "";
+            ConfigSync.HandleSync(syncArgs);
+            lastSegmentFailed = false;
+            continue;
+        }
+
         // ── Parse Redirection ─────────────────────────────────────
         var (cmdPart, redirect) = ParseRedirection(segment);
 
@@ -742,6 +766,34 @@ Console.WriteLine("bye.");
 
 // ── Startup Script ──────────────────────────────────────────────────
 
+/// <summary>
+/// Execute ~/.config/rush/config.rush through the scripting engine.
+/// This is the portable config file with OS conditionals, aliases, etc.
+/// Runs before init.rush so init.rush can override.
+/// </summary>
+static void RunConfigRush(Runspace runspace, ScriptEngine engine)
+{
+    var configPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".config", "rush", "config.rush");
+
+    if (!File.Exists(configPath)) return;
+
+    try
+    {
+        var source = File.ReadAllText(configPath);
+        var psCode = engine.TranspileFile(source);
+        if (psCode != null)
+        {
+            using var ps = PowerShell.Create();
+            ps.Runspace = runspace;
+            ps.AddScript(psCode);
+            ps.Invoke();
+        }
+    }
+    catch { } // Silently ignore config script errors on startup
+}
+
 static void RunStartupScript(Runspace runspace)
 {
     var scriptPath = Path.Combine(
@@ -786,6 +838,18 @@ static void RunScriptFile(string path)
         var host = new RushHost(hostUI);
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
+
+        // Inject Rush environment variables (same as REPL startup)
+        {
+            using var initPs = PowerShell.Create();
+            initPs.Runspace = runspace;
+            var osName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
+                System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
+            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '1.1.0'");
+            initPs.Invoke();
+        }
 
         var translator = new CommandTranslator();
         var engine = new ScriptEngine(translator);
@@ -1482,7 +1546,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "sync" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -1620,6 +1684,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  \\          — line continuation (trailing backslash)");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings (no args)");
+    Console.WriteLine("  sync       — GitHub config sync: sync init|push|pull|status");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
     Console.WriteLine();

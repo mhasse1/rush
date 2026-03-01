@@ -173,7 +173,8 @@ public class ScriptEngine
             || word.Equals("jobs", StringComparison.OrdinalIgnoreCase)
             || word.Equals("fg", StringComparison.OrdinalIgnoreCase)
             || word.Equals("bg", StringComparison.OrdinalIgnoreCase)
-            || word.Equals("kill", StringComparison.OrdinalIgnoreCase);
+            || word.Equals("kill", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("sync", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
