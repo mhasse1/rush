@@ -17,6 +17,18 @@ public static class OutputRenderer
         ["System.Management.Automation.PathInfo"] = [], // Use ToString()
     };
 
+    // File extension color groups
+    private static readonly HashSet<string> ExecutableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".exe", ".sh", ".bat", ".cmd", ".ps1", ".py", ".rb", ".pl" };
+    private static readonly HashSet<string> ArchiveExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz", ".zst" };
+    private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".ico", ".webp" };
+    private static readonly HashSet<string> ConfigExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".json", ".yaml", ".yml", ".toml", ".xml", ".ini", ".conf", ".cfg", ".env" };
+    private static readonly HashSet<string> DocExtensions = new(StringComparer.OrdinalIgnoreCase)
+    { ".md", ".txt", ".rst", ".doc", ".docx", ".pdf" };
+
     public static void Render(IReadOnlyList<PSObject> results)
     {
         if (results.Count == 0) return;
@@ -46,6 +58,13 @@ public static class OutputRenderer
             || IsMixedFileSystemItems(results))
         {
             RenderFileSystemItems(results);
+            return;
+        }
+
+        // Process objects — custom rendering with human-readable memory
+        if (baseTypeName == "System.Diagnostics.Process")
+        {
+            RenderProcesses(results);
             return;
         }
 
@@ -99,8 +118,9 @@ public static class OutputRenderer
                 Console.Write("- ");
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.Write($"{size,10}  {dateStr}  ");
-                Console.ResetColor();
+                Console.ForegroundColor = GetFileColor(name);
                 Console.WriteLine(name);
+                Console.ResetColor();
             }
         }
     }
@@ -210,6 +230,129 @@ public static class OutputRenderer
             }
         }
         Console.ForegroundColor = prevColor;
+    }
+
+    private static void RenderProcesses(IReadOnlyList<PSObject> results)
+    {
+        // Calculate column widths for process display
+        var rows = new List<(string id, string name, string mem, string cpu)>();
+        int maxIdW = 3, maxNameW = 4, maxMemW = 6, maxCpuW = 3;
+
+        foreach (var result in results)
+        {
+            var id = GetPropStr(result, "Id");
+            var name = GetPropStr(result, "ProcessName");
+            var memStr = FormatMemory(result);
+            var cpuStr = FormatCpu(result);
+
+            maxIdW = Math.Max(maxIdW, id.Length);
+            maxNameW = Math.Max(maxNameW, name.Length);
+            maxMemW = Math.Max(maxMemW, memStr.Length);
+            maxCpuW = Math.Max(maxCpuW, cpuStr.Length);
+
+            rows.Add((id, name, memStr, cpuStr));
+        }
+
+        // Cap name width
+        maxNameW = Math.Min(maxNameW, 30);
+
+        // Header
+        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.Write(PadOrTruncate("PID", maxIdW));
+        Console.Write("   ");
+        Console.Write(PadOrTruncate("Name", maxNameW));
+        Console.Write("   ");
+        Console.Write(PadOrTruncate("Memory", maxMemW));
+        Console.Write("   ");
+        Console.Write(PadOrTruncate("CPU", maxCpuW));
+        Console.WriteLine();
+
+        // Separator
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write(new string('─', maxIdW));
+        Console.Write("   ");
+        Console.Write(new string('─', maxNameW));
+        Console.Write("   ");
+        Console.Write(new string('─', maxMemW));
+        Console.Write("   ");
+        Console.Write(new string('─', maxCpuW));
+        Console.WriteLine();
+        Console.ResetColor();
+
+        // Rows
+        foreach (var (id, name, mem, cpu) in rows)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write(PadOrTruncate(id, maxIdW));
+            Console.Write("   ");
+            Console.ResetColor();
+            Console.Write(PadOrTruncate(name, maxNameW));
+            Console.Write("   ");
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.Write(PadOrTruncate(mem, maxMemW));
+            Console.Write("   ");
+            Console.ResetColor();
+            Console.Write(PadOrTruncate(cpu, maxCpuW));
+            Console.WriteLine();
+        }
+        Console.ResetColor();
+    }
+
+    private static string FormatMemory(PSObject obj)
+    {
+        try
+        {
+            var prop = obj.Properties["WorkingSet64"];
+            if (prop?.Value is long bytes)
+            {
+                if (bytes < 1024) return $"{bytes} B";
+                if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F0} KB";
+                if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024):F1} MB";
+                return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+            }
+            return prop?.Value?.ToString() ?? "";
+        }
+        catch { return ""; }
+    }
+
+    private static string FormatCpu(PSObject obj)
+    {
+        try
+        {
+            var prop = obj.Properties["CPU"];
+            if (prop?.Value is double cpu)
+            {
+                if (cpu < 0.01) return "0.0";
+                if (cpu < 100) return $"{cpu:F1}";
+                return $"{cpu:F0}";
+            }
+            return prop?.Value?.ToString() ?? "";
+        }
+        catch { return ""; }
+    }
+
+    private static ConsoleColor GetFileColor(string name)
+    {
+        var ext = System.IO.Path.GetExtension(name);
+        if (string.IsNullOrEmpty(ext))
+        {
+            // Hidden files (dotfiles)
+            if (name.StartsWith('.')) return ConsoleColor.DarkGray;
+            return ConsoleColor.Gray;
+        }
+
+        if (ExecutableExtensions.Contains(ext)) return ConsoleColor.Green;
+        if (ArchiveExtensions.Contains(ext)) return ConsoleColor.Red;
+        if (ImageExtensions.Contains(ext)) return ConsoleColor.Magenta;
+        if (ConfigExtensions.Contains(ext)) return ConsoleColor.Yellow;
+        if (DocExtensions.Contains(ext)) return ConsoleColor.Cyan;
+
+        // Source code files
+        if (ext is ".cs" or ".js" or ".ts" or ".go" or ".rs" or ".java" or ".c" or ".cpp" or ".h"
+            or ".swift" or ".kt" or ".dart" or ".vue" or ".svelte" or ".jsx" or ".tsx")
+            return ConsoleColor.White;
+
+        return ConsoleColor.Gray;
     }
 
     private static bool IsSimpleValue(PSObject obj)

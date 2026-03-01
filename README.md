@@ -13,7 +13,7 @@ dotnet build
 # Run
 dotnet run
 
-# Publish self-contained binary
+# Publish self-contained binary (no .NET runtime needed)
 dotnet publish -c Release -r osx-arm64
 dotnet publish -c Release -r linux-x64
 dotnet publish -c Release -r win-x64
@@ -29,7 +29,9 @@ dotnet publish -c Release -r win-x64
 | `ps \| where CPU > 10` | `Get-Process \| Where-Object { $_.CPU -gt 10 }` |
 | `ps \| .ProcessName` | `Get-Process \| ForEach-Object { $_.ProcessName }` |
 | `ps \| as json` | `Get-Process \| ConvertTo-Json -Depth 5` |
-| `json config.json \| .settings` | `Get-Content config.json \| ConvertFrom-Json \| ForEach-Object { $_.settings }` |
+| `json config.json \| .settings` | `Get-Content config.json \| ConvertFrom-Json \| ...` |
+| `ls \| count` | `Get-ChildItem \| Measure-Object \| ForEach-Object { $_.Count }` |
+| `ps \| sum WorkingSet64` | `Get-Process \| Measure-Object -Property WorkingSet64 -Sum \| ...` |
 
 Full PowerShell syntax works too — Rush translates what it recognizes and passes everything else through.
 
@@ -45,9 +47,14 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 - `uniq` → `Select-Object -Unique`
 
 **Data Pipeline** — filter, select, and format structured data:
-- `where CPU > 10` — property filtering with Unix operators
+- `where CPU > 10` — property filtering with Unix operators (`>`, `<`, `=`, `!=`, `~`)
 - `select Id, Name` — property selection
-- `as json` / `as csv` / `as table` — format output
+- `count` — count items in pipeline
+- `first 5` / `last 3` / `skip 2` — slice results
+- `distinct` — unique values (works on unsorted data)
+- `sum` / `avg` / `min` / `max` — math aggregations on properties
+- `tee output.txt` — save to file while passing through
+- `as json` / `as csv` / `as table` / `as list` — format output
 - `from json` / `from csv` — parse input
 - `json file.json` — read and parse JSON files
 - `.property` — dot-notation for property access
@@ -58,12 +65,19 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 - Ctrl+R reverse history search
 - Fish-style autosuggestions (ghost text)
 - Persistent history across sessions
-- Syntax highlighting as you type
+- Real-time syntax highlighting as you type
+- Color-coded `ls` output by file type
+- Human-readable process memory display
 - `cd -` to toggle previous directory
+- `~` tilde expansion to home directory
 - `!!` and `!$` bang expansion
-- `&&` / `||` command chaining
+- `!N` run Nth command from history
+- `&&` / `||` / `;` command chaining
 - `>` / `>>` output redirection
 - `$HOME` environment variable expansion
+- `export FOO=bar` / `unset FOO` for env vars
+- `alias ll='ls -la'` for interactive alias definition
+- `source file.rush` for running rush scripts
 - Git-aware prompt with branch display
 - Command timing for slow commands (>500ms)
 - "Did you mean?" suggestions on typos
@@ -104,9 +118,9 @@ Rush embeds the PowerShell 7 engine (MIT-licensed `Microsoft.PowerShell.SDK`) as
 Key components:
 - `CommandTranslator` — maps Unix commands + flags to PowerShell cmdlets
 - `LineEditor` — vi/emacs line editing with history, tab completion, autosuggestions
-- `OutputRenderer` — type-aware output formatting (ls-style, tables, plain text)
-- `SyntaxHighlighter` — real-time ANSI colorization
-- `Prompt` — git-aware prompt rendering
+- `OutputRenderer` — type-aware output formatting (colorized ls, process tables, generic tables)
+- `SyntaxHighlighter` — real-time ANSI colorization of commands, flags, strings, operators
+- `Prompt` — git-aware prompt rendering with exit code indication
 - `TabCompleter` — path + command completion via PowerShell's `CommandCompletion` API
 
 ## License

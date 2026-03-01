@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "0.7.0";
+const string Version = "0.8.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
