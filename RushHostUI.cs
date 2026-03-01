@@ -38,7 +38,7 @@ public class RushHostUI : PSHostUserInterface
     public override void WriteErrorLine(string value)
     {
         var prev = Console.ForegroundColor;
-        Console.ForegroundColor = ConsoleColor.Red;
+        Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine(value);
         Console.ForegroundColor = prev;
     }
@@ -46,7 +46,7 @@ public class RushHostUI : PSHostUserInterface
     public override void WriteWarningLine(string message)
     {
         var prev = Console.ForegroundColor;
-        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.ForegroundColor = Theme.Current.Warning;
         Console.WriteLine($"warning: {message}");
         Console.ForegroundColor = prev;
     }
@@ -54,7 +54,7 @@ public class RushHostUI : PSHostUserInterface
     public override void WriteVerboseLine(string message)
     {
         var prev = Console.ForegroundColor;
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine(message);
         Console.ForegroundColor = prev;
     }
@@ -62,7 +62,7 @@ public class RushHostUI : PSHostUserInterface
     public override void WriteDebugLine(string message)
     {
         var prev = Console.ForegroundColor;
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine($"debug: {message}");
         Console.ForegroundColor = prev;
     }

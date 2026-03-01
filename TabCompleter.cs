@@ -97,7 +97,7 @@ public class TabCompleter
             var comp = _completions[i];
             if (comp.EndsWith(Path.DirectorySeparatorChar) || comp.EndsWith('/'))
             {
-                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.ForegroundColor = Theme.Current.Directory;
                 Console.Write(comp.PadRight(maxLen));
                 Console.ResetColor();
             }

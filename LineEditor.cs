@@ -559,11 +559,11 @@ public class LineEditor
             Console.Write(new string(' ', width));
             Console.SetCursorPosition(0, _startTop);
 
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Muted;
             Console.Write("(reverse-i-search)`");
-            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.ForegroundColor = Theme.Current.SearchQuery;
             Console.Write(new string(searchBuffer.ToArray()));
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Muted;
             Console.Write("': ");
             Console.ResetColor();
 
@@ -723,7 +723,7 @@ public class LineEditor
         int ghostLen = 0;
         if (_suggestion != null && _cursor == _buffer.Count)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(_suggestion);
             Console.ResetColor();
             ghostLen = _suggestion.Length;

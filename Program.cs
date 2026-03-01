@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "0.8.0";
+const string Version = "0.9.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -35,10 +35,13 @@ if (args.Length > 0)
 // ── Load Config ──────────────────────────────────────────────────────
 var config = RushConfig.Load();
 
+// ── Theme (detect terminal background for contrast-aware colors) ─────
+Theme.Initialize(config.GetThemeOverride());
+
 // ── Banner ───────────────────────────────────────────────────────────
-Console.ForegroundColor = ConsoleColor.Cyan;
+Console.ForegroundColor = Theme.Current.Banner;
 Console.WriteLine($"rush v{Version} — a better shell");
-Console.ForegroundColor = ConsoleColor.DarkGray;
+Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
 Console.WriteLine();
@@ -141,7 +144,7 @@ while (true)
         if (expanded)
         {
             lineEditor.ReplaceLastHistory(input);
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Muted;
             Console.WriteLine($"  → {input}");
             Console.ResetColor();
         }
@@ -221,6 +224,7 @@ while (true)
         {
             config = RushConfig.Load();
             config.Apply(lineEditor, translator);
+            Theme.Initialize(config.GetThemeOverride());
             Console.WriteLine("Config reloaded");
             lastSegmentFailed = false;
             continue;
@@ -249,7 +253,7 @@ while (true)
                     aliasValue = aliasValue[1..^1];
 
                 translator.RegisterAlias(aliasName, aliasValue);
-                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  alias {aliasName} → {aliasValue}");
                 Console.ResetColor();
             }
@@ -326,7 +330,7 @@ while (true)
                 }
                 catch (Exception ex)
                 {
-                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.ForegroundColor = Theme.Current.Error;
                     Console.Error.WriteLine($"source: {ex.Message}");
                     Console.ResetColor();
                     lastSegmentFailed = true;
@@ -335,7 +339,7 @@ while (true)
             }
             else
             {
-                Console.ForegroundColor = ConsoleColor.Red;
+                Console.ForegroundColor = Theme.Current.Error;
                 Console.Error.WriteLine($"source: {scriptPath}: no such file");
                 Console.ResetColor();
                 lastSegmentFailed = true;
@@ -408,7 +412,7 @@ while (true)
             sw.Stop();
             lastSegmentFailed = true;
             var msg = ex.InnerException?.Message ?? ex.Message;
-            Console.ForegroundColor = ConsoleColor.Red;
+            Console.ForegroundColor = Theme.Current.Error;
             Console.Error.WriteLine($"error: {msg}");
             Console.ResetColor();
         }
@@ -416,7 +420,7 @@ while (true)
         // Show timing for slow commands (>500ms)
         if (sw.ElapsedMilliseconds > 500)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Muted;
             var elapsed = sw.Elapsed;
             if (elapsed.TotalMinutes >= 1)
                 Console.WriteLine($"  took {elapsed.Minutes}m {elapsed.Seconds}s");
@@ -644,7 +648,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
     {
         if (previousDirectory == null)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.ForegroundColor = Theme.Current.Warning;
             Console.WriteLine("cd: no previous directory");
             Console.ResetColor();
             return (true, null);
@@ -674,7 +678,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
     }
     catch (Exception ex)
     {
-        Console.ForegroundColor = ConsoleColor.Red;
+        Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"cd: {ex.Message}");
         Console.ResetColor();
         return (true, null);
@@ -745,7 +749,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
     }
     catch (Exception ex)
     {
-        Console.ForegroundColor = ConsoleColor.Red;
+        Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"redirect: {ex.Message}");
         Console.ResetColor();
     }
@@ -766,9 +770,9 @@ static void ShowSuggestions(string cmd, CommandTranslator translator)
 
     if (suggestions.Count > 0)
     {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.Error.Write("  did you mean: ");
-        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.ForegroundColor = Theme.Current.Warning;
         Console.Error.WriteLine(string.Join(", ", suggestions));
         Console.ResetColor();
     }
@@ -796,7 +800,7 @@ static void ShowHistory(LineEditor editor)
     int start = Math.Max(0, history.Count - 50);
     for (int i = start; i < history.Count; i++)
     {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.Write($"  {i + 1,4}  ");
         Console.ResetColor();
         Console.WriteLine(history[i]);
@@ -805,16 +809,16 @@ static void ShowHistory(LineEditor editor)
 
 static void ShowAliases(CommandTranslator translator)
 {
-    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.ForegroundColor = Theme.Current.Banner;
     Console.WriteLine("Command Aliases:");
     Console.ResetColor();
     Console.WriteLine();
 
     foreach (var (alias, mapping) in translator.GetMappings().OrderBy(kv => kv.Key))
     {
-        Console.ForegroundColor = ConsoleColor.White;
+        Console.ForegroundColor = Theme.Current.Accent;
         Console.Write($"  {alias,-12}");
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.Write(" → ");
         Console.ResetColor();
         Console.WriteLine(mapping.Cmdlet ?? "(native passthrough)");
@@ -823,7 +827,7 @@ static void ShowAliases(CommandTranslator translator)
 
 static void ShowHelp(LineEditor editor, CommandTranslator translator)
 {
-    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.ForegroundColor = Theme.Current.Banner;
     Console.WriteLine("Rush — Unix-style commands on the PowerShell 7 engine");
     Console.ResetColor();
     Console.WriteLine();
@@ -849,7 +853,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  JSON:     json config.json | .settings");
     Console.WriteLine();
 
-    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.ForegroundColor = Theme.Current.Banner;
     Console.Write($"  Mode: {editor.Mode}");
     Console.ResetColor();
     Console.WriteLine("  (set vi | set emacs)");
@@ -891,7 +895,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 
     if (editor.Mode == EditMode.Vi)
     {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine("  Vi: Esc=normal  i/a/A/I=insert  h/l=move  w/b/e=word");
         Console.WriteLine("      x=delete  D=del-to-end  C=change-to-end  f/F=find-char");
         Console.WriteLine("      0/$=begin/end  j/k=history  3w=count+motion");
@@ -899,7 +903,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     }
 
     Console.WriteLine();
-    Console.ForegroundColor = ConsoleColor.DarkGray;
+    Console.ForegroundColor = Theme.Current.Muted;
     Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
     Console.WriteLine($"  Startup: ~/.config/rush/init.rush");
     Console.ResetColor();
@@ -908,6 +912,8 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 // ── Non-interactive Mode ─────────────────────────────────────────────
 static void RunNonInteractive(string command)
 {
+    var cfg = RushConfig.Load();
+    Theme.Initialize(cfg.GetThemeOverride());
     var ui = new RushHostUI();
     var h = new RushHost(ui);
     var ss = InitialSessionState.CreateDefault();

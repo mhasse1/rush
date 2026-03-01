@@ -102,11 +102,11 @@ public static class OutputRenderer
                 // Shorten the date
                 var dateStr = FormatDate(item, "LastWriteTime");
 
-                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.ForegroundColor = Theme.Current.Directory;
                 Console.Write("d ");
-                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.ForegroundColor = Theme.Current.Metadata;
                 Console.Write($"{"",10}  {dateStr}  ");
-                Console.ForegroundColor = ConsoleColor.Blue;
+                Console.ForegroundColor = Theme.Current.Directory;
                 Console.WriteLine($"{name}/");
                 Console.ResetColor();
             }
@@ -116,7 +116,7 @@ public static class OutputRenderer
                 var dateStr = FormatDate(item, "LastWriteTime");
 
                 Console.Write("- ");
-                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.ForegroundColor = Theme.Current.Metadata;
                 Console.Write($"{size,10}  {dateStr}  ");
                 Console.ForegroundColor = GetFileColor(name);
                 Console.WriteLine(name);
@@ -159,7 +159,7 @@ public static class OutputRenderer
         }
 
         // Header
-        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.ForegroundColor = Theme.Current.TableHeader;
         for (int i = 0; i < properties.Length; i++)
         {
             if (i > 0) Console.Write("   ");
@@ -168,7 +168,7 @@ public static class OutputRenderer
         Console.WriteLine();
 
         // Separator
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Separator;
         for (int i = 0; i < properties.Length; i++)
         {
             if (i > 0) Console.Write("   ");
@@ -194,7 +194,7 @@ public static class OutputRenderer
         var prevColor = Console.ForegroundColor;
         foreach (var error in streams.Error)
         {
-            Console.ForegroundColor = ConsoleColor.Red;
+            Console.ForegroundColor = Theme.Current.Error;
 
             // Extract the cleanest error message — skip stack traces and PS noise
             string msg;
@@ -257,7 +257,7 @@ public static class OutputRenderer
         maxNameW = Math.Min(maxNameW, 30);
 
         // Header
-        Console.ForegroundColor = ConsoleColor.Cyan;
+        Console.ForegroundColor = Theme.Current.TableHeader;
         Console.Write(PadOrTruncate("PID", maxIdW));
         Console.Write("   ");
         Console.Write(PadOrTruncate("Name", maxNameW));
@@ -268,7 +268,7 @@ public static class OutputRenderer
         Console.WriteLine();
 
         // Separator
-        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.ForegroundColor = Theme.Current.Separator;
         Console.Write(new string('─', maxIdW));
         Console.Write("   ");
         Console.Write(new string('─', maxNameW));
@@ -282,13 +282,13 @@ public static class OutputRenderer
         // Rows
         foreach (var (id, name, mem, cpu) in rows)
         {
-            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.ForegroundColor = Theme.Current.Metadata;
             Console.Write(PadOrTruncate(id, maxIdW));
             Console.Write("   ");
             Console.ResetColor();
             Console.Write(PadOrTruncate(name, maxNameW));
             Console.Write("   ");
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.ForegroundColor = Theme.Current.Memory;
             Console.Write(PadOrTruncate(mem, maxMemW));
             Console.Write("   ");
             Console.ResetColor();
@@ -337,22 +337,22 @@ public static class OutputRenderer
         if (string.IsNullOrEmpty(ext))
         {
             // Hidden files (dotfiles)
-            if (name.StartsWith('.')) return ConsoleColor.DarkGray;
-            return ConsoleColor.Gray;
+            if (name.StartsWith('.')) return Theme.Current.Muted;
+            return Theme.Current.RegularFile;
         }
 
-        if (ExecutableExtensions.Contains(ext)) return ConsoleColor.Green;
-        if (ArchiveExtensions.Contains(ext)) return ConsoleColor.Red;
-        if (ImageExtensions.Contains(ext)) return ConsoleColor.Magenta;
-        if (ConfigExtensions.Contains(ext)) return ConsoleColor.Yellow;
-        if (DocExtensions.Contains(ext)) return ConsoleColor.Cyan;
+        if (ExecutableExtensions.Contains(ext)) return Theme.Current.Executable;
+        if (ArchiveExtensions.Contains(ext)) return Theme.Current.Archive;
+        if (ImageExtensions.Contains(ext)) return Theme.Current.Image;
+        if (ConfigExtensions.Contains(ext)) return Theme.Current.Config;
+        if (DocExtensions.Contains(ext)) return Theme.Current.Document;
 
         // Source code files
         if (ext is ".cs" or ".js" or ".ts" or ".go" or ".rs" or ".java" or ".c" or ".cpp" or ".h"
             or ".swift" or ".kt" or ".dart" or ".vue" or ".svelte" or ".jsx" or ".tsx")
-            return ConsoleColor.White;
+            return Theme.Current.SourceCode;
 
-        return ConsoleColor.Gray;
+        return Theme.Current.RegularFile;
     }
 
     private static bool IsSimpleValue(PSObject obj)

@@ -26,18 +26,18 @@ public class Prompt
         var branch = GetGitBranch(cwd);
 
         // CWD
-        Console.ForegroundColor = ConsoleColor.Green;
+        Console.ForegroundColor = Theme.Current.PromptPath;
         Console.Write(ShortenPath(cwd));
 
         // Git branch
         if (branch != null)
         {
-            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.ForegroundColor = Theme.Current.PromptGitBranch;
             Console.Write($" ({branch})");
         }
 
         // Prompt symbol — red if last command failed
-        Console.ForegroundColor = _lastCommandFailed ? ConsoleColor.Red : ConsoleColor.Cyan;
+        Console.ForegroundColor = _lastCommandFailed ? Theme.Current.PromptFailed : Theme.Current.PromptSuccess;
         Console.Write(" > ");
         Console.ResetColor();
     }

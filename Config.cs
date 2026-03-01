@@ -11,6 +11,22 @@ public class RushConfig
     public Dictionary<string, string> Aliases { get; set; } = new();
     public string PromptFormat { get; set; } = "default";
 
+    /// <summary>
+    /// Theme override: "auto" (detect background), "dark", or "light".
+    /// </summary>
+    public string Theme { get; set; } = "auto";
+
+    /// <summary>
+    /// Convert the theme string to a nullable bool for Theme.Initialize().
+    /// "dark" → true, "light" → false, "auto"/anything else → null (auto-detect).
+    /// </summary>
+    public bool? GetThemeOverride() => Theme?.ToLowerInvariant() switch
+    {
+        "dark" => true,
+        "light" => false,
+        _ => null
+    };
+
     private static readonly string ConfigDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".config", "rush");

@@ -8,15 +8,16 @@ public class SyntaxHighlighter
 {
     private readonly CommandTranslator _translator;
 
-    // ANSI color codes
-    private const string Reset = "\x1b[0m";
-    private const string Cyan = "\x1b[36m";
-    private const string BrightCyan = "\x1b[96m";
-    private const string Yellow = "\x1b[33m";
-    private const string Green = "\x1b[32m";
-    private const string Magenta = "\x1b[35m";
-    private const string DarkGray = "\x1b[90m";
-    private const string White = "\x1b[37m";
+    // ANSI color codes — resolved from Theme at access time
+    private static string Reset => Theme.Current.AnsiReset;
+    private static string Cyan => Theme.Current.AnsiKnownCommand;
+    private static string BrightCyan => Theme.Current.AnsiFilePath;
+    private static string Yellow => Theme.Current.AnsiFlag;
+    private static string Green => Theme.Current.AnsiString;
+    private static string Magenta => Theme.Current.AnsiOperator;
+    private static string DarkGray => Theme.Current.AnsiPipe;
+    private static string White => Theme.Current.AnsiUnknownCommand;
+    private static string Bang => Theme.Current.AnsiBang;
 
     private static readonly HashSet<string> BuiltinCommands = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -64,7 +65,7 @@ public class SyntaxHighlighter
                     break;
 
                 case TokenType.Bang:
-                    sb.Append(Magenta).Append(token.Text).Append(Reset);
+                    sb.Append(Bang).Append(token.Text).Append(Reset);
                     break;
 
                 case TokenType.Flag:
