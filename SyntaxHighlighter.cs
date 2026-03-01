@@ -21,7 +21,8 @@ public class SyntaxHighlighter
     private static readonly HashSet<string> BuiltinCommands = new(StringComparer.OrdinalIgnoreCase)
     {
         "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "set",
-        "as", "from" // Pipe-context format commands
+        "as", "from", // Pipe-context format commands
+        "export", "unset", "source" // Shell builtins
     };
 
     public SyntaxHighlighter(CommandTranslator translator)
@@ -52,7 +53,7 @@ public class SyntaxHighlighter
 
                 case TokenType.Operator:
                     sb.Append(Magenta).Append(token.Text).Append(Reset);
-                    if (token.Text is "&&" or "||") expectCommand = true;
+                    if (token.Text is "&&" or "||" or ";") expectCommand = true;
                     break;
 
                 case TokenType.String:
@@ -171,6 +172,14 @@ public class SyntaxHighlighter
                 continue;
             }
 
+            // Semicolon separator
+            if (ch == ';')
+            {
+                tokens.Add(new Token(TokenType.Operator, ";"));
+                i++;
+                continue;
+            }
+
             // Bang expansion: !! or !$
             if (ch == '!' && i + 1 < input.Length && input[i + 1] is '!' or '$')
             {
@@ -211,7 +220,7 @@ public class SyntaxHighlighter
     private static bool IsBreak(string input, int i)
     {
         char ch = input[i];
-        if (ch is ' ' or '\t' or '|' or '>' or '\'' or '"') return true;
+        if (ch is ' ' or '\t' or '|' or '>' or '\'' or '"' or ';') return true;
         if (ch == '&' && i + 1 < input.Length && input[i + 1] == '&') return true;
         if (ch == '!' && i + 1 < input.Length && input[i + 1] is '!' or '$') return true;
         return false;

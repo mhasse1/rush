@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "0.5.0";
+const string Version = "0.6.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -127,10 +127,13 @@ while (true)
         }
     }
 
+    // ── Tilde Expansion ────────────────────────────────────────────
+    input = ExpandTilde(input);
+
     // ── Environment Variable Expansion ──────────────────────────────
     input = ExpandEnvVars(input);
 
-    // ── Split on Chain Operators (&&, ||) ────────────────────────────
+    // ── Split on Chain Operators (&&, ||, ;) ──────────────────────────
     var (chainSegments, chainOps) = SplitChainOperators(input);
 
     bool lastSegmentFailed = false;
@@ -141,11 +144,13 @@ while (true)
         var segment = chainSegments[ci].Trim();
         if (string.IsNullOrEmpty(segment)) continue;
 
-        // Chain logic: && skips on failure, || skips on success
+        // Chain logic: && skips on failure, || skips on success, ; always runs
         if (ci > 0)
         {
-            if (chainOps[ci - 1] == "&&" && lastSegmentFailed) continue;
-            if (chainOps[ci - 1] == "||" && !lastSegmentFailed) continue;
+            var prevOp = chainOps[ci - 1];
+            if (prevOp == "&&" && lastSegmentFailed) continue;
+            if (prevOp == "||" && !lastSegmentFailed) continue;
+            // ";" always falls through
         }
 
         // ── Try Built-in Commands ───────────────────────────────────
@@ -204,6 +209,118 @@ while (true)
         if (segment.Equals("clear", StringComparison.OrdinalIgnoreCase))
         {
             Console.Clear();
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── Interactive alias definition ────────────────────────────
+        // alias ll='ls -la'  or  alias ll=ls -la
+        if (segment.StartsWith("alias ", StringComparison.OrdinalIgnoreCase) && segment.Contains('='))
+        {
+            var aliasBody = segment[6..].Trim();
+            var eqPos = aliasBody.IndexOf('=');
+            if (eqPos > 0)
+            {
+                var aliasName = aliasBody[..eqPos].Trim();
+                var aliasValue = aliasBody[(eqPos + 1)..].Trim();
+                // Strip surrounding quotes
+                if ((aliasValue.StartsWith('\'') && aliasValue.EndsWith('\'')) ||
+                    (aliasValue.StartsWith('"') && aliasValue.EndsWith('"')))
+                    aliasValue = aliasValue[1..^1];
+
+                translator.RegisterAlias(aliasName, aliasValue);
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"  alias {aliasName} → {aliasValue}");
+                Console.ResetColor();
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── export: set environment variable ────────────────────────
+        // export FOO=bar  or  export FOO="bar baz"
+        if (segment.StartsWith("export ", StringComparison.OrdinalIgnoreCase) && segment.Contains('='))
+        {
+            var exportBody = segment[7..].Trim();
+            var eqPos = exportBody.IndexOf('=');
+            if (eqPos > 0)
+            {
+                var varName = exportBody[..eqPos].Trim();
+                var varValue = exportBody[(eqPos + 1)..].Trim();
+                // Strip surrounding quotes
+                if ((varValue.StartsWith('\'') && varValue.EndsWith('\'')) ||
+                    (varValue.StartsWith('"') && varValue.EndsWith('"')))
+                    varValue = varValue[1..^1];
+
+                Environment.SetEnvironmentVariable(varName, varValue);
+                // Also set in PowerShell runspace
+                using var ps = PowerShell.Create();
+                ps.Runspace = runspace;
+                ps.AddScript($"$env:{varName} = '{varValue.Replace("'", "''")}'");
+                ps.Invoke();
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── unset: remove environment variable ──────────────────────
+        if (segment.StartsWith("unset ", StringComparison.OrdinalIgnoreCase))
+        {
+            var varName = segment[6..].Trim();
+            Environment.SetEnvironmentVariable(varName, null);
+            using var ps = PowerShell.Create();
+            ps.Runspace = runspace;
+            ps.AddScript($"Remove-Item Env:{varName} -ErrorAction SilentlyContinue");
+            ps.Invoke();
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── source: run a rush script ───────────────────────────────
+        if (segment.StartsWith("source ", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith(". ", StringComparison.OrdinalIgnoreCase))
+        {
+            var scriptPath = segment.StartsWith("source ") ? segment[7..].Trim() : segment[2..].Trim();
+            if (scriptPath.StartsWith("~/"))
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                scriptPath = Path.Combine(home, scriptPath[2..]);
+            }
+            if (File.Exists(scriptPath))
+            {
+                try
+                {
+                    var scriptLines = File.ReadAllLines(scriptPath);
+                    foreach (var rawLine in scriptLines)
+                    {
+                        var scriptLine = rawLine.Trim();
+                        if (string.IsNullOrEmpty(scriptLine) || scriptLine.StartsWith('#')) continue;
+                        var scriptTranslated = translator.Translate(scriptLine) ?? scriptLine;
+                        using var ps = PowerShell.Create();
+                        ps.Runspace = runspace;
+                        ps.AddScript(scriptTranslated);
+                        var scriptResults = ps.Invoke();
+                        if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
+                        if (ps.HadErrors) OutputRenderer.RenderErrors(ps.Streams);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.Error.WriteLine($"source: {ex.Message}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                    continue;
+                }
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.Error.WriteLine($"source: {scriptPath}: no such file");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+                continue;
+            }
             lastSegmentFailed = false;
             continue;
         }
@@ -329,6 +446,48 @@ static void RunStartupScript(Runspace runspace)
     catch { } // Silently ignore startup script errors
 }
 
+// ── Tilde Expansion ────────────────────────────────────────────────
+
+/// <summary>
+/// Expand ~ and ~/ to the user's home directory.
+/// Only expands at the start of a word (after space or at start of input).
+/// Respects quotes — no expansion inside quoted strings.
+/// </summary>
+static string ExpandTilde(string input)
+{
+    if (!input.Contains('~')) return input;
+
+    var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    var sb = new System.Text.StringBuilder(input.Length);
+    bool inSingleQuote = false;
+    bool inDoubleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inDoubleQuote) { inSingleQuote = !inSingleQuote; sb.Append('\''); continue; }
+        if (input[i] == '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; sb.Append('"'); continue; }
+
+        if (!inSingleQuote && !inDoubleQuote && input[i] == '~')
+        {
+            // Only expand at word boundary (start of input, after space, or after =)
+            bool atWordStart = i == 0 || input[i - 1] is ' ' or '\t' or '=';
+            if (atWordStart)
+            {
+                // ~/... or standalone ~
+                if (i + 1 >= input.Length || input[i + 1] is '/' or ' ' or '\t')
+                {
+                    sb.Append(home);
+                    continue;
+                }
+            }
+        }
+
+        sb.Append(input[i]);
+    }
+
+    return sb.ToString();
+}
+
 // ── Environment Variable Expansion ──────────────────────────────────
 
 /// <summary>
@@ -390,7 +549,7 @@ static string ExpandEnvVars(string input)
 // ── Chain Operators ─────────────────────────────────────────────────
 
 /// <summary>
-/// Split input on && and || operators, respecting quotes.
+/// Split input on &&, ||, and ; operators, respecting quotes.
 /// operators[i] is the operator between segments[i] and segments[i+1].
 /// </summary>
 static (List<string> segments, List<string> operators) SplitChainOperators(string input)
@@ -424,6 +583,13 @@ static (List<string> segments, List<string> operators) SplitChainOperators(strin
                 operators.Add("||");
                 current.Clear();
                 i++;
+                continue;
+            }
+            if (ch == ';')
+            {
+                segments.Add(current.ToString());
+                operators.Add(";");
+                current.Clear();
                 continue;
             }
         }
@@ -569,7 +735,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -681,10 +847,16 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  json       — read JSON: json config.json | .key");
     Console.WriteLine("  &&         — run next command only if previous succeeded");
     Console.WriteLine("  ||         — run next command only if previous failed");
+    Console.WriteLine("  ;          — run next command regardless");
     Console.WriteLine("  > / >>     — redirect output to file (overwrite / append)");
+    Console.WriteLine("  ~/path     — tilde expansion to home directory");
     Console.WriteLine("  $HOME      — environment variable expansion");
+    Console.WriteLine("  export     — set env var: export FOO=bar");
+    Console.WriteLine("  unset      — remove env var: unset FOO");
+    Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
+    Console.WriteLine("  source     — run rush script: source file.rush");
     Console.WriteLine("  history    — show command history (persistent)");
-    Console.WriteLine("  alias      — show command mappings");
+    Console.WriteLine("  alias      — show command mappings (no args)");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
     Console.WriteLine();
