@@ -5,6 +5,11 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AssemblyName>rush</AssemblyName>
+    <Version>0.5.0</Version>
+    <Description>Unix-style shell built on the PowerShell 7 engine</Description>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 
   <ItemGroup>

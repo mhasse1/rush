@@ -3,12 +3,41 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
+const string Version = "0.5.0";
+
+// ── CLI Arguments ────────────────────────────────────────────────────
+if (args.Length > 0)
+{
+    if (args[0] is "--version" or "-v")
+    {
+        Console.WriteLine($"rush {Version}");
+        return;
+    }
+    if (args[0] is "--help" or "-h")
+    {
+        Console.WriteLine($"rush {Version} — Unix-style shell on the PowerShell 7 engine");
+        Console.WriteLine();
+        Console.WriteLine("Usage:");
+        Console.WriteLine("  rush                 Start interactive shell");
+        Console.WriteLine("  rush -c 'command'    Execute command and exit");
+        Console.WriteLine("  rush --version       Show version");
+        Console.WriteLine("  rush --help          Show this help");
+        return;
+    }
+    if (args[0] == "-c" && args.Length > 1)
+    {
+        // Non-interactive: execute command and exit
+        RunNonInteractive(string.Join(' ', args[1..]));
+        return;
+    }
+}
+
 // ── Load Config ──────────────────────────────────────────────────────
 var config = RushConfig.Load();
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine("rush v0.4.0 — a better shell");
+Console.WriteLine($"rush v{Version} — a better shell");
 Console.ForegroundColor = ConsoleColor.DarkGray;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
@@ -674,6 +703,25 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
     Console.WriteLine($"  Startup: ~/.config/rush/init.rush");
     Console.ResetColor();
+}
+
+// ── Non-interactive Mode ─────────────────────────────────────────────
+static void RunNonInteractive(string command)
+{
+    var ui = new RushHostUI();
+    var h = new RushHost(ui);
+    var ss = InitialSessionState.CreateDefault();
+    using var rs = RunspaceFactory.CreateRunspace(h, ss);
+    rs.Open();
+    var tr = new CommandTranslator();
+    var translated = tr.Translate(command) ?? command;
+    using var ps = PowerShell.Create();
+    ps.Runspace = rs;
+    ps.AddScript(translated);
+    var results = ps.Invoke();
+    if (results.Count > 0) OutputRenderer.Render(results);
+    if (ps.Streams.Error.Count > 0) OutputRenderer.RenderErrors(ps.Streams);
+    Environment.ExitCode = ps.HadErrors ? 1 : 0;
 }
 
 // ── Types ────────────────────────────────────────────────────────────
