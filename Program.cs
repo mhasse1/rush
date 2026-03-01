@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
@@ -7,7 +8,7 @@ var config = RushConfig.Load();
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine("rush v0.2.0 — a better shell");
+Console.WriteLine("rush v0.3.0 — a better shell");
 Console.ForegroundColor = ConsoleColor.DarkGray;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
@@ -48,6 +49,9 @@ lineEditor.ShowCompletionsHandler = () =>
     }
 };
 
+// ── Run Startup Script ──────────────────────────────────────────────
+RunStartupScript(runspace);
+
 // ── State ────────────────────────────────────────────────────────────
 string? previousDirectory = null;
 
@@ -66,7 +70,6 @@ while (true)
     // ── Bang Expansion ──────────────────────────────────────────────
     if (input.Contains("!!") || input.Contains("!$"))
     {
-        // Find the most recent history entry that isn't the current raw input
         string? prevCmd = null;
         for (int i = lineEditor.History.Count - 1; i >= 0; i--)
         {
@@ -94,6 +97,9 @@ while (true)
             Console.ResetColor();
         }
     }
+
+    // ── Environment Variable Expansion ──────────────────────────────
+    input = ExpandEnvVars(input);
 
     // ── Split on Chain Operators (&&, ||) ────────────────────────────
     var (chainSegments, chainOps) = SplitChainOperators(input);
@@ -185,9 +191,11 @@ while (true)
         // ── Parse Redirection ─────────────────────────────────────
         var (cmdPart, redirect) = ParseRedirection(segment);
 
-        // ── Translate & Execute ─────────────────────────────────────
+        // ── Translate & Execute (with timing) ────────────────────────
         var translated = translator.Translate(cmdPart);
         var commandToRun = translated ?? cmdPart;
+
+        var sw = Stopwatch.StartNew();
 
         try
         {
@@ -197,10 +205,24 @@ while (true)
 
             var results = ps.Invoke();
 
+            sw.Stop();
+
             if (ps.HadErrors)
             {
                 OutputRenderer.RenderErrors(ps.Streams);
                 lastSegmentFailed = true;
+
+                // Smart error correction: suggest similar commands
+                foreach (var error in ps.Streams.Error)
+                {
+                    var exType = error.Exception?.GetType().Name ?? "";
+                    var errId = error.FullyQualifiedErrorId ?? "";
+                    if (exType.Contains("CommandNotFoundException") || errId.Contains("CommandNotFoundException"))
+                    {
+                        var target = error.TargetObject?.ToString();
+                        if (target != null) ShowSuggestions(target, translator);
+                    }
+                }
             }
             else
             {
@@ -217,10 +239,23 @@ while (true)
         }
         catch (Exception ex)
         {
+            sw.Stop();
             lastSegmentFailed = true;
             var msg = ex.InnerException?.Message ?? ex.Message;
             Console.ForegroundColor = ConsoleColor.Red;
             Console.Error.WriteLine($"error: {msg}");
+            Console.ResetColor();
+        }
+
+        // Show timing for slow commands (>500ms)
+        if (sw.ElapsedMilliseconds > 500)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            var elapsed = sw.Elapsed;
+            if (elapsed.TotalMinutes >= 1)
+                Console.WriteLine($"  took {elapsed.Minutes}m {elapsed.Seconds}s");
+            else
+                Console.WriteLine($"  took {elapsed.TotalSeconds:F1}s");
             Console.ResetColor();
         }
     }
@@ -238,9 +273,95 @@ Console.WriteLine("bye.");
 // Helper Methods
 // ═══════════════════════════════════════════════════════════════════
 
+// ── Startup Script ──────────────────────────────────────────────────
+
+static void RunStartupScript(Runspace runspace)
+{
+    var scriptPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".config", "rush", "init.rush");
+
+    if (!File.Exists(scriptPath)) return;
+
+    try
+    {
+        var lines = File.ReadAllLines(scriptPath);
+        foreach (var rawLine in lines)
+        {
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line) || line.StartsWith('#')) continue;
+
+            using var ps = PowerShell.Create();
+            ps.Runspace = runspace;
+            ps.AddScript(line);
+            ps.Invoke();
+        }
+    }
+    catch { } // Silently ignore startup script errors
+}
+
+// ── Environment Variable Expansion ──────────────────────────────────
+
+/// <summary>
+/// Expand $VAR patterns to environment variable values.
+/// Only expands variables that actually exist in the environment.
+/// Respects single quotes (no expansion inside 'quoted strings').
+/// </summary>
+static string ExpandEnvVars(string input)
+{
+    if (!input.Contains('$')) return input;
+
+    var sb = new System.Text.StringBuilder(input.Length);
+    bool inSingleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'')
+        {
+            inSingleQuote = !inSingleQuote;
+            sb.Append('\'');
+            continue;
+        }
+
+        if (!inSingleQuote && input[i] == '$' && i + 1 < input.Length
+            && (char.IsLetter(input[i + 1]) || input[i + 1] == '_'))
+        {
+            // Read variable name
+            int start = i + 1;
+            int end = start;
+            while (end < input.Length && (char.IsLetterOrDigit(input[end]) || input[end] == '_'))
+                end++;
+
+            var varName = input[start..end];
+
+            // Skip PowerShell special variables
+            if (varName is "_" or "null" or "true" or "false" or "PSVersionTable"
+                or "ErrorActionPreference" or "ProgressPreference"
+                or "env" or "global" or "script" or "using" or "this")
+            {
+                sb.Append(input[i]);
+                continue;
+            }
+
+            var value = Environment.GetEnvironmentVariable(varName);
+            if (value != null)
+            {
+                sb.Append(value);
+                i = end - 1;
+                continue;
+            }
+        }
+
+        sb.Append(input[i]);
+    }
+
+    return sb.ToString();
+}
+
+// ── Chain Operators ─────────────────────────────────────────────────
+
 /// <summary>
 /// Split input on && and || operators, respecting quotes.
-/// Returns the segments and the operators between them.
 /// operators[i] is the operator between segments[i] and segments[i+1].
 /// </summary>
 static (List<string> segments, List<string> operators) SplitChainOperators(string input)
@@ -265,7 +386,7 @@ static (List<string> segments, List<string> operators) SplitChainOperators(strin
                 segments.Add(current.ToString());
                 operators.Add("&&");
                 current.Clear();
-                i++; // skip second &
+                i++;
                 continue;
             }
             if (ch == '|' && i + 1 < input.Length && input[i + 1] == '|')
@@ -273,7 +394,7 @@ static (List<string> segments, List<string> operators) SplitChainOperators(strin
                 segments.Add(current.ToString());
                 operators.Add("||");
                 current.Clear();
-                i++; // skip second |
+                i++;
                 continue;
             }
         }
@@ -287,11 +408,12 @@ static (List<string> segments, List<string> operators) SplitChainOperators(strin
     return (segments, operators);
 }
 
+// ── cd ──────────────────────────────────────────────────────────────
+
 static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string input, string? previousDirectory)
 {
     var path = input.Length > 3 ? input[3..].Trim() : "~";
 
-    // Get current dir before changing
     string? currentDir = null;
     try
     {
@@ -303,7 +425,6 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
     }
     catch { }
 
-    // Handle cd -
     if (path == "-")
     {
         if (previousDirectory == null)
@@ -316,7 +437,6 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         path = previousDirectory;
     }
 
-    // Expand ~
     if (path == "~" || path.StartsWith("~/"))
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -335,11 +455,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
             OutputRenderer.RenderErrors(ps.Streams);
             return (true, null);
         }
-        else
-        {
-            // Success — return the pre-change dir as new previousDirectory
-            return (false, currentDir);
-        }
+        return (false, currentDir);
     }
     catch (Exception ex)
     {
@@ -350,43 +466,8 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
     }
 }
 
-static void ShowHistory(LineEditor editor)
-{
-    var history = editor.History;
-    int start = Math.Max(0, history.Count - 50); // Show last 50
-    for (int i = start; i < history.Count; i++)
-    {
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.Write($"  {i + 1,4}  ");
-        Console.ResetColor();
-        Console.WriteLine(history[i]);
-    }
-}
+// ── Redirection ─────────────────────────────────────────────────────
 
-static void ShowAliases(CommandTranslator translator)
-{
-    Console.ForegroundColor = ConsoleColor.Cyan;
-    Console.WriteLine("Command Aliases:");
-    Console.ResetColor();
-    Console.WriteLine();
-
-    foreach (var (alias, mapping) in translator.GetMappings().OrderBy(kv => kv.Key))
-    {
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.Write($"  {alias,-12}");
-        Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.Write(" → ");
-        Console.ResetColor();
-        Console.WriteLine(mapping.Cmdlet ?? "(native passthrough)");
-    }
-}
-
-// ── Redirection ──────────────────────────────────────────────────────
-
-/// <summary>
-/// Parse > or >> redirection from the end of a command.
-/// Returns the command without redirection, and the redirect info (or null).
-/// </summary>
 static (string command, RedirectInfo? redirect) ParseRedirection(string input)
 {
     var trimmed = input.TrimEnd();
@@ -406,7 +487,7 @@ static (string command, RedirectInfo? redirect) ParseRedirection(string input)
             {
                 lastRedirectPos = i;
                 lastIsAppend = true;
-                i++; // skip second >
+                i++;
             }
             else if (trimmed[i] == '>' && (i == 0 || trimmed[i - 1] != '2'))
             {
@@ -421,14 +502,12 @@ static (string command, RedirectInfo? redirect) ParseRedirection(string input)
     var commandPart = trimmed[..lastRedirectPos].TrimEnd();
     var filePart = trimmed[(lastRedirectPos + (lastIsAppend ? 2 : 1))..].Trim();
 
-    if (string.IsNullOrEmpty(filePart)) return (input, null); // No filename yet
+    if (string.IsNullOrEmpty(filePart)) return (input, null);
 
-    // Strip quotes from filename
     if ((filePart.StartsWith('\'') && filePart.EndsWith('\'')) ||
         (filePart.StartsWith('"') && filePart.EndsWith('"')))
         filePart = filePart[1..^1];
 
-    // Expand ~
     if (filePart == "~" || filePart.StartsWith("~/"))
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -457,6 +536,76 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
     }
 }
 
+// ── Error Correction ────────────────────────────────────────────────
+
+static void ShowSuggestions(string cmd, CommandTranslator translator)
+{
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd" };
+    var allCommands = translator.GetCommandNames().Concat(builtins);
+
+    var suggestions = allCommands
+        .Where(c => LevenshteinDistance(cmd.ToLowerInvariant(), c.ToLowerInvariant()) <= 2)
+        .OrderBy(c => LevenshteinDistance(cmd.ToLowerInvariant(), c.ToLowerInvariant()))
+        .Take(3)
+        .ToList();
+
+    if (suggestions.Count > 0)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Error.Write("  did you mean: ");
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Error.WriteLine(string.Join(", ", suggestions));
+        Console.ResetColor();
+    }
+}
+
+static int LevenshteinDistance(string s, string t)
+{
+    int n = s.Length, m = t.Length;
+    var d = new int[n + 1, m + 1];
+    for (int i = 0; i <= n; i++) d[i, 0] = i;
+    for (int j = 0; j <= m; j++) d[0, j] = j;
+    for (int i = 1; i <= n; i++)
+        for (int j = 1; j <= m; j++)
+            d[i, j] = Math.Min(
+                Math.Min(d[i - 1, j] + 1, d[i, j - 1] + 1),
+                d[i - 1, j - 1] + (s[i - 1] == t[j - 1] ? 0 : 1));
+    return d[n, m];
+}
+
+// ── Display ─────────────────────────────────────────────────────────
+
+static void ShowHistory(LineEditor editor)
+{
+    var history = editor.History;
+    int start = Math.Max(0, history.Count - 50);
+    for (int i = start; i < history.Count; i++)
+    {
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write($"  {i + 1,4}  ");
+        Console.ResetColor();
+        Console.WriteLine(history[i]);
+    }
+}
+
+static void ShowAliases(CommandTranslator translator)
+{
+    Console.ForegroundColor = ConsoleColor.Cyan;
+    Console.WriteLine("Command Aliases:");
+    Console.ResetColor();
+    Console.WriteLine();
+
+    foreach (var (alias, mapping) in translator.GetMappings().OrderBy(kv => kv.Key))
+    {
+        Console.ForegroundColor = ConsoleColor.White;
+        Console.Write($"  {alias,-12}");
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.Write(" → ");
+        Console.ResetColor();
+        Console.WriteLine(mapping.Cmdlet ?? "(native passthrough)");
+    }
+}
+
 static void ShowHelp(LineEditor editor, CommandTranslator translator)
 {
     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -475,6 +624,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  PS7:      Full PowerShell syntax works directly");
     Console.WriteLine("  Chain:    cmd1 && cmd2 || echo 'fallback'");
     Console.WriteLine("  Redirect: ls > files.txt   echo hi >> log.txt");
+    Console.WriteLine("  Env vars: echo $HOME  ls $TMPDIR");
     Console.WriteLine();
 
     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -493,6 +643,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  &&         — run next command only if previous succeeded");
     Console.WriteLine("  ||         — run next command only if previous failed");
     Console.WriteLine("  > / >>     — redirect output to file (overwrite / append)");
+    Console.WriteLine("  $HOME      — environment variable expansion");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings");
     Console.WriteLine("  reload     — reload config");
@@ -511,6 +662,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine();
     Console.ForegroundColor = ConsoleColor.DarkGray;
     Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
+    Console.WriteLine($"  Startup: ~/.config/rush/init.rush");
     Console.ResetColor();
 }
 

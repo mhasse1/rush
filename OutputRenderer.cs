@@ -187,17 +187,20 @@ public static class OutputRenderer
                 msg = error.ToString();
             }
 
-            // Strip common PS error prefixes
-            if (msg.Contains("CommandNotFoundException"))
+            // Classify by exception type for clean messages
+            var exTypeName = error.Exception?.GetType().Name ?? "";
+            var errorId = error.FullyQualifiedErrorId ?? "";
+
+            if (exTypeName.Contains("CommandNotFoundException") || errorId.Contains("CommandNotFoundException"))
             {
                 var cmdName = error.TargetObject?.ToString() ?? "unknown";
                 Console.Error.WriteLine($"error: command not found: {cmdName}");
             }
-            else if (msg.Contains("ItemNotFoundException"))
+            else if (exTypeName.Contains("ItemNotFoundException") || errorId.Contains("ItemNotFound"))
             {
                 Console.Error.WriteLine($"error: no such file or directory: {error.TargetObject}");
             }
-            else if (msg.Contains("ParameterBindingException"))
+            else if (exTypeName.Contains("ParameterBindingException"))
             {
                 Console.Error.WriteLine($"error: invalid argument: {msg.Split(':').LastOrDefault()?.Trim() ?? msg}");
             }
