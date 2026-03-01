@@ -56,26 +56,24 @@ public static class TerminalBackground
 
         // Only attempt on Unix when connected to a real terminal
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return false;
-        if (!Console.IsInputRedirected is false && !Console.IsOutputRedirected is false) return false;
         if (Console.IsInputRedirected || Console.IsOutputRedirected) return false;
 
         // Open /dev/tty directly to avoid interfering with stdin/stdout
         const string ttyPath = "/dev/tty";
         if (!File.Exists(ttyPath)) return false;
 
-        // Save and modify terminal settings via termios P/Invoke
-        if (tcgetattr(0, out var oldTermios) != 0) return false;
-
-        var newTermios = oldTermios;
-        // Disable ECHO and ICANON (raw mode for reading response)
-        newTermios.c_lflag &= ~(ECHO | ICANON);
-        // Set minimum chars and timeout for read
-        newTermios.c_cc_VMIN = 0;
-        newTermios.c_cc_VTIME = 1; // 100ms timeout per read call
+        // Save terminal settings via stty (avoids termios struct layout
+        // differences between macOS arm64 and Linux — tcflag_t is 8 bytes
+        // on macOS but 4 on Linux, making P/Invoke fragile)
+        var saved = CaptureStty("-g");
+        if (string.IsNullOrEmpty(saved)) return false;
 
         try
         {
-            if (tcsetattr(0, TCSANOW, ref newTermios) != 0) return false;
+            // Disable echo and canonical mode, set read timeout
+            // min 0 + time 1 = return immediately with whatever is available,
+            // or after 100ms with nothing
+            RunStty("-echo -icanon min 0 time 1");
 
             // Send OSC 11 query: ESC ] 11 ; ? ESC backslash
             var query = "\x1b]11;?\x1b\\";
@@ -85,7 +83,7 @@ public static class TerminalBackground
             ttyWrite.Write(queryBytes);
             ttyWrite.Flush();
 
-            // Read response with timeout using native read() to avoid .NET stream buffering
+            // Read response using native read() on fd 0
             var response = new StringBuilder();
             var deadline = DateTime.UtcNow.AddMilliseconds(200);
             var buf = new byte[1];
@@ -95,8 +93,7 @@ public static class TerminalBackground
                 var bytesRead = read(0, buf, 1);
                 if (bytesRead > 0)
                 {
-                    var ch = (char)buf[0];
-                    response.Append(ch);
+                    response.Append((char)buf[0]);
 
                     // Response ends with ST (ESC \) or BEL (\x07)
                     var s = response.ToString();
@@ -105,27 +102,66 @@ public static class TerminalBackground
                 }
                 else
                 {
-                    // No data available, brief sleep before retry
                     Thread.Sleep(5);
                 }
+            }
+
+            // Drain any remaining bytes before restoring echo
+            var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
+            while (DateTime.UtcNow < drainDeadline)
+            {
+                if (read(0, buf, 1) <= 0) break;
             }
 
             return ParseOsc11Response(response.ToString(), out luminance);
         }
         finally
         {
-            // Flush any remaining response bytes from the tty input buffer
-            // BEFORE restoring ECHO, to prevent them from being displayed
-            tcflush(0, TCIFLUSH);
-            Thread.Sleep(10); // let any in-flight bytes arrive
-            tcflush(0, TCIFLUSH); // flush again
-
-            // Restore terminal settings (re-enables ECHO)
-            tcsetattr(0, TCSANOW, ref oldTermios);
+            // Restore terminal settings (re-enables echo)
+            RunStty(saved.Trim());
 
             // Clear any response artifacts that leaked to the display
             Console.Write("\r\x1b[K");
         }
+    }
+
+    /// <summary>Capture stty output (e.g., stty -g for saved settings).</summary>
+    private static string? CaptureStty(string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("stty", args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc == null) return null;
+            var output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(1000);
+            return proc.ExitCode == 0 ? output : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Run stty to change terminal settings (no output capture needed).</summary>
+    private static void RunStty(string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("stty", args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(1000);
+        }
+        catch { }
     }
 
     /// <summary>
@@ -253,40 +289,7 @@ public static class TerminalBackground
         return (lighter + 0.05) / (darker + 0.05);
     }
 
-    // ── termios P/Invoke (macOS/Linux) ──────────────────────────────────
-
-    private const uint ECHO = 0x00000008;
-    private const uint ICANON = 0x00000100;
-    private const int TCSANOW = 0;
-    private const int TCIFLUSH = 1; // flush pending input
-
-    // Simplified termios struct — platform-specific sizes vary,
-    // but we only need c_lflag and a couple of c_cc entries
-    [StructLayout(LayoutKind.Sequential)]
-    private struct Termios
-    {
-        public uint c_iflag;
-        public uint c_oflag;
-        public uint c_cflag;
-        public uint c_lflag;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 20)]
-        public byte[] c_cc;
-        public uint c_ispeed;
-        public uint c_ospeed;
-
-        // Accessors for specific c_cc indices (macOS values)
-        public byte c_cc_VMIN { get => c_cc[16]; set => c_cc[16] = value; }
-        public byte c_cc_VTIME { get => c_cc[17]; set => c_cc[17] = value; }
-    }
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int tcgetattr(int fd, out Termios termios);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int tcsetattr(int fd, int optionalActions, ref Termios termios);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int tcflush(int fd, int queue_selector);
+    // ── Native P/Invoke (Unix only) ─────────────────────────────────────
 
     [DllImport("libc", SetLastError = true)]
     private static extern int read(int fd, byte[] buf, int count);

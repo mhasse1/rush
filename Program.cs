@@ -47,7 +47,7 @@ Theme.Initialize(config.GetThemeOverride());
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = Theme.Current.Banner;
-Console.WriteLine($"rush v{Version} — a better shell");
+Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
