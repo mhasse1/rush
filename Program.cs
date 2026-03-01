@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "0.9.0";
+const string Version = "1.0.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -54,6 +54,7 @@ var runspace = RunspaceFactory.CreateRunspace(host, iss);
 runspace.Open();
 
 // ── Initialize Components ────────────────────────────────────────────
+var jobManager = new Rush.JobManager(iss, host);
 var translator = new CommandTranslator();
 var lineEditor = new LineEditor();
 var prompt = new Prompt();
@@ -86,18 +87,53 @@ RunStartupScript(runspace);
 
 // ── State ────────────────────────────────────────────────────────────
 string? previousDirectory = null;
+PowerShell? runningPs = null;
+
+// ── Signal Handling ──────────────────────────────────────────────────
+Console.CancelKeyPress += (_, e) =>
+{
+    e.Cancel = true; // Don't kill the process
+    if (runningPs != null)
+    {
+        try { runningPs.Stop(); } // Interrupt running PowerShell pipeline
+        catch { }
+    }
+    // If at the prompt (runningPs == null), LineEditor already handles Ctrl+C
+};
 
 // ── REPL ─────────────────────────────────────────────────────────────
 while (true)
 {
+    // Report completed background jobs before the prompt
+    var completedJobs = jobManager.GetCompletedUnreported();
+    foreach (var job in completedJobs)
+    {
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine($"  [{job.JobId}] done: {job.Command}");
+        Console.ResetColor();
+    }
+    jobManager.RemoveCompletedJobs();
+
     prompt.Render(runspace);
     tabCompleter.Reset();
 
     var input = lineEditor.ReadLine();
     if (input == null) break; // EOF (Ctrl+D)
 
+    // ── Continuation Lines (trailing \, unclosed quotes/brackets) ──
+    input = ReadContinuationLines(input);
+
     input = input.Trim();
     if (string.IsNullOrEmpty(input)) continue;
+
+    // ── Heredoc Detection ───────────────────────────────────────────
+    string? heredocContent = null;
+    input = DetectAndReadHeredoc(input, out heredocContent);
+    if (heredocContent != null)
+    {
+        // Pipe heredoc content into the command as a PowerShell here-string
+        input = $"@'\n{heredocContent}\n'@ | {input}";
+    }
 
     // ── Bang Expansion ──────────────────────────────────────────────
     if (input.Contains('!'))
@@ -156,6 +192,9 @@ while (true)
     // ── Environment Variable Expansion ──────────────────────────────
     input = ExpandEnvVars(input);
 
+    // ── Command Substitution $(...) and `...` ────────────────────────
+    input = ExpandCommandSubstitution(input, translator, runspace);
+
     // ── Split on Chain Operators (&&, ||, ;) ──────────────────────────
     var (chainSegments, chainOps) = SplitChainOperators(input);
 
@@ -176,7 +215,92 @@ while (true)
             // ";" always falls through
         }
 
+        // ── Background Job Detection ────────────────────────────────
+        bool runInBackground = false;
+        if (segment.EndsWith(" &"))
+        {
+            segment = segment[..^2].TrimEnd();
+            runInBackground = true;
+        }
+
         // ── Try Built-in Commands ───────────────────────────────────
+        // Job control builtins
+        if (segment.Equals("jobs", StringComparison.OrdinalIgnoreCase))
+        {
+            var allJobs = jobManager.GetJobs();
+            if (allJobs.Count == 0)
+            {
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine("  no jobs");
+                Console.ResetColor();
+            }
+            else
+            {
+                foreach (var job in allJobs)
+                {
+                    var status = job.IsCompleted ? "done" : "running";
+                    var elapsed = DateTime.Now - job.StartTime;
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.Write($"  [{job.JobId}] ");
+                    Console.ForegroundColor = job.IsCompleted ? Theme.Current.Accent : Theme.Current.Warning;
+                    Console.Write($"{status,-8}");
+                    Console.ResetColor();
+                    Console.WriteLine($" {job.Command}  ({elapsed.TotalSeconds:F0}s)");
+                }
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.StartsWith("fg ", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("fg", StringComparison.OrdinalIgnoreCase))
+        {
+            var idStr = segment.Length > 3 ? segment[3..].Trim().TrimStart('%') : "";
+            if (int.TryParse(idStr, out var fgId))
+            {
+                var fgResults = jobManager.WaitForJob(fgId);
+                if (fgResults != null && fgResults.Count > 0)
+                    OutputRenderer.Render(fgResults);
+                else if (fgResults == null)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"fg: no such job: {fgId}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            else
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine("fg: usage: fg <job-id>");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
+            continue;
+        }
+
+        if (segment.StartsWith("kill %", StringComparison.OrdinalIgnoreCase))
+        {
+            var idStr = segment[6..].Trim();
+            if (int.TryParse(idStr, out var killId))
+            {
+                if (jobManager.KillJob(killId))
+                {
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine($"  [{killId}] killed");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"kill: no such job: {killId}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            continue;
+        }
+
         if (segment.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("quit", StringComparison.OrdinalIgnoreCase))
         {
@@ -365,6 +489,21 @@ while (true)
         var translated = translator.Translate(cmdPart);
         var commandToRun = translated ?? cmdPart;
 
+        // Glob expansion: only for passthrough (native) commands
+        if (translated == null)
+            commandToRun = ExpandGlobs(commandToRun);
+
+        // ── Background Job ─────────────────────────────────────────
+        if (runInBackground)
+        {
+            var jobId = jobManager.StartBackground(segment, commandToRun);
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine($"  [{jobId}] started: {segment}");
+            Console.ResetColor();
+            lastSegmentFailed = false;
+            continue;
+        }
+
         var sw = Stopwatch.StartNew();
 
         try
@@ -373,7 +512,26 @@ while (true)
             ps.Runspace = runspace;
             ps.AddScript(commandToRun);
 
-            var results = ps.Invoke();
+            // Track for Ctrl+C interruption
+            runningPs = ps;
+            List<PSObject> results;
+            try
+            {
+                results = ps.Invoke().ToList();
+            }
+            catch (PipelineStoppedException)
+            {
+                // Ctrl+C interrupted the pipeline
+                Console.WriteLine();
+                sw.Stop();
+                runningPs = null;
+                lastSegmentFailed = true;
+                continue;
+            }
+            finally
+            {
+                runningPs = null;
+            }
 
             sw.Stop();
 
@@ -406,6 +564,20 @@ while (true)
                 else
                     OutputRenderer.Render(results.ToArray());
             }
+
+            // Check if PowerShell called exit
+            if (host.ShouldExit)
+            {
+                shouldExit = true;
+                break;
+            }
+        }
+        catch (PipelineStoppedException)
+        {
+            // Ctrl+C during pipeline (redundant catch for safety)
+            sw.Stop();
+            Console.WriteLine();
+            lastSegmentFailed = true;
         }
         catch (Exception ex)
         {
@@ -436,7 +608,12 @@ while (true)
     lineEditor.SaveHistory();
 }
 
+// ── Graceful Exit ────────────────────────────────────────────────────
+jobManager.Dispose();
+lineEditor.SaveHistory();
 Console.Write("\x1b[0 q"); // Reset cursor shape
+if (host.ShouldExit)
+    Environment.ExitCode = host.ExitCode;
 Console.WriteLine("bye.");
 
 // ═══════════════════════════════════════════════════════════════════
@@ -516,6 +693,383 @@ static string ExpandTilde(string input)
 
 /// <summary>
 /// Expand $VAR patterns to environment variable values.
+// ── Continuation Lines ───────────────────────────────────────────────
+
+/// <summary>
+/// Handle multiline input: trailing backslash, unclosed quotes, unclosed brackets.
+/// Reads additional lines until the input is complete.
+/// </summary>
+static string ReadContinuationLines(string input)
+{
+    var sb = new System.Text.StringBuilder(input);
+
+    while (true)
+    {
+        var current = sb.ToString();
+
+        // Trailing backslash → line continuation
+        if (current.TrimEnd().EndsWith('\\'))
+        {
+            var trimmed = current.TrimEnd();
+            sb.Clear();
+            sb.Append(trimmed[..^1]); // Strip the backslash
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write("... ");
+            Console.ResetColor();
+            var next = Console.ReadLine();
+            if (next == null) break;
+            sb.Append(next);
+            continue;
+        }
+
+        // Unclosed quotes → continue reading
+        if (HasUnclosedQuote(current))
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write("... ");
+            Console.ResetColor();
+            var next = Console.ReadLine();
+            if (next == null) break;
+            sb.AppendLine();
+            sb.Append(next);
+            continue;
+        }
+
+        // Unclosed brackets → continue reading
+        if (HasUnclosedBrackets(current))
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write("... ");
+            Console.ResetColor();
+            var next = Console.ReadLine();
+            if (next == null) break;
+            sb.AppendLine();
+            sb.Append(next);
+            continue;
+        }
+
+        break;
+    }
+
+    return sb.ToString();
+}
+
+static bool HasUnclosedQuote(string input)
+{
+    bool inSingle = false, inDouble = false;
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inDouble) inSingle = !inSingle;
+        else if (input[i] == '"' && !inSingle) inDouble = !inDouble;
+    }
+    return inSingle || inDouble;
+}
+
+static bool HasUnclosedBrackets(string input)
+{
+    int parenDepth = 0, braceDepth = 0;
+    bool inSingle = false, inDouble = false;
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inDouble) { inSingle = !inSingle; continue; }
+        if (input[i] == '"' && !inSingle) { inDouble = !inDouble; continue; }
+        if (inSingle || inDouble) continue;
+        if (input[i] == '(') parenDepth++;
+        else if (input[i] == ')') parenDepth--;
+        else if (input[i] == '{') braceDepth++;
+        else if (input[i] == '}') braceDepth--;
+    }
+    return parenDepth > 0 || braceDepth > 0;
+}
+
+// ── Heredoc ─────────────────────────────────────────────────────────
+
+/// <summary>
+/// Detect <<WORD or <<'WORD' at end of command. If found, read the heredoc
+/// body (lines until delimiter) and return the command without the <<WORD part.
+/// </summary>
+static string DetectAndReadHeredoc(string input, out string? heredocContent)
+{
+    heredocContent = null;
+
+    // Find << outside of quotes
+    int heredocPos = -1;
+    bool inSingleQuote = false, inDoubleQuote = false;
+
+    for (int i = 0; i < input.Length - 1; i++)
+    {
+        if (input[i] == '\'' && !inDoubleQuote) { inSingleQuote = !inSingleQuote; continue; }
+        if (input[i] == '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; continue; }
+        if (!inSingleQuote && !inDoubleQuote && input[i] == '<' && input[i + 1] == '<')
+        {
+            // Not <<< (herestring)
+            if (i + 2 < input.Length && input[i + 2] == '<') continue;
+            heredocPos = i;
+        }
+    }
+
+    if (heredocPos < 0) return input;
+
+    var command = input[..heredocPos].TrimEnd();
+    var delimiterPart = input[(heredocPos + 2)..].Trim();
+
+    if (string.IsNullOrEmpty(delimiterPart)) return input;
+
+    // Quoted delimiter → no variable expansion in body
+    bool noExpand = false;
+    string delimiter;
+    if ((delimiterPart.StartsWith('\'') && delimiterPart.EndsWith('\'')) ||
+        (delimiterPart.StartsWith('"') && delimiterPart.EndsWith('"')))
+    {
+        noExpand = true;
+        delimiter = delimiterPart[1..^1];
+    }
+    else
+    {
+        delimiter = delimiterPart;
+    }
+
+    // Read heredoc body
+    var body = new System.Text.StringBuilder();
+    while (true)
+    {
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.Write("heredoc> ");
+        Console.ResetColor();
+        var line = Console.ReadLine();
+        if (line == null) break; // EOF
+        if (line.Trim() == delimiter) break;
+
+        if (!noExpand)
+            line = ExpandEnvVars(line);
+
+        if (body.Length > 0) body.AppendLine();
+        body.Append(line);
+    }
+
+    heredocContent = body.ToString();
+    return command;
+}
+
+// ── Command Substitution ─────────────────────────────────────────────
+
+/// <summary>
+/// Expand $(...) and `...` substitutions. Inner commands are translated
+/// through Rush's CommandTranslator before execution, so Unix syntax works
+/// inside substitutions: echo $(ls | grep foo)
+/// </summary>
+static string ExpandCommandSubstitution(string input, CommandTranslator translator, Runspace runspace)
+{
+    if (!input.Contains("$(") && !input.Contains('`'))
+        return input;
+
+    var sb = new System.Text.StringBuilder(input.Length);
+    bool inSingleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inSingleQuote)
+        {
+            inSingleQuote = true;
+            sb.Append('\'');
+            continue;
+        }
+        if (input[i] == '\'' && inSingleQuote)
+        {
+            inSingleQuote = false;
+            sb.Append('\'');
+            continue;
+        }
+
+        // No substitution inside single quotes
+        if (inSingleQuote)
+        {
+            sb.Append(input[i]);
+            continue;
+        }
+
+        // $(...) substitution
+        if (input[i] == '$' && i + 1 < input.Length && input[i + 1] == '(')
+        {
+            int depth = 1;
+            int pos = i + 2;
+
+            // Find matching closing paren (handle nesting)
+            while (pos < input.Length && depth > 0)
+            {
+                if (input[pos] == '(') depth++;
+                else if (input[pos] == ')') depth--;
+                if (depth > 0) pos++;
+            }
+
+            if (depth == 0)
+            {
+                var innerCmd = input[(i + 2)..pos];
+                var result = ExecuteSubstitution(innerCmd, translator, runspace);
+                sb.Append(result);
+                i = pos; // Skip past closing )
+                continue;
+            }
+        }
+
+        // Backtick substitution: `command`
+        if (input[i] == '`')
+        {
+            int start = i + 1;
+            int end = input.IndexOf('`', start);
+            if (end > start)
+            {
+                var innerCmd = input[start..end];
+                var result = ExecuteSubstitution(innerCmd, translator, runspace);
+                sb.Append(result);
+                i = end; // Skip past closing backtick
+                continue;
+            }
+        }
+
+        sb.Append(input[i]);
+    }
+
+    return sb.ToString();
+}
+
+/// <summary>
+/// Execute a substitution's inner command: translate through Rush,
+/// run in PowerShell, capture output as a string.
+/// </summary>
+static string ExecuteSubstitution(string innerCommand, CommandTranslator translator, Runspace runspace)
+{
+    try
+    {
+        // Recursively expand nested substitutions
+        innerCommand = ExpandCommandSubstitution(innerCommand, translator, runspace);
+
+        // Translate through Rush's Unix→PS translator
+        var translated = translator.Translate(innerCommand) ?? innerCommand;
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+        ps.AddScript(translated);
+        var results = ps.Invoke();
+
+        // Join results with spaces (standard shell behavior)
+        // Trim trailing newlines like bash does
+        return string.Join(" ", results
+            .Select(r => r.ToString()?.Trim() ?? "")
+            .Where(s => s.Length > 0));
+    }
+    catch
+    {
+        return ""; // On error, substitute empty string
+    }
+}
+
+// ── Glob Expansion (native/passthrough commands only) ────────────────
+
+/// <summary>
+/// Expand glob patterns (*, ?, [...]) in command arguments for native commands.
+/// PowerShell handles globs for its own cmdlets, but native commands need
+/// shell-level expansion — just like bash/zsh do.
+/// </summary>
+static string ExpandGlobs(string command)
+{
+    // Quick bail: no glob characters at all
+    if (!command.Contains('*') && !command.Contains('?') && !command.Contains('['))
+        return command;
+
+    var parts = CommandTranslator.SplitCommandLine(command);
+    if (parts.Length == 0) return command;
+
+    var expanded = new List<string>();
+    expanded.Add(parts[0]); // Command name — never glob-expand
+
+    for (int i = 1; i < parts.Length; i++)
+    {
+        var arg = parts[i];
+
+        // Don't expand inside quotes
+        if ((arg.StartsWith('\'') && arg.EndsWith('\'')) ||
+            (arg.StartsWith('"') && arg.EndsWith('"')))
+        {
+            expanded.Add(arg);
+            continue;
+        }
+
+        // No glob characters in this arg
+        if (!arg.Contains('*') && !arg.Contains('?') && !arg.Contains('['))
+        {
+            expanded.Add(arg);
+            continue;
+        }
+
+        var matches = ExpandSingleGlob(arg);
+        if (matches.Count > 0)
+            expanded.AddRange(matches);
+        else
+            expanded.Add(arg); // No match: pass literal (bash default)
+    }
+
+    return string.Join(' ', expanded);
+}
+
+/// <summary>
+/// Expand a single glob pattern using the filesystem.
+/// Supports * and ? via Directory.EnumerateFileSystemEntries,
+/// and ** for recursive globbing.
+/// </summary>
+static List<string> ExpandSingleGlob(string pattern)
+{
+    var results = new List<string>();
+
+    // ** recursive glob
+    if (pattern.Contains("**"))
+    {
+        var doubleStarIdx = pattern.IndexOf("**");
+        var baseDir = pattern[..doubleStarIdx].TrimEnd('/', Path.DirectorySeparatorChar);
+        if (string.IsNullOrEmpty(baseDir)) baseDir = ".";
+
+        var afterDoubleStar = pattern[(doubleStarIdx + 2)..].TrimStart('/', Path.DirectorySeparatorChar);
+        if (string.IsNullOrEmpty(afterDoubleStar)) afterDoubleStar = "*";
+
+        if (Directory.Exists(baseDir))
+        {
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(
+                    baseDir, afterDoubleStar, SearchOption.AllDirectories))
+                {
+                    // Return relative paths when base is current dir
+                    results.Add(baseDir == "." ? Path.GetRelativePath(".", entry) : entry);
+                }
+            }
+            catch { } // Permission errors
+        }
+        results.Sort(StringComparer.OrdinalIgnoreCase);
+        return results;
+    }
+
+    // Standard glob: split into directory + pattern
+    var dir = Path.GetDirectoryName(pattern);
+    var filePattern = Path.GetFileName(pattern);
+
+    if (string.IsNullOrEmpty(dir)) dir = ".";
+    if (string.IsNullOrEmpty(filePattern)) return results;
+
+    if (!Directory.Exists(dir)) return results;
+
+    try
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(dir, filePattern))
+        {
+            results.Add(dir == "." ? Path.GetFileName(entry) : entry);
+        }
+        results.Sort(StringComparer.OrdinalIgnoreCase);
+    }
+    catch { }
+
+    return results;
+}
+
 /// Only expands variables that actually exist in the environment.
 /// Respects single quotes (no expansion inside 'quoted strings').
 /// </summary>
@@ -759,7 +1313,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -887,6 +1441,14 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  unset      — remove env var: unset FOO");
     Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
     Console.WriteLine("  source     — run rush script: source file.rush");
+    Console.WriteLine("  $(cmd)     — command substitution: echo $(ls | count)");
+    Console.WriteLine("  <<EOF      — heredoc: cat <<EOF ... EOF");
+    Console.WriteLine("  cmd &      — run in background: sleep 5 &");
+    Console.WriteLine("  jobs       — list background jobs");
+    Console.WriteLine("  fg N       — bring job N to foreground");
+    Console.WriteLine("  kill %N    — kill background job N");
+    Console.WriteLine("  Ctrl+C     — interrupt running command");
+    Console.WriteLine("  \\          — line continuation (trailing backslash)");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings (no args)");
     Console.WriteLine("  reload     — reload config");
@@ -924,10 +1486,26 @@ static void RunNonInteractive(string command)
     using var ps = PowerShell.Create();
     ps.Runspace = rs;
     ps.AddScript(translated);
-    var results = ps.Invoke();
-    if (results.Count > 0) OutputRenderer.Render(results);
-    if (ps.Streams.Error.Count > 0) OutputRenderer.RenderErrors(ps.Streams);
-    Environment.ExitCode = ps.HadErrors ? 1 : 0;
+
+    PowerShell? activePs = ps;
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        try { activePs?.Stop(); } catch { }
+    };
+
+    try
+    {
+        var results = ps.Invoke();
+        if (results.Count > 0) OutputRenderer.Render(results);
+        if (ps.Streams.Error.Count > 0) OutputRenderer.RenderErrors(ps.Streams);
+        Environment.ExitCode = ps.HadErrors ? 1 : 0;
+    }
+    catch (PipelineStoppedException)
+    {
+        Console.Error.WriteLine();
+        Environment.ExitCode = 130; // Standard Ctrl+C exit code
+    }
 }
 
 // ── Types ────────────────────────────────────────────────────────────

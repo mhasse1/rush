@@ -483,7 +483,7 @@ public class CommandTranslator
         return segments.ToArray();
     }
 
-    private static string[] SplitCommandLine(string input)
+    internal static string[] SplitCommandLine(string input)
     {
         var parts = new List<string>();
         var current = new System.Text.StringBuilder();

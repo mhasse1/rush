@@ -23,9 +23,17 @@ public class RushHost : PSHost
     public override CultureInfo CurrentUICulture => CultureInfo.CurrentUICulture;
     public override PSHostUserInterface UI => _ui;
 
+    /// <summary>
+    /// Set by PowerShell when a script calls exit. The REPL loop checks this
+    /// flag and breaks gracefully (saving history, resetting cursor).
+    /// </summary>
+    public bool ShouldExit { get; private set; }
+    public int ExitCode { get; private set; }
+
     public override void SetShouldExit(int exitCode)
     {
-        Environment.Exit(exitCode);
+        ShouldExit = true;
+        ExitCode = exitCode;
     }
 
     public override void EnterNestedPrompt() { }

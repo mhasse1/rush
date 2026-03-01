@@ -25,7 +25,8 @@ public class SyntaxHighlighter
         "as", "from", // Pipe-context format commands
         "export", "unset", "source", // Shell builtins
         "count", "first", "last", "skip", "tee", "distinct", // Pipe utilities
-        "sum", "avg", "min", "max" // Math aggregations
+        "sum", "avg", "min", "max", // Math aggregations
+        "jobs", "fg", "bg" // Job control
     };
 
     public SyntaxHighlighter(CommandTranslator translator)
