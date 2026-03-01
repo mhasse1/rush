@@ -156,6 +156,64 @@ public class CommandTranslator
         if (isAfterPipe && command.Equals("uniq", StringComparison.OrdinalIgnoreCase))
             return "Select-Object -Unique";
 
+        // Special: count after a pipe → Measure-Object then Count property
+        // Syntax: ls | count → count of items
+        if (isAfterPipe && command.Equals("count", StringComparison.OrdinalIgnoreCase))
+            return "Measure-Object | ForEach-Object { $_.Count }";
+
+        // Special: first/last as aliases for head/tail in pipes
+        if (isAfterPipe && command.Equals("first", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = args.Length > 0 ? args[0] : "1";
+            return $"Select-Object -First {count}";
+        }
+        if (isAfterPipe && command.Equals("last", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = args.Length > 0 ? args[0] : "1";
+            return $"Select-Object -Last {count}";
+        }
+
+        // Special: skip after a pipe → Select-Object -Skip N
+        if (isAfterPipe && command.Equals("skip", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = args.Length > 0 ? args[0] : "1";
+            return $"Select-Object -Skip {count}";
+        }
+
+        // Special: tee after a pipe → Tee-Object -FilePath
+        // Syntax: ls | tee output.txt → saves to file AND passes through pipeline
+        if (isAfterPipe && command.Equals("tee", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+            {
+                bool append = args.Contains("-a");
+                var file = args.FirstOrDefault(a => !a.StartsWith('-')) ?? args[0];
+                var cmd = $"Tee-Object -FilePath {file}";
+                if (append) cmd += " -Append";
+                return cmd;
+            }
+            return null;
+        }
+
+        // Special: distinct after a pipe → Group-Object + ForEach-Object
+        // Like uniq but works on unsorted data
+        if (isAfterPipe && command.Equals("distinct", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+                return $"Sort-Object -Property {args[0]} -Unique";
+            return "Sort-Object -Unique";
+        }
+
+        // Special: sum/avg/min/max after a pipe — quick math on properties
+        if (isAfterPipe && command.Equals("sum", StringComparison.OrdinalIgnoreCase) && args.Length > 0)
+            return $"Measure-Object -Property {args[0]} -Sum | ForEach-Object {{ $_.Sum }}";
+        if (isAfterPipe && command.Equals("avg", StringComparison.OrdinalIgnoreCase) && args.Length > 0)
+            return $"Measure-Object -Property {args[0]} -Average | ForEach-Object {{ $_.Average }}";
+        if (isAfterPipe && command.Equals("min", StringComparison.OrdinalIgnoreCase) && args.Length > 0)
+            return $"Measure-Object -Property {args[0]} -Minimum | ForEach-Object {{ $_.Minimum }}";
+        if (isAfterPipe && command.Equals("max", StringComparison.OrdinalIgnoreCase) && args.Length > 0)
+            return $"Measure-Object -Property {args[0]} -Maximum | ForEach-Object {{ $_.Maximum }}";
+
         // Special: where after a pipe → Where-Object with Unix-style operators
         // Syntax: where PROPERTY OPERATOR VALUE
         // Example: ps | where CPU > 10  →  Where-Object { $_.CPU -gt 10 }
@@ -313,7 +371,18 @@ public class CommandTranslator
         // Pipe shorthands (also register for standalone use / tab completion)
         Register("where", "Where-Object");
         Register("select", "Select-Object");
-        Register("json", null); // Special handling in TranslateSegment
+        Register("sort", "Sort-Object");
+        Register("count", null); // Special handling in TranslateSegment
+        Register("first", null); // Special handling
+        Register("last", null);  // Special handling
+        Register("skip", null);  // Special handling
+        Register("tee", null);   // Special handling
+        Register("distinct", null); // Special handling
+        Register("sum", null);   // Special handling
+        Register("avg", null);   // Special handling
+        Register("min", null);   // Special handling
+        Register("max", null);   // Special handling
+        Register("json", null);  // Special handling in TranslateSegment
     }
 
     // ── Where Operator Translation ──────────────────────────────────────

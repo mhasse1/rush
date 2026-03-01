@@ -22,7 +22,9 @@ public class SyntaxHighlighter
     {
         "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "set",
         "as", "from", // Pipe-context format commands
-        "export", "unset", "source" // Shell builtins
+        "export", "unset", "source", // Shell builtins
+        "count", "first", "last", "skip", "tee", "distinct", // Pipe utilities
+        "sum", "avg", "min", "max" // Math aggregations
     };
 
     public SyntaxHighlighter(CommandTranslator translator)

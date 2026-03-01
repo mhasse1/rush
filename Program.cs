@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "0.6.0";
+const string Version = "0.7.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -97,30 +97,50 @@ while (true)
     if (string.IsNullOrEmpty(input)) continue;
 
     // ── Bang Expansion ──────────────────────────────────────────────
-    if (input.Contains("!!") || input.Contains("!$"))
+    if (input.Contains('!'))
     {
-        string? prevCmd = null;
-        for (int i = lineEditor.History.Count - 1; i >= 0; i--)
+        bool expanded = false;
+
+        // !N — run Nth command from history
+        if (input.StartsWith('!') && input.Length > 1 && char.IsDigit(input[1]))
         {
-            if (lineEditor.History[i] != input)
+            var numStr = new string(input.Skip(1).TakeWhile(char.IsDigit).ToArray());
+            if (int.TryParse(numStr, out var histNum) && histNum > 0 && histNum <= lineEditor.History.Count)
             {
-                prevCmd = lineEditor.History[i];
-                break;
+                input = lineEditor.History[histNum - 1];
+                expanded = true;
             }
         }
 
-        if (prevCmd != null)
+        // !! and !$
+        if (input.Contains("!!") || input.Contains("!$"))
         {
-            if (input.Contains("!!"))
-                input = input.Replace("!!", prevCmd);
-            if (input.Contains("!$"))
+            string? prevCmd = null;
+            for (int i = lineEditor.History.Count - 1; i >= 0; i--)
             {
-                var lastArg = prevCmd.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
-                input = input.Replace("!$", lastArg);
+                if (lineEditor.History[i] != input)
+                {
+                    prevCmd = lineEditor.History[i];
+                    break;
+                }
             }
 
-            lineEditor.ReplaceLastHistory(input);
+            if (prevCmd != null)
+            {
+                if (input.Contains("!!"))
+                    input = input.Replace("!!", prevCmd);
+                if (input.Contains("!$"))
+                {
+                    var lastArg = prevCmd.Split(' ', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+                    input = input.Replace("!$", lastArg);
+                }
+                expanded = true;
+            }
+        }
 
+        if (expanded)
+        {
+            lineEditor.ReplaceLastHistory(input);
             Console.ForegroundColor = ConsoleColor.DarkGray;
             Console.WriteLine($"  → {input}");
             Console.ResetColor();
@@ -822,6 +842,8 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  Env vars: echo $HOME  ls $TMPDIR");
     Console.WriteLine("  Filter:   ps | where CPU > 10");
     Console.WriteLine("  Select:   ps | select ProcessName, CPU");
+    Console.WriteLine("  Count:    ls | count       ps | sum WorkingSet64");
+    Console.WriteLine("  Slice:    ls | first 5     ls | skip 3 | last 2");
     Console.WriteLine("  Format:   ps | as json    ps | as table");
     Console.WriteLine("  Parse:    cat data.json | from json");
     Console.WriteLine("  JSON:     json config.json | .settings");
@@ -845,6 +867,12 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  as         — format output: ... | as json / csv / table / list");
     Console.WriteLine("  from       — parse input:   cat f.json | from json / csv");
     Console.WriteLine("  json       — read JSON: json config.json | .key");
+    Console.WriteLine("  count      — count items: ls | count");
+    Console.WriteLine("  first/last — slice: ls | first 5  (also: skip)");
+    Console.WriteLine("  distinct   — unique values (works on unsorted data)");
+    Console.WriteLine("  sum/avg    — math: ps | sum WorkingSet64  (also: min, max)");
+    Console.WriteLine("  tee        — save & pass through: ls | tee out.txt | count");
+    Console.WriteLine("  !N         — run Nth command from history");
     Console.WriteLine("  &&         — run next command only if previous succeeded");
     Console.WriteLine("  ||         — run next command only if previous failed");
     Console.WriteLine("  ;          — run next command regardless");
