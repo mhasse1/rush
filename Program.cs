@@ -3,7 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using Rush;
 
-const string Version = "1.0.0";
+const string Version = "1.1.0";
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -19,6 +19,7 @@ if (args.Length > 0)
         Console.WriteLine();
         Console.WriteLine("Usage:");
         Console.WriteLine("  rush                 Start interactive shell");
+        Console.WriteLine("  rush script.rush     Execute Rush script file");
         Console.WriteLine("  rush -c 'command'    Execute command and exit");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
@@ -28,6 +29,12 @@ if (args.Length > 0)
     {
         // Non-interactive: execute command and exit
         RunNonInteractive(string.Join(' ', args[1..]));
+        return;
+    }
+    // Script file execution: rush script.rush
+    if (args[0].EndsWith(".rush", StringComparison.OrdinalIgnoreCase) && File.Exists(args[0]))
+    {
+        RunScriptFile(args[0]);
         return;
     }
 }
@@ -56,6 +63,7 @@ runspace.Open();
 // ── Initialize Components ────────────────────────────────────────────
 var jobManager = new Rush.JobManager(iss, host);
 var translator = new CommandTranslator();
+var scriptEngine = new ScriptEngine(translator);
 var lineEditor = new LineEditor();
 var prompt = new Prompt();
 var tabCompleter = new TabCompleter(runspace, translator);
@@ -125,6 +133,98 @@ while (true)
 
     input = input.Trim();
     if (string.IsNullOrEmpty(input)) continue;
+
+    // ── Rush Scripting Language Triage ─────────────────────────────
+    // Check if input is Rush syntax (if/for/def/assignment/method chains).
+    // If so, accumulate multi-line blocks, parse, transpile to PS, and execute.
+    if (scriptEngine.IsRushSyntax(input))
+    {
+        // Accumulate multi-line blocks (if/end, def/end, etc.)
+        while (scriptEngine.IsIncomplete(input))
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write("... ");
+            Console.ResetColor();
+            var continuation = lineEditor.ReadLine();
+            if (continuation == null) break;
+            input += "\n" + continuation;
+        }
+
+        var psCode = scriptEngine.TranspileLine(input);
+        if (psCode != null)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                using var ps = System.Management.Automation.PowerShell.Create();
+                ps.Runspace = runspace;
+                ps.AddScript(psCode);
+
+                runningPs = ps;
+                List<System.Management.Automation.PSObject> results;
+                try
+                {
+                    results = ps.Invoke().ToList();
+                }
+                catch (System.Management.Automation.PipelineStoppedException)
+                {
+                    Console.WriteLine();
+                    sw.Stop();
+                    runningPs = null;
+                    prompt.SetLastCommandFailed(true);
+                    continue;
+                }
+                finally
+                {
+                    runningPs = null;
+                }
+
+                sw.Stop();
+
+                if (ps.HadErrors)
+                {
+                    OutputRenderer.RenderErrors(ps.Streams);
+                    prompt.SetLastCommandFailed(true);
+                }
+                else
+                {
+                    prompt.SetLastCommandFailed(false);
+                }
+
+                if (results.Count > 0)
+                    OutputRenderer.Render(results.ToArray());
+
+                if (host.ShouldExit) break;
+            }
+            catch (System.Management.Automation.PipelineStoppedException)
+            {
+                Console.WriteLine();
+                prompt.SetLastCommandFailed(true);
+            }
+            catch (Exception ex)
+            {
+                prompt.SetLastCommandFailed(true);
+                var msg = ex.InnerException?.Message ?? ex.Message;
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"error: {msg}");
+                Console.ResetColor();
+            }
+
+            if (sw.ElapsedMilliseconds > 500)
+            {
+                Console.ForegroundColor = Theme.Current.Muted;
+                var elapsed = sw.Elapsed;
+                if (elapsed.TotalMinutes >= 1)
+                    Console.WriteLine($"  took {elapsed.Minutes}m {elapsed.Seconds}s");
+                else
+                    Console.WriteLine($"  took {elapsed.TotalSeconds:F1}s");
+                Console.ResetColor();
+            }
+        }
+
+        lineEditor.SaveHistory();
+        continue;
+    }
 
     // ── Heredoc Detection ───────────────────────────────────────────
     string? heredocContent = null;
@@ -438,18 +538,38 @@ while (true)
             {
                 try
                 {
-                    var scriptLines = File.ReadAllLines(scriptPath);
-                    foreach (var rawLine in scriptLines)
+                    var scriptSource = File.ReadAllText(scriptPath);
+
+                    // Use ScriptEngine for .rush files, line-by-line for others
+                    if (scriptPath.EndsWith(".rush", StringComparison.OrdinalIgnoreCase))
                     {
-                        var scriptLine = rawLine.Trim();
-                        if (string.IsNullOrEmpty(scriptLine) || scriptLine.StartsWith('#')) continue;
-                        var scriptTranslated = translator.Translate(scriptLine) ?? scriptLine;
-                        using var ps = PowerShell.Create();
-                        ps.Runspace = runspace;
-                        ps.AddScript(scriptTranslated);
-                        var scriptResults = ps.Invoke();
-                        if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
-                        if (ps.HadErrors) OutputRenderer.RenderErrors(ps.Streams);
+                        var psCode = scriptEngine.TranspileFile(scriptSource);
+                        if (psCode != null)
+                        {
+                            using var ps = PowerShell.Create();
+                            ps.Runspace = runspace;
+                            ps.AddScript(psCode);
+                            var scriptResults = ps.Invoke().ToList();
+                            if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
+                            if (ps.HadErrors) OutputRenderer.RenderErrors(ps.Streams);
+                        }
+                    }
+                    else
+                    {
+                        // Legacy: line-by-line execution for non-.rush scripts
+                        var scriptLines = scriptSource.Split('\n');
+                        foreach (var rawLine in scriptLines)
+                        {
+                            var scriptLine = rawLine.Trim();
+                            if (string.IsNullOrEmpty(scriptLine) || scriptLine.StartsWith('#')) continue;
+                            var scriptTranslated = translator.Translate(scriptLine) ?? scriptLine;
+                            using var ps = PowerShell.Create();
+                            ps.Runspace = runspace;
+                            ps.AddScript(scriptTranslated);
+                            var scriptResults = ps.Invoke();
+                            if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
+                            if (ps.HadErrors) OutputRenderer.RenderErrors(ps.Streams);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -645,6 +765,52 @@ static void RunStartupScript(Runspace runspace)
         }
     }
     catch { } // Silently ignore startup script errors
+}
+
+// ── Script File Execution ──────────────────────────────────────────
+
+/// <summary>
+/// Execute a .rush script file non-interactively.
+/// Used for: rush script.rush
+/// </summary>
+static void RunScriptFile(string path)
+{
+    try
+    {
+        var source = File.ReadAllText(path);
+        var iss = InitialSessionState.CreateDefault();
+        var hostUI = new RushHostUI();
+        var host = new RushHost(hostUI);
+        var runspace = RunspaceFactory.CreateRunspace(host, iss);
+        runspace.Open();
+
+        var translator = new CommandTranslator();
+        var engine = new ScriptEngine(translator);
+        var psCode = engine.TranspileFile(source);
+
+        if (psCode != null)
+        {
+            using var ps = PowerShell.Create();
+            ps.Runspace = runspace;
+            ps.AddScript(psCode);
+            var results = ps.Invoke().ToList();
+            if (results.Count > 0) OutputRenderer.Render(results);
+            if (ps.HadErrors)
+            {
+                OutputRenderer.RenderErrors(ps.Streams);
+                Environment.ExitCode = 1;
+            }
+        }
+
+        runspace.Close();
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = ConsoleColor.Red;
+        Console.Error.WriteLine($"rush: {ex.Message}");
+        Console.ResetColor();
+        Environment.ExitCode = 1;
+    }
 }
 
 // ── Tilde Expansion ────────────────────────────────────────────────
