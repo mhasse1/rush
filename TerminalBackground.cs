@@ -85,16 +85,14 @@ public static class TerminalBackground
             ttyWrite.Write(queryBytes);
             ttyWrite.Flush();
 
-            // Read response with timeout
+            // Read response with timeout using native read() to avoid .NET stream buffering
             var response = new StringBuilder();
-            var deadline = DateTime.UtcNow.AddMilliseconds(150);
+            var deadline = DateTime.UtcNow.AddMilliseconds(200);
             var buf = new byte[1];
-
-            using var ttyRead = Console.OpenStandardInput();
 
             while (DateTime.UtcNow < deadline)
             {
-                var bytesRead = ttyRead.Read(buf, 0, 1);
+                var bytesRead = read(0, buf, 1);
                 if (bytesRead > 0)
                 {
                     var ch = (char)buf[0];
@@ -116,8 +114,17 @@ public static class TerminalBackground
         }
         finally
         {
-            // Always restore terminal settings
+            // Flush any remaining response bytes from the tty input buffer
+            // BEFORE restoring ECHO, to prevent them from being displayed
+            tcflush(0, TCIFLUSH);
+            Thread.Sleep(10); // let any in-flight bytes arrive
+            tcflush(0, TCIFLUSH); // flush again
+
+            // Restore terminal settings (re-enables ECHO)
             tcsetattr(0, TCSANOW, ref oldTermios);
+
+            // Clear any response artifacts that leaked to the display
+            Console.Write("\r\x1b[K");
         }
     }
 
@@ -251,6 +258,7 @@ public static class TerminalBackground
     private const uint ECHO = 0x00000008;
     private const uint ICANON = 0x00000100;
     private const int TCSANOW = 0;
+    private const int TCIFLUSH = 1; // flush pending input
 
     // Simplified termios struct — platform-specific sizes vary,
     // but we only need c_lflag and a couple of c_cc entries
@@ -276,4 +284,10 @@ public static class TerminalBackground
 
     [DllImport("libc", SetLastError = true)]
     private static extern int tcsetattr(int fd, int optionalActions, ref Termios termios);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int tcflush(int fd, int queue_selector);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int read(int fd, byte[] buf, int count);
 }

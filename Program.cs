@@ -648,6 +648,23 @@ while (true)
             continue;
         }
 
+        // ── Interactive TUI Commands ──────────────────────────────
+        // Programs that need direct terminal access (editors, pagers, etc.)
+        // must bypass PowerShell's pipeline to get a real tty.
+        if (translated == null && IsInteractiveTui(cmdPart) && redirect == null)
+        {
+            var sw2 = Stopwatch.StartNew();
+            lastSegmentFailed = !RunInteractive(commandToRun);
+            sw2.Stop();
+            if (sw2.Elapsed.TotalSeconds >= 0.5)
+            {
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
+                Console.ResetColor();
+            }
+            continue;
+        }
+
         var sw = Stopwatch.StartNew();
 
         try
@@ -878,6 +895,74 @@ static void RunScriptFile(string path)
         Console.ResetColor();
         Environment.ExitCode = 1;
     }
+}
+
+// ── Interactive TUI Commands ─────────────────────────────────────────
+
+/// <summary>
+/// Programs that need direct terminal access (editors, pagers, etc.)
+/// must be launched via Process.Start with inherited stdio, bypassing
+/// PowerShell's pipeline which captures stdout.
+/// </summary>
+static bool IsInteractiveTui(string cmdPart)
+{
+    var tuiCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    {
+        "vi", "vim", "nvim", "nano", "pico", "emacs", "helix", "hx", "micro", "joe", "ne",
+        "less", "more", "most",
+        "top", "htop", "btop",
+        "man",
+        "ssh", "tmux", "screen",
+        "python", "python3", "node", "irb", "lua", "ghci",  // REPLs
+        "fzf", "tig", "lazygit", "nnn", "ranger", "mc"
+    };
+
+    // Extract the command name (first word)
+    var firstSpace = cmdPart.IndexOf(' ');
+    var cmd = firstSpace > 0 ? cmdPart[..firstSpace] : cmdPart;
+    // Strip path (e.g., /usr/bin/vi → vi)
+    cmd = Path.GetFileName(cmd);
+    return tuiCommands.Contains(cmd);
+}
+
+/// <summary>
+/// Run a command directly with inherited stdio (no capture).
+/// Used for interactive/TUI programs that need a real terminal.
+/// </summary>
+static bool RunInteractive(string command)
+{
+    try
+    {
+        // Split command into executable and arguments
+        var firstSpace = command.IndexOf(' ');
+        var exe = firstSpace > 0 ? command[..firstSpace] : command;
+        var args = firstSpace > 0 ? command[(firstSpace + 1)..].Trim() : "";
+
+        var psi = new ProcessStartInfo(exe, args)
+        {
+            UseShellExecute = false,
+            // No redirection — process inherits stdin/stdout/stderr directly
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc == null) return false;
+        proc.WaitForExit();
+        return proc.ExitCode == 0;
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  {ex.Message}");
+        Console.ResetColor();
+        return false;
+    }
+}
+
+static string FormatDuration(TimeSpan elapsed)
+{
+    if (elapsed.TotalMinutes >= 1)
+        return $"{elapsed.Minutes}m {elapsed.Seconds}s";
+    return $"{elapsed.TotalSeconds:F1}s";
 }
 
 // ── Tilde Expansion ────────────────────────────────────────────────
