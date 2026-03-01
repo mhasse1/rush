@@ -156,6 +156,79 @@ public class CommandTranslator
         if (isAfterPipe && command.Equals("uniq", StringComparison.OrdinalIgnoreCase))
             return "Select-Object -Unique";
 
+        // Special: where after a pipe → Where-Object with Unix-style operators
+        // Syntax: where PROPERTY OPERATOR VALUE
+        // Example: ps | where CPU > 10  →  Where-Object { $_.CPU -gt 10 }
+        if (isAfterPipe && command.Equals("where", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length >= 3)
+            {
+                var prop = args[0];
+                var op = TranslateWhereOperator(args[1]);
+                var val = string.Join(' ', args[2..]);
+
+                // Don't quote if already quoted or numeric/PS literal
+                if (!val.StartsWith('\'') && !val.StartsWith('"') && !IsNumericOrPsLiteral(val))
+                    val = $"'{val}'";
+
+                return $"Where-Object {{ $_.{prop} {op} {val} }}";
+            }
+            // Fall through to standard translation for PS-style where
+        }
+
+        // Special: select after a pipe → Select-Object
+        // Syntax: select PROPERTY1, PROPERTY2 or select -first N
+        if (isAfterPipe && command.Equals("select", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+                return $"Select-Object {string.Join(' ', args)}";
+            return null;
+        }
+
+        // Special: as after a pipe → format conversion
+        // Syntax: as json | as csv | as table | as list
+        if (isAfterPipe && command.Equals("as", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+            {
+                var result = args[0].ToLowerInvariant() switch
+                {
+                    "json" => "ConvertTo-Json -Depth 5",
+                    "csv" => "ConvertTo-Csv -NoTypeInformation",
+                    "table" => "Format-Table -AutoSize",
+                    "list" => "Format-List",
+                    _ => (string?)null
+                };
+                if (result != null) return result;
+            }
+        }
+
+        // Special: from after a pipe → parse conversion
+        // Syntax: from json | from csv
+        if (isAfterPipe && command.Equals("from", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+            {
+                var result = args[0].ToLowerInvariant() switch
+                {
+                    "json" => "ConvertFrom-Json",
+                    "csv" => "ConvertFrom-Csv",
+                    _ => (string?)null
+                };
+                if (result != null) return result;
+            }
+        }
+
+        // Special: json — read and parse JSON files
+        if (!isAfterPipe && command.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+                return $"Get-Content {string.Join(' ', args)} | ConvertFrom-Json";
+            return null;
+        }
+        if (isAfterPipe && command.Equals("json", StringComparison.OrdinalIgnoreCase))
+            return "ConvertFrom-Json";
+
         // Standard translation
         if (!_commands.TryGetValue(command, out var mapping))
             return null;
@@ -236,6 +309,41 @@ public class CommandTranslator
             ["-name"] = "-Filter",
             ["-type"] = "",  // handled specially
         });
+
+        // Pipe shorthands (also register for standalone use / tab completion)
+        Register("where", "Where-Object");
+        Register("select", "Select-Object");
+        Register("json", null); // Special handling in TranslateSegment
+    }
+
+    // ── Where Operator Translation ──────────────────────────────────────
+
+    private static string TranslateWhereOperator(string op) => op switch
+    {
+        ">" => "-gt",
+        "<" => "-lt",
+        ">=" => "-ge",
+        "<=" => "-le",
+        "=" or "==" => "-eq",
+        "!=" => "-ne",
+        "~" or "=~" => "-match",
+        "!~" => "-notmatch",
+        "contains" => "-contains",
+        _ => op // Pass through PS-style operators (-eq, -gt, etc.)
+    };
+
+    private static bool IsNumericOrPsLiteral(string val)
+    {
+        if (double.TryParse(val, out _)) return true;
+        if (val.StartsWith('$')) return true; // PS variable
+        // PS size literals: 100KB, 50MB, 1GB, etc.
+        if (val.Length > 2)
+        {
+            var suffix = val[^2..].ToUpperInvariant();
+            if (suffix is "KB" or "MB" or "GB" or "TB")
+                return double.TryParse(val[..^2], out _);
+        }
+        return false;
     }
 
     /// <summary>

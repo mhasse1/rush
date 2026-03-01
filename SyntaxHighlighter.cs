@@ -20,7 +20,8 @@ public class SyntaxHighlighter
 
     private static readonly HashSet<string> BuiltinCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "set"
+        "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "set",
+        "as", "from" // Pipe-context format commands
     };
 
     public SyntaxHighlighter(CommandTranslator translator)

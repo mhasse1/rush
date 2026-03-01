@@ -8,7 +8,7 @@ var config = RushConfig.Load();
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = ConsoleColor.Cyan;
-Console.WriteLine("rush v0.3.0 — a better shell");
+Console.WriteLine("rush v0.4.0 — a better shell");
 Console.ForegroundColor = ConsoleColor.DarkGray;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
@@ -625,6 +625,11 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  Chain:    cmd1 && cmd2 || echo 'fallback'");
     Console.WriteLine("  Redirect: ls > files.txt   echo hi >> log.txt");
     Console.WriteLine("  Env vars: echo $HOME  ls $TMPDIR");
+    Console.WriteLine("  Filter:   ps | where CPU > 10");
+    Console.WriteLine("  Select:   ps | select ProcessName, CPU");
+    Console.WriteLine("  Format:   ps | as json    ps | as table");
+    Console.WriteLine("  Parse:    cat data.json | from json");
+    Console.WriteLine("  JSON:     json config.json | .settings");
     Console.WriteLine();
 
     Console.ForegroundColor = ConsoleColor.Cyan;
@@ -640,6 +645,11 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  !!         — repeat last command");
     Console.WriteLine("  !$         — last argument of previous command");
     Console.WriteLine("  .property  — dot-notation in pipes: ps | .ProcessName");
+    Console.WriteLine("  where      — filter: ps | where CPU > 10  (also: <, =, !=, ~)");
+    Console.WriteLine("  select     — pick properties: ps | select Id, ProcessName");
+    Console.WriteLine("  as         — format output: ... | as json / csv / table / list");
+    Console.WriteLine("  from       — parse input:   cat f.json | from json / csv");
+    Console.WriteLine("  json       — read JSON: json config.json | .key");
     Console.WriteLine("  &&         — run next command only if previous succeeded");
     Console.WriteLine("  ||         — run next command only if previous failed");
     Console.WriteLine("  > / >>     — redirect output to file (overwrite / append)");
