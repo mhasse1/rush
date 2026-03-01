@@ -36,6 +36,31 @@ public class CommandTranslator
         for (int i = 0; i < segments.Length; i++)
         {
             var segment = segments[i].Trim();
+
+            // Dot-notation: .property → ForEach-Object { $_.property }
+            // Enables: ps | .ProcessName   or   data | .items[].id
+            if (i > 0 && segment.StartsWith('.') && !segment.StartsWith(".."))
+            {
+                var property = segment[1..]; // Remove leading dot
+                if (property.Contains("[]."))
+                {
+                    // Array expansion: .items[].id → expand each level
+                    var parts = property.Split(new[] { "[]." }, StringSplitOptions.None);
+                    var stages = parts.Select(p => $"ForEach-Object {{ $_.{p} }}");
+                    translated.Add(string.Join(" | ", stages));
+                }
+                else if (property.EndsWith("[]"))
+                {
+                    translated.Add($"ForEach-Object {{ $_.{property[..^2]} }}");
+                }
+                else
+                {
+                    translated.Add($"ForEach-Object {{ $_.{property} }}");
+                }
+                anyTranslated = true;
+                continue;
+            }
+
             var result = TranslateSegment(segment, isAfterPipe: i > 0);
             if (result != null)
             {

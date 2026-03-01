@@ -21,7 +21,7 @@ public static class OutputRenderer
     {
         if (results.Count == 0) return;
 
-        // Single result: try to print it simply
+        // Single result or collection of simple values: print simply
         if (results.Count == 1)
         {
             var single = results[0];
@@ -30,6 +30,13 @@ public static class OutputRenderer
                 Console.WriteLine(single.ToString());
                 return;
             }
+        }
+        else if (results.All(r => IsSimpleValue(r)))
+        {
+            // Collection of strings/ints/etc — just print each value
+            foreach (var r in results)
+                Console.WriteLine(r.ToString());
+            return;
         }
 
         // Check if these are file system items — render ls-style

@@ -28,6 +28,15 @@ public class LineEditor
     private char _lastFindChar;
     private bool _lastFindForward;
 
+    // Fish-style autosuggestion
+    private string? _suggestion;
+
+    // History persistence
+    private static readonly string HistoryDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        ".config", "rush");
+    private static readonly string HistoryPath = Path.Combine(HistoryDir, "history");
+
     // Shared state for a single ReadLine call
     private List<char> _buffer = null!;
     private int _cursor;
@@ -278,6 +287,16 @@ public class LineEditor
                 HistoryDown();
                 return null;
 
+            case ConsoleKey.RightArrow:
+                if (_suggestion != null && _cursor >= Math.Max(0, _buffer.Count - 1))
+                {
+                    AcceptSuggestion();
+                    return null;
+                }
+                if (_cursor < _buffer.Count - 1) _cursor++;
+                SetCursorPos();
+                return null;
+
             case ConsoleKey.D when key.Modifiers.HasFlag(ConsoleModifiers.Control):
                 if (_buffer.Count == 0) { Console.WriteLine(); return "\x04"; }
                 return null;
@@ -395,6 +414,11 @@ public class LineEditor
                     _cursor = FindWordBoundaryRight(_buffer, _cursor);
                 else if (_cursor < _buffer.Count)
                     _cursor++;
+                else if (_suggestion != null)
+                {
+                    AcceptSuggestion();
+                    return null;
+                }
                 SetCursorPos();
                 return null;
 
@@ -404,6 +428,11 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.End:
+                if (_cursor == _buffer.Count && _suggestion != null)
+                {
+                    AcceptSuggestion();
+                    return null;
+                }
                 _cursor = _buffer.Count;
                 SetCursorPos();
                 return null;
@@ -477,10 +506,7 @@ public class LineEditor
                 {
                     _buffer.Insert(_cursor, key.KeyChar);
                     _cursor++;
-                    if (_cursor == _buffer.Count)
-                        Console.Write(key.KeyChar);
-                    else
-                        Redraw();
+                    Redraw();
                 }
                 return null;
         }
@@ -674,14 +700,28 @@ public class LineEditor
 
     private void Redraw()
     {
+        // Update autosuggestion
+        UpdateSuggestion();
+
         Console.SetCursorPosition(_startLeft, _startTop);
         var text = new string(_buffer.ToArray());
         Console.Write(text);
 
-        // Clear trailing chars
+        // Draw autosuggestion ghost text (fish-style)
+        int ghostLen = 0;
+        if (_suggestion != null && _cursor == _buffer.Count)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.Write(_suggestion);
+            Console.ResetColor();
+            ghostLen = _suggestion.Length;
+        }
+
+        // Clear trailing chars (including old ghost text)
         try
         {
-            int clearCount = Console.WindowWidth - (_startLeft + _buffer.Count) % Console.WindowWidth;
+            int totalWritten = (_startLeft + _buffer.Count + ghostLen) % Console.WindowWidth;
+            int clearCount = Console.WindowWidth - totalWritten;
             if (clearCount > 0 && clearCount <= Console.WindowWidth)
                 Console.Write(new string(' ', clearCount));
         }
@@ -710,6 +750,81 @@ public class LineEditor
         _buffer.AddRange(newContent);
         _cursor = _buffer.Count;
         Redraw();
+    }
+
+    // ── Autosuggestion ──────────────────────────────────────────────────
+
+    private void UpdateSuggestion()
+    {
+        _suggestion = null;
+        if (_buffer.Count == 0) return;
+        if (_cursor != _buffer.Count) return; // Only suggest when cursor at end
+
+        var currentInput = new string(_buffer.ToArray());
+
+        for (int i = _history.Count - 1; i >= 0; i--)
+        {
+            if (_history[i].StartsWith(currentInput, StringComparison.OrdinalIgnoreCase)
+                && _history[i].Length > currentInput.Length)
+            {
+                _suggestion = _history[i][currentInput.Length..];
+                return;
+            }
+        }
+    }
+
+    private void AcceptSuggestion()
+    {
+        if (_suggestion == null) return;
+        _buffer.AddRange(_suggestion);
+        _suggestion = null;
+        if (Mode == EditMode.Vi && _viMode == ViMode.Normal)
+            _cursor = Math.Max(0, _buffer.Count - 1);
+        else
+            _cursor = _buffer.Count;
+        Redraw();
+    }
+
+    // ── History Persistence ─────────────────────────────────────────────
+
+    /// <summary>
+    /// Load history from ~/.config/rush/history
+    /// </summary>
+    public void LoadHistory()
+    {
+        try
+        {
+            if (File.Exists(HistoryPath))
+            {
+                var lines = File.ReadAllLines(HistoryPath);
+                _history.Clear();
+                _history.AddRange(lines.Where(l => !string.IsNullOrWhiteSpace(l)).TakeLast(MaxHistory));
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Save history to ~/.config/rush/history
+    /// </summary>
+    public void SaveHistory()
+    {
+        try
+        {
+            if (!Directory.Exists(HistoryDir))
+                Directory.CreateDirectory(HistoryDir);
+            File.WriteAllLines(HistoryPath, _history.TakeLast(MaxHistory));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Replace the most recent history entry (used for bang expansion).
+    /// </summary>
+    public void ReplaceLastHistory(string replacement)
+    {
+        if (_history.Count > 0)
+            _history[^1] = replacement;
     }
 
     // ── Cursor Shape ────────────────────────────────────────────────────
