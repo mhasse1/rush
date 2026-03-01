@@ -1,334 +1,296 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace Rush;
 
 /// <summary>
-/// Syncs Rush config files to/from a private GitHub repo via the gh CLI.
+/// Multi-transport config sync dispatcher and shared utilities.
 /// Config dir: ~/.config/rush/
 /// Sync metadata: ~/.config/rush/sync.json
 ///
+/// Transports:
+///   github — Private GitHub repo via gh CLI + git
+///   ssh    — Remote server via SCP (key-based auth)
+///   path   — Filesystem path (UNC share, USB, mounted drive)
+///
 /// Commands:
-///   rush sync init    — create private rush-config repo and link
-///   rush sync push    — commit and push config changes
-///   rush sync pull    — pull latest config from GitHub
-///   rush sync status  — show sync status
-///   rush sync         — alias for status
+///   sync init [transport] [target]  — set up sync
+///   sync push [--force]             — push config changes
+///   sync pull [--force]             — pull config changes
+///   sync status                     — show sync status
 /// </summary>
 public class ConfigSync
 {
-    private static readonly string ConfigDir = Path.Combine(
+    internal static readonly string ConfigDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
         ".config", "rush");
 
-    private static readonly string SyncMetaPath = Path.Combine(ConfigDir, "sync.json");
+    internal static readonly string SyncMetaPath = Path.Combine(ConfigDir, "sync.json");
 
     /// <summary>Files tracked by sync (relative to ConfigDir).</summary>
-    private static readonly string[] SyncFiles = {
+    internal static readonly string[] SyncFiles = {
         "config.json",
         "config.rush",
         "init.rush"
     };
+
+    internal static readonly string ManifestFile = ".sync-manifest";
 
     /// <summary>
     /// Handle `sync` subcommand from the REPL.
     /// </summary>
     public static bool HandleSync(string args)
     {
-        var subcommand = args.Trim().ToLowerInvariant();
+        var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var subcommand = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var rest = parts.Length > 1 ? string.Join(' ', parts[1..]) : "";
+        bool force = rest.Contains("--force", StringComparison.OrdinalIgnoreCase);
+        if (force) rest = rest.Replace("--force", "", StringComparison.OrdinalIgnoreCase).Trim();
 
         switch (subcommand)
         {
             case "init":
-                return Init();
+                return HandleInit(rest);
             case "push":
-                return Push();
+                return DispatchCommand("push", force);
             case "pull":
-                return Pull();
+                return DispatchCommand("pull", force);
             case "status":
             case "":
-                return Status();
+                return DispatchCommand("status", false);
             default:
                 PrintError($"Unknown sync command: {subcommand}");
-                PrintMuted("  Usage: sync init | push | pull | status");
+                PrintMuted("  Usage: sync init [github|ssh|path] | push [--force] | pull [--force] | status");
                 return false;
         }
     }
 
     /// <summary>
-    /// Initialize: create a private GitHub repo and set up the config dir as a git repo.
+    /// Handle `sync init` — select transport and initialize.
     /// </summary>
-    private static bool Init()
+    private static bool HandleInit(string args)
     {
-        // Check gh CLI is available and authenticated
-        if (!CheckGh()) return false;
+        var parts = args.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var transport = parts.Length > 0 ? parts[0].ToLowerInvariant() : "";
+        var target = parts.Length > 1 ? parts[1].Trim() : "";
 
-        // Check if already initialized
-        if (IsGitRepo())
+        // If no transport specified, show interactive picker
+        if (string.IsNullOrEmpty(transport))
         {
-            var meta = LoadMeta();
-            if (meta != null)
+            PrintMuted("  Select sync method:");
+            PrintMuted("    1. github — Private GitHub repo (requires gh + git)");
+            PrintMuted("    2. ssh    — Remote server via SCP (requires SSH keys)");
+            PrintMuted("    3. path   — Filesystem path (UNC share, USB, mounted drive)");
+            Console.ForegroundColor = Theme.Current.Accent;
+            Console.Write("  Choice [1-3]: ");
+            Console.ResetColor();
+
+            var choice = Console.ReadLine()?.Trim();
+            transport = choice switch
             {
-                PrintMuted($"  Already syncing to: {meta.Repo}");
-                PrintMuted("  Use 'sync push' or 'sync pull'");
+                "1" or "github" => "github",
+                "2" or "ssh" => "ssh",
+                "3" or "path" => "path",
+                _ => ""
+            };
+
+            if (string.IsNullOrEmpty(transport))
+            {
+                PrintError("Invalid choice. Use: sync init github | sync init ssh | sync init path");
+                return false;
+            }
+        }
+
+        // Ensure config dir exists
+        Directory.CreateDirectory(ConfigDir);
+
+        return transport switch
+        {
+            "github" => SyncGitHub.Init(target),
+            "ssh" => SyncSsh.Init(target),
+            "path" => SyncPath.Init(target),
+            _ => HandleUnknownTransport(transport)
+        };
+    }
+
+    /// <summary>
+    /// Dispatch push/pull/status to the correct transport based on saved metadata.
+    /// </summary>
+    private static bool DispatchCommand(string command, bool force)
+    {
+        var meta = LoadMeta();
+
+        // Status is special — always works even if not initialized
+        if (command == "status")
+        {
+            if (meta == null || !meta.Initialized)
+            {
+                PrintMuted("  Not synced. Run 'sync init' to set up config sync.");
                 return true;
             }
         }
-
-        // Get GitHub username
-        var username = RunGh("api user -q .login")?.Trim();
-        if (string.IsNullOrEmpty(username))
+        else
         {
-            PrintError("Could not determine GitHub username. Run 'gh auth login' first.");
-            return false;
-        }
-
-        var repoName = "rush-config";
-        var fullRepo = $"{username}/{repoName}";
-
-        // Check if repo already exists on GitHub
-        var repoCheck = RunGh($"repo view {fullRepo} --json name 2>&1");
-        bool repoExists = repoCheck != null && repoCheck.Contains("\"name\"");
-
-        if (!repoExists)
-        {
-            // Create private repo
-            PrintMuted($"  Creating private repo: {fullRepo}");
-            var result = RunGh($"repo create {repoName} --private --description \"Rush shell configuration\" --confirm");
-            if (result == null)
+            if (meta == null || !meta.Initialized)
             {
-                PrintError("Failed to create GitHub repo.");
+                PrintError("Not initialized. Run 'sync init' first.");
                 return false;
             }
         }
-        else
+
+        return meta!.Transport switch
         {
-            PrintMuted($"  Found existing repo: {fullRepo}");
-        }
+            "github" => command switch
+            {
+                "push" => SyncGitHub.Push(force),
+                "pull" => SyncGitHub.Pull(force),
+                "status" => SyncGitHub.Status(),
+                _ => false
+            },
+            "ssh" => command switch
+            {
+                "push" => SyncSsh.Push(force),
+                "pull" => SyncSsh.Pull(force),
+                "status" => SyncSsh.Status(),
+                _ => false
+            },
+            "path" => command switch
+            {
+                "push" => SyncPath.Push(force),
+                "pull" => SyncPath.Pull(force),
+                "status" => SyncPath.Status(),
+                _ => false
+            },
+            _ => HandleUnknownTransport(meta.Transport)
+        };
+    }
 
-        // Initialize git in config dir (if not already)
-        if (!IsGitRepo())
-        {
-            RunGit("init");
-            RunGit("branch -M main");
-        }
+    private static bool HandleUnknownTransport(string transport)
+    {
+        PrintError($"Unknown sync transport: {transport}");
+        PrintMuted("  Valid transports: github, ssh, path");
+        return false;
+    }
 
-        // Set remote
-        RunGit("remote remove origin 2>/dev/null");
-        RunGit($"remote add origin git@github.com:{fullRepo}.git");
+    // ── Shared Utilities (used by all transports) ───────────────────────
 
-        // Create .gitignore for sensitive files
-        var gitignorePath = Path.Combine(ConfigDir, ".gitignore");
-        if (!File.Exists(gitignorePath))
-        {
-            File.WriteAllText(gitignorePath, "# Sensitive files\napi-keys\nsecrets.*\n*.key\n*.pem\nsync.json\n");
-        }
-
-        // Try to pull existing content first
-        var pullResult = RunGit("pull origin main --allow-unrelated-histories 2>&1");
-
-        // Stage existing config files
+    /// <summary>Compute SHA256 hash of all sync files concatenated.</summary>
+    internal static string ComputeSyncHash()
+    {
+        using var sha = SHA256.Create();
+        var builder = new StringBuilder();
         foreach (var file in SyncFiles)
         {
             var fullPath = Path.Combine(ConfigDir, file);
             if (File.Exists(fullPath))
-                RunGit($"add {file}");
+                builder.Append(File.ReadAllText(fullPath));
         }
-        RunGit("add .gitignore");
-
-        // Initial commit if there are changes
-        RunGit("diff --cached --quiet 2>&1");
-        // Always try to commit — git will no-op if nothing to commit
-        RunGit($"commit -m \"Initial rush config sync\" --allow-empty 2>&1");
-        RunGit("push -u origin main 2>&1");
-
-        // Save sync metadata
-        SaveMeta(new SyncMeta
-        {
-            Repo = fullRepo,
-            LastSync = DateTime.UtcNow.ToString("o"),
-            Initialized = true
-        });
-
-        PrintAccent($"  Syncing to: github.com/{fullRepo}");
-        PrintMuted("  Use 'sync push' to upload changes, 'sync pull' to download");
-        return true;
+        var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 
-    /// <summary>
-    /// Push local config changes to GitHub.
-    /// </summary>
-    private static bool Push()
-    {
-        if (!EnsureInitialized()) return false;
-
-        // Stage tracked config files
-        foreach (var file in SyncFiles)
-        {
-            var fullPath = Path.Combine(ConfigDir, file);
-            if (File.Exists(fullPath))
-                RunGit($"add {file}");
-        }
-        RunGit("add .gitignore");
-
-        // Check if there are changes to commit
-        var status = RunGit("status --porcelain")?.Trim();
-        if (string.IsNullOrEmpty(status))
-        {
-            PrintMuted("  Already up to date, nothing to push");
-            return true;
-        }
-
-        // Commit with timestamp
-        var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
-        var hostname = Environment.MachineName.ToLowerInvariant();
-        RunGit($"commit -m \"sync from {hostname} at {timestamp}\"");
-
-        // Push
-        var result = RunGit("push origin main 2>&1");
-        if (result != null && result.Contains("error"))
-        {
-            PrintError("Push failed. Try 'sync pull' first to merge remote changes.");
-            return false;
-        }
-
-        SaveMeta(LoadMeta()! with { LastSync = DateTime.UtcNow.ToString("o") });
-
-        PrintAccent("  Config pushed to GitHub");
-        if (!string.IsNullOrEmpty(status))
-        {
-            foreach (var line in status.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                PrintMuted($"    {line.Trim()}");
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Pull latest config from GitHub.
-    /// </summary>
-    private static bool Pull()
-    {
-        if (!EnsureInitialized()) return false;
-
-        var result = RunGit("pull origin main 2>&1");
-
-        if (result != null && result.Contains("Already up to date"))
-        {
-            PrintMuted("  Already up to date");
-        }
-        else if (result != null && result.Contains("CONFLICT"))
-        {
-            PrintError("Merge conflict detected. Resolve manually in ~/.config/rush/");
-            return false;
-        }
-        else
-        {
-            PrintAccent("  Config pulled from GitHub");
-            PrintMuted("  Run 'reload' to apply changes");
-        }
-
-        SaveMeta(LoadMeta()! with { LastSync = DateTime.UtcNow.ToString("o") });
-        return true;
-    }
-
-    /// <summary>
-    /// Show sync status.
-    /// </summary>
-    private static bool Status()
-    {
-        var meta = LoadMeta();
-        if (meta == null || !meta.Initialized)
-        {
-            PrintMuted("  Not synced. Run 'sync init' to set up GitHub sync.");
-            return true;
-        }
-
-        PrintAccent($"  Repo: github.com/{meta.Repo}");
-
-        // Show last sync time
-        if (DateTime.TryParse(meta.LastSync, out var lastSync))
-        {
-            var ago = DateTime.UtcNow - lastSync;
-            var agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" :
-                         ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" :
-                         $"{(int)ago.TotalMinutes}m ago";
-            PrintMuted($"  Last sync: {agoStr}");
-        }
-
-        // Show local changes
-        var status = RunGit("status --porcelain")?.Trim();
-        if (!string.IsNullOrEmpty(status))
-        {
-            PrintMuted("  Local changes:");
-            foreach (var line in status.Split('\n', StringSplitOptions.RemoveEmptyEntries))
-                PrintMuted($"    {line.Trim()}");
-        }
-        else
-        {
-            PrintMuted("  No local changes");
-        }
-
-        // Show tracked files
-        PrintMuted("  Tracked files:");
-        foreach (var file in SyncFiles)
-        {
-            var fullPath = Path.Combine(ConfigDir, file);
-            var exists = File.Exists(fullPath);
-            PrintMuted($"    {(exists ? "✓" : "·")} {file}");
-        }
-
-        return true;
-    }
-
-    // ── Helpers ──────────────────────────────────────────────────────────
-
-    private static bool EnsureInitialized()
-    {
-        var meta = LoadMeta();
-        if (meta == null || !meta.Initialized)
-        {
-            PrintError("Not initialized. Run 'sync init' first.");
-            return false;
-        }
-        if (!CheckGh()) return false;
-        return true;
-    }
-
-    private static bool CheckGh()
+    /// <summary>Load the remote sync manifest from a local file path.</summary>
+    internal static SyncManifest? LoadManifest(string path)
     {
         try
         {
-            var result = RunProcess("gh", "auth status");
-            if (result == null || !result.Contains("Logged in"))
+            if (!File.Exists(path)) return null;
+            var json = File.ReadAllText(path);
+            return JsonSerializer.Deserialize<SyncManifest>(json, new JsonSerializerOptions
             {
-                PrintError("GitHub CLI not authenticated. Run 'gh auth login' first.");
-                return false;
-            }
-            return true;
+                PropertyNameCaseInsensitive = true
+            });
         }
-        catch
+        catch { return null; }
+    }
+
+    /// <summary>Save a sync manifest to a local file path.</summary>
+    internal static void SaveManifest(string path, SyncManifest manifest)
+    {
+        try
         {
-            PrintError("GitHub CLI (gh) not found. Install with: brew install gh");
-            return false;
+            var json = JsonSerializer.Serialize(manifest, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+            });
+            File.WriteAllText(path, json);
         }
+        catch { }
     }
 
-    private static bool IsGitRepo()
+    /// <summary>Build a manifest for the current local state.</summary>
+    internal static SyncManifest BuildManifest()
     {
-        return Directory.Exists(Path.Combine(ConfigDir, ".git"));
+        return new SyncManifest
+        {
+            Hash = ComputeSyncHash(),
+            Host = Environment.MachineName.ToLowerInvariant(),
+            Timestamp = DateTime.UtcNow.ToString("o")
+        };
     }
 
-    private static string? RunGh(string args)
+    /// <summary>
+    /// Check for conflicts between local and remote state.
+    /// Returns: NoChange, SafeToPull, SafeToPush, or Conflict.
+    /// </summary>
+    internal static ConflictResult CheckConflict(SyncManifest? remote, SyncMeta local)
     {
-        return RunProcess("gh", args);
+        var localHash = ComputeSyncHash();
+
+        // No remote manifest — first push or missing manifest
+        if (remote == null)
+            return ConflictResult.SafeToPush;
+
+        bool localChanged = localHash != local.SyncHash;
+        bool remoteChanged = remote.Hash != local.SyncHash;
+
+        if (!localChanged && !remoteChanged)
+            return ConflictResult.NoChange;
+
+        if (remoteChanged && !localChanged)
+            return ConflictResult.SafeToPull;
+
+        if (localChanged && !remoteChanged)
+            return ConflictResult.SafeToPush;
+
+        // Both changed — conflict
+        return ConflictResult.Conflict;
     }
 
-    private static string? RunGit(string args)
+    /// <summary>Print conflict information.</summary>
+    internal static void PrintConflict(SyncManifest remote)
     {
-        return RunProcess("git", $"-C \"{ConfigDir}\" {args}");
+        PrintError("Conflict detected!");
+        PrintMuted($"  Remote was last updated by '{remote.Host}'");
+        if (DateTime.TryParse(remote.Timestamp, out var ts))
+        {
+            var ago = DateTime.UtcNow - ts;
+            var agoStr = ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" :
+                         ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" :
+                         $"{(int)ago.TotalMinutes}m ago";
+            PrintMuted($"  Remote last sync: {agoStr}");
+        }
+        PrintMuted("  Use 'sync push --force' to overwrite remote");
+        PrintMuted("  Use 'sync pull --force' to overwrite local");
     }
 
-    private static string? RunProcess(string command, string args)
+    /// <summary>Format a "time ago" string from a UTC timestamp.</summary>
+    internal static string FormatTimeAgo(string utcTimestamp)
+    {
+        if (!DateTime.TryParse(utcTimestamp, out var ts))
+            return "unknown";
+        var ago = DateTime.UtcNow - ts;
+        return ago.TotalDays >= 1 ? $"{(int)ago.TotalDays}d ago" :
+               ago.TotalHours >= 1 ? $"{(int)ago.TotalHours}h ago" :
+               $"{(int)ago.TotalMinutes}m ago";
+    }
+
+    // ── Process Execution ───────────────────────────────────────────────
+
+    internal static string? RunProcess(string command, string args)
     {
         try
         {
@@ -352,7 +314,19 @@ public class ConfigSync
         }
     }
 
-    private static SyncMeta? LoadMeta()
+    internal static string? RunGit(string args)
+    {
+        return RunProcess("git", $"-C \"{ConfigDir}\" {args}");
+    }
+
+    internal static string? RunGh(string args)
+    {
+        return RunProcess("gh", args);
+    }
+
+    // ── Metadata ────────────────────────────────────────────────────────
+
+    internal static SyncMeta? LoadMeta()
     {
         try
         {
@@ -366,7 +340,7 @@ public class ConfigSync
         catch { return null; }
     }
 
-    private static void SaveMeta(SyncMeta meta)
+    internal static void SaveMeta(SyncMeta meta)
     {
         try
         {
@@ -380,32 +354,76 @@ public class ConfigSync
         catch { }
     }
 
-    private static void PrintMuted(string msg)
+    // ── Print Helpers ───────────────────────────────────────────────────
+
+    internal static void PrintMuted(string msg)
     {
         Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine(msg);
         Console.ResetColor();
     }
 
-    private static void PrintAccent(string msg)
+    internal static void PrintAccent(string msg)
     {
         Console.ForegroundColor = Theme.Current.Accent;
         Console.WriteLine(msg);
         Console.ResetColor();
     }
 
-    private static void PrintError(string msg)
+    internal static void PrintError(string msg)
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"  {msg}");
         Console.ResetColor();
     }
+
+    /// <summary>Print tracked files with existence markers.</summary>
+    internal static void PrintTrackedFiles()
+    {
+        PrintMuted("  Tracked files:");
+        foreach (var file in SyncFiles)
+        {
+            var fullPath = Path.Combine(ConfigDir, file);
+            var exists = File.Exists(fullPath);
+            PrintMuted($"    {(exists ? "✓" : "·")} {file}");
+        }
+    }
 }
 
-/// <summary>Sync metadata stored in sync.json.</summary>
+// ── Data Models ─────────────────────────────────────────────────────────
+
+/// <summary>Sync metadata stored in sync.json (local-only, not synced).</summary>
 public record SyncMeta
 {
-    public string Repo { get; init; } = "";
+    public string Transport { get; init; } = "github";
+    public string Target { get; init; } = "";
     public string LastSync { get; init; } = "";
+    public string LastSyncHost { get; init; } = "";
+    public string SyncHash { get; init; } = "";
     public bool Initialized { get; init; }
+
+    // Backward compat: old sync.json with "repo" field
+    [System.Text.Json.Serialization.JsonInclude]
+    public string Repo
+    {
+        get => Target;
+        init => Target = value;
+    }
+}
+
+/// <summary>Sync manifest — travels WITH the config files on the remote.</summary>
+public record SyncManifest
+{
+    public string Hash { get; init; } = "";
+    public string Host { get; init; } = "";
+    public string Timestamp { get; init; } = "";
+}
+
+/// <summary>Result of conflict detection.</summary>
+public enum ConflictResult
+{
+    NoChange,
+    SafeToPull,
+    SafeToPush,
+    Conflict
 }

@@ -1684,7 +1684,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  \\          — line continuation (trailing backslash)");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings (no args)");
-    Console.WriteLine("  sync       — GitHub config sync: sync init|push|pull|status");
+    Console.WriteLine("  sync       — config sync: sync init [github|ssh|path] | push | pull | status");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
     Console.WriteLine();
