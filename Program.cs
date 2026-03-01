@@ -777,6 +777,9 @@ static void RunScriptFile(string path)
 {
     try
     {
+        // Initialize theme for output rendering
+        Theme.Initialize(null);
+
         var source = File.ReadAllText(path);
         var iss = InitialSessionState.CreateDefault();
         var hostUI = new RushHostUI();
@@ -793,7 +796,7 @@ static void RunScriptFile(string path)
             using var ps = PowerShell.Create();
             ps.Runspace = runspace;
             ps.AddScript(psCode);
-            var results = ps.Invoke().ToList();
+            var results = ps.Invoke().Where(r => r != null).ToList();
             if (results.Count > 0) OutputRenderer.Render(results);
             if (ps.HadErrors)
             {
