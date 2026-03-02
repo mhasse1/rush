@@ -140,4 +140,67 @@ public class ScriptEngineTriageTests
         // != should not be treated as assignment
         Assert.False(_engine.IsRushSyntax("cd != foo"));
     }
+
+    // ── New Shell Builtins Are Not Rush Syntax ───────────────────────
+
+    [Theory]
+    [InlineData("wait")]
+    [InlineData("wait %1")]
+    [InlineData("unalias ls")]
+    [InlineData("printf '%s' hello")]
+    [InlineData("read name")]
+    [InlineData("read -p 'Enter: ' name")]
+    [InlineData("exec /bin/bash")]
+    [InlineData("trap 'echo bye' EXIT")]
+    public void NewShellBuiltins_AreNotRushSyntax(string input)
+    {
+        Assert.False(_engine.IsRushSyntax(input));
+    }
+
+    // ── New Shell Builtins with = should NOT be assignments ──────────
+
+    [Theory]
+    [InlineData("wait = something")]
+    [InlineData("printf = value")]
+    [InlineData("read = value")]
+    [InlineData("exec = value")]
+    [InlineData("trap = value")]
+    public void NewBuiltinsWithEquals_NotTreatedAsAssignment(string input)
+    {
+        Assert.False(_engine.IsRushSyntax(input));
+    }
+
+    // ── Method Chaining ──────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("items.each { |x| puts x }")]
+    [InlineData("list.map { |x| x * 2 }")]
+    [InlineData("data.select { |r| r > 0 }")]
+    [InlineData("names.sort")]
+    [InlineData("str.upcase")]
+    public void MethodChaining_IsRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
+    // ── IsIncomplete (block depth) ───────────────────────────────────
+
+    [Theory]
+    [InlineData("if x > 5")]           // open if, no end
+    [InlineData("for i in 1..5")]      // open for, no end
+    [InlineData("def greet(name)")]    // open def, no end
+    [InlineData("while true")]         // open while, no end
+    public void IncompleteBlocks_AreDetected(string input)
+    {
+        Assert.True(_engine.IsIncomplete(input));
+    }
+
+    [Theory]
+    [InlineData("if x > 5\nputs x\nend")]
+    [InlineData("for i in 1..5\nputs i\nend")]
+    [InlineData("def greet(name)\nputs name\nend")]
+    public void CompleteBlocks_AreNotIncomplete(string input)
+    {
+        Assert.False(_engine.IsIncomplete(input));
+    }
 }

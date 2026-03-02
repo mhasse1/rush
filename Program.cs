@@ -4,7 +4,19 @@ using System.Management.Automation.Runspaces;
 using System.Runtime.InteropServices;
 using Rush;
 
-const string Version = "1.1.0";
+const string Version = "1.2.0";
+
+// ── Login Shell Detection ───────────────────────────────────────────
+// macOS sets argv[0] to "-rush" when launching a login shell.
+// Also accept --login / -l flags explicitly.
+bool isLoginShell = false;
+var argv0 = Environment.GetCommandLineArgs()[0];
+if (Path.GetFileName(argv0).StartsWith('-'))
+    isLoginShell = true;
+if (args.Contains("--login") || args.Contains("-l"))
+    isLoginShell = true;
+// Strip login flags so they don't interfere with other argument parsing
+args = args.Where(a => a is not "--login" and not "-l").ToArray();
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -22,6 +34,7 @@ if (args.Length > 0)
         Console.WriteLine("  rush                 Start interactive shell");
         Console.WriteLine("  rush script.rush     Execute Rush script file");
         Console.WriteLine("  rush -c 'command'    Execute command and exit");
+        Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
         return;
@@ -99,7 +112,7 @@ lineEditor.ShowCompletionsHandler = () =>
         System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
         System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
         System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'");
+    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'; $is_login_shell = ${(isLoginShell ? "$true" : "$false")}");
     ps.Invoke();
 }
 
@@ -111,6 +124,11 @@ RunStartupScript(runspace);
 string? previousDirectory = null;
 var dirStack = new Stack<string>();
 PowerShell? runningPs = null;
+var traps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+bool setE = false;   // set -e: exit on error
+bool setX = false;   // set -x: trace commands
+bool setPipefail = false; // set -o pipefail
+bool signalExit = false; // Set by SIGHUP/SIGTERM to trigger graceful exit
 
 // ── Signal Handling ──────────────────────────────────────────────────
 Console.CancelKeyPress += (_, e) =>
@@ -132,11 +150,30 @@ Console.CancelKeyPress += (_, e) =>
 // Modern workflows (tmux, multiple tabs, SSH multiplexing) make Ctrl+Z
 // suspension largely unnecessary.
 PosixSignalRegistration? sigtstpReg = null;
+PosixSignalRegistration? sighupReg = null;
+PosixSignalRegistration? sigtermReg = null;
 if (!OperatingSystem.IsWindows())
 {
     sigtstpReg = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, ctx =>
     {
         ctx.Cancel = true; // Swallow — do nothing
+    });
+
+    // SIGHUP — terminal closed (e.g. window close, SSH disconnect)
+    // Exit gracefully: save history, fire EXIT traps, clean up
+    sighupReg = PosixSignalRegistration.Create(PosixSignal.SIGHUP, ctx =>
+    {
+        ctx.Cancel = true; // Prevent default termination
+        signalExit = true;
+        try { runningPs?.Stop(); } catch { }
+    });
+
+    // SIGTERM — system shutdown or kill request
+    sigtermReg = PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx =>
+    {
+        ctx.Cancel = true;
+        signalExit = true;
+        try { runningPs?.Stop(); } catch { }
     });
 }
 
@@ -157,7 +194,7 @@ while (true)
     tabCompleter.Reset();
 
     var input = lineEditor.ReadLine();
-    if (input == null) break; // EOF (Ctrl+D)
+    if (input == null || signalExit) break; // EOF (Ctrl+D) or SIGHUP/SIGTERM
 
     // ── Continuation Lines (trailing \, unclosed quotes/brackets) ──
     input = ReadContinuationLines(input);
@@ -282,6 +319,23 @@ while (true)
             }
         }
 
+        // !string — repeat last command starting with string
+        if (!expanded && input.StartsWith('!') && input.Length > 1
+            && char.IsLetter(input[1]))
+        {
+            var prefix = input[1..];
+            for (int i = lineEditor.History.Count - 1; i >= 0; i--)
+            {
+                if (lineEditor.History[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                    && lineEditor.History[i] != input)
+                {
+                    input = lineEditor.History[i];
+                    expanded = true;
+                    break;
+                }
+            }
+        }
+
         // !! and !$
         if (input.Contains("!!") || input.Contains("!$"))
         {
@@ -317,11 +371,22 @@ while (true)
         }
     }
 
+    // ── Brace Expansion ──────────────────────────────────────────
+    input = ExpandBraces(input);
+
     // ── Tilde Expansion ────────────────────────────────────────────
     input = ExpandTilde(input);
 
     // ── Environment Variable Expansion ──────────────────────────────
     input = ExpandEnvVars(input);
+
+    // ── Arithmetic Expansion $((expr)) ──────────────────────────────
+    input = ExpandArithmetic(input, runspace);
+
+    // ── Process Substitution <(cmd) ────────────────────────────────
+    List<string>? procSubTempFiles = null;
+    if (input.Contains("<("))
+        (input, procSubTempFiles) = ExpandProcessSubstitution(input, translator, runspace);
 
     // ── Command Substitution $(...) and `...` ────────────────────────
     input = ExpandCommandSubstitution(input, translator, runspace);
@@ -457,6 +522,57 @@ while (true)
             continue;
         }
 
+        if (segment.Equals("wait", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("wait ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (segment.Equals("wait", StringComparison.OrdinalIgnoreCase))
+            {
+                // Wait for ALL running jobs
+                var running = jobManager.GetJobs().Where(j => !j.IsCompleted).ToList();
+                if (running.Count == 0)
+                {
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine("  no running jobs");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    foreach (var job in running)
+                    {
+                        var results = jobManager.WaitForJob(job.JobId);
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  [{job.JobId}] done: {job.Command}");
+                        Console.ResetColor();
+                        if (results != null && results.Count > 0)
+                            OutputRenderer.Render(results);
+                    }
+                }
+            }
+            else
+            {
+                var idStr = segment[5..].Trim().TrimStart('%');
+                if (int.TryParse(idStr, out var waitId))
+                {
+                    var results = jobManager.WaitForJob(waitId);
+                    if (results == null)
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine($"wait: no such job: {waitId}");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                        continue;
+                    }
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine($"  [{waitId}] done");
+                    Console.ResetColor();
+                    if (results.Count > 0)
+                        OutputRenderer.Render(results);
+                }
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
         if (segment.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("quit", StringComparison.OrdinalIgnoreCase))
         {
@@ -482,6 +598,31 @@ while (true)
         {
             lineEditor.Mode = EditMode.Emacs;
             Console.WriteLine("Switched to emacs mode");
+            lastSegmentFailed = false;
+            continue;
+        }
+        if (segment.StartsWith("set ", StringComparison.OrdinalIgnoreCase)
+            && (segment.Contains("-e") || segment.Contains("+e") ||
+                segment.Contains("-x") || segment.Contains("+x") ||
+                segment.Contains("-o ")))
+        {
+            var setArg = segment[4..].Trim();
+            if (setArg == "-e") { setE = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -e (exit on error)"); Console.ResetColor(); }
+            else if (setArg == "+e") { setE = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +e (ignore errors)"); Console.ResetColor(); }
+            else if (setArg == "-x") { setX = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -x (trace on)"); Console.ResetColor(); }
+            else if (setArg == "+x") { setX = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +x (trace off)"); Console.ResetColor(); }
+            else if (setArg == "-o pipefail") { setPipefail = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -o pipefail"); Console.ResetColor(); }
+            else if (setArg == "+o pipefail") { setPipefail = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +o pipefail"); Console.ResetColor(); }
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.Equals("history -c", StringComparison.OrdinalIgnoreCase))
+        {
+            lineEditor.ClearHistory();
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  history cleared");
+            Console.ResetColor();
             lastSegmentFailed = false;
             continue;
         }
@@ -533,11 +674,33 @@ while (true)
                     aliasValue = aliasValue[1..^1];
 
                 translator.RegisterAlias(aliasName, aliasValue);
+                config.Aliases[aliasName] = aliasValue;
+                config.Save();
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  alias {aliasName} → {aliasValue}");
                 Console.ResetColor();
             }
             lastSegmentFailed = false;
+            continue;
+        }
+
+        if (segment.StartsWith("unalias ", StringComparison.OrdinalIgnoreCase))
+        {
+            var name = segment[8..].Trim();
+            if (config.Aliases.Remove(name))
+            {
+                config.Save();
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine($"  unalias {name} (effective after reload)");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"unalias: {name}: not found");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
             continue;
         }
 
@@ -576,6 +739,116 @@ while (true)
             ps.Runspace = runspace;
             ps.AddScript($"Remove-Item Env:{varName} -ErrorAction SilentlyContinue");
             ps.Invoke();
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── printf: formatted output ─────────────────────────────────
+        if (segment.StartsWith("printf ", StringComparison.OrdinalIgnoreCase))
+        {
+            var printfArgs = CommandTranslator.SplitCommandLine(segment[7..]);
+            if (printfArgs.Length >= 1)
+            {
+                var fmt = StripQuotes(printfArgs[0]);
+                var fmtArgs = printfArgs.Skip(1).Select(StripQuotes).ToArray();
+                Console.Write(PrintfFormat(fmt, fmtArgs));
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── read: read line from stdin into variable ─────────────────
+        if (segment.Equals("read", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("read ", StringComparison.OrdinalIgnoreCase))
+        {
+            string? readPrompt = null;
+            string varName = "REPLY";
+            var readArgs = segment.Length > 5
+                ? CommandTranslator.SplitCommandLine(segment[5..])
+                : Array.Empty<string>();
+
+            int argIdx = 0;
+            while (argIdx < readArgs.Length)
+            {
+                if (readArgs[argIdx] == "-p" && argIdx + 1 < readArgs.Length)
+                {
+                    readPrompt = StripQuotes(readArgs[argIdx + 1]);
+                    argIdx += 2;
+                }
+                else
+                {
+                    varName = readArgs[argIdx];
+                    argIdx++;
+                }
+            }
+
+            if (readPrompt != null) Console.Write(readPrompt);
+            var value = Console.ReadLine() ?? "";
+
+            using var readPs = PowerShell.Create();
+            readPs.Runspace = runspace;
+            readPs.AddScript($"${varName} = '{value.Replace("'", "''")}'");
+            readPs.Invoke();
+            Environment.SetEnvironmentVariable(varName, value);
+
+            lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── exec: replace process ────────────────────────────────────
+        if (segment.StartsWith("exec ", StringComparison.OrdinalIgnoreCase))
+        {
+            var execCmd = segment[5..].Trim();
+            var execParts = CommandTranslator.SplitCommandLine(execCmd);
+            if (execParts.Length > 0)
+            {
+                lineEditor.SaveHistory();
+                var psi = new ProcessStartInfo
+                {
+                    FileName = StripQuotes(execParts[0]),
+                    UseShellExecute = false
+                };
+                foreach (var arg in execParts.Skip(1))
+                    psi.ArgumentList.Add(StripQuotes(arg));
+                try
+                {
+                    var proc = Process.Start(psi);
+                    proc?.WaitForExit();
+                    Environment.Exit(proc?.ExitCode ?? 1);
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"exec: {ex.Message}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            continue;
+        }
+
+        // ── trap: register signal handler ────────────────────────────
+        if (segment.StartsWith("trap ", StringComparison.OrdinalIgnoreCase))
+        {
+            var trapArgs = CommandTranslator.SplitCommandLine(segment[5..]);
+            if (trapArgs.Length >= 2)
+            {
+                var trapCmd = StripQuotes(trapArgs[0]);
+                var signal = trapArgs[1].ToUpperInvariant();
+                traps[signal] = trapCmd;
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine($"  trap {signal} → {trapCmd}");
+                Console.ResetColor();
+            }
+            else if (trapArgs.Length == 1 && trapArgs[0] == "-l")
+            {
+                foreach (var (sig, cmd) in traps)
+                {
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine($"  {sig} → {cmd}");
+                    Console.ResetColor();
+                }
+            }
             lastSegmentFailed = false;
             continue;
         }
@@ -761,6 +1034,14 @@ while (true)
             continue;
         }
 
+        // ── set -x trace ─────────────────────────────────────────
+        if (setX)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Error.WriteLine($"+ {segment}");
+            Console.ResetColor();
+        }
+
         // ── Parse Redirection ─────────────────────────────────────
         var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(segment);
 
@@ -886,6 +1167,22 @@ while (true)
             {
                 lastSegmentFailed = false;
                 lastExitCode = 0;
+
+                // set -o pipefail: treat native command pipeline failures as errors
+                // even when PowerShell doesn't report HadErrors
+                if (setPipefail)
+                {
+                    try
+                    {
+                        var lec = runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+                        if (lec is int pipeCode && pipeCode != 0)
+                        {
+                            lastSegmentFailed = true;
+                            lastExitCode = pipeCode;
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
             }
 
             if (results.Count > 0)
@@ -935,23 +1232,54 @@ while (true)
         }
     }
 
-    if (shouldExit) break;
+    if (shouldExit || signalExit) break;
+
+    // Clean up process substitution temp files
+    if (procSubTempFiles != null)
+        foreach (var f in procSubTempFiles)
+            try { File.Delete(f); } catch { }
 
     // Normalize exit code: ensure consistency with failure flag
     if (lastSegmentFailed && lastExitCode == 0) lastExitCode = 1;
     if (!lastSegmentFailed) lastExitCode = 0;
+
+    // set -e: exit on error
+    if (setE && lastSegmentFailed)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  exit (set -e): command failed with status {lastExitCode}");
+        Console.ResetColor();
+        break;
+    }
 
     prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
     lineEditor.SaveHistory();
 }
 
 // ── Graceful Exit ────────────────────────────────────────────────────
+
+// Fire EXIT trap if registered
+if (traps.TryGetValue("EXIT", out var exitTrap))
+{
+    var exitTranslated = translator.Translate(exitTrap) ?? exitTrap;
+    using var exitPs = PowerShell.Create();
+    exitPs.Runspace = runspace;
+    exitPs.AddScript(exitTranslated);
+    try { exitPs.Invoke(); } catch { }
+}
+
 jobManager.Dispose();
 lineEditor.SaveHistory();
 Console.Write("\x1b[0 q"); // Reset cursor shape
 if (host.ShouldExit)
     Environment.ExitCode = host.ExitCode;
-Console.WriteLine("bye.");
+if (!signalExit) // Don't write to a dead terminal (SIGHUP)
+    Console.WriteLine("bye.");
+
+// Dispose signal registrations
+sigtstpReg?.Dispose();
+sighupReg?.Dispose();
+sigtermReg?.Dispose();
 
 // ═══════════════════════════════════════════════════════════════════
 // Helper Methods
@@ -982,9 +1310,21 @@ static void RunConfigRush(Runspace runspace, ScriptEngine engine)
             ps.Runspace = runspace;
             ps.AddScript(psCode);
             ps.Invoke();
+            if (ps.HadErrors && ps.Streams.Error.Count > 0)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                foreach (var err in ps.Streams.Error)
+                    Console.Error.WriteLine($"rush: config.rush: {err}");
+                Console.ResetColor();
+            }
         }
     }
-    catch { } // Silently ignore config script errors on startup
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"rush: config.rush: {ex.Message}");
+        Console.ResetColor();
+    }
 }
 
 static void RunStartupScript(Runspace runspace)
@@ -1007,9 +1347,21 @@ static void RunStartupScript(Runspace runspace)
             ps.Runspace = runspace;
             ps.AddScript(line);
             ps.Invoke();
+            if (ps.HadErrors && ps.Streams.Error.Count > 0)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                foreach (var err in ps.Streams.Error)
+                    Console.Error.WriteLine($"rush: init.rush: {err}");
+                Console.ResetColor();
+            }
         }
     }
-    catch { } // Silently ignore startup script errors
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"rush: init.rush: {ex.Message}");
+        Console.ResetColor();
+    }
 }
 
 // ── Script File Execution ──────────────────────────────────────────
@@ -1040,7 +1392,7 @@ static void RunScriptFile(string path)
                 System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
                 System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
                 System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '1.1.0'");
+            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'");
             initPs.Invoke();
         }
 
@@ -1143,7 +1495,171 @@ static string FormatDuration(TimeSpan elapsed)
     return $"{elapsed.TotalSeconds:F1}s";
 }
 
+// ── printf Formatting ───────────────────────────────────────────────
+
+/// <summary>
+/// Format a printf-style string with C-style specifiers: %s %d %f %x %%
+/// and escape sequences: \n \t \\
+/// </summary>
+static string PrintfFormat(string format, string[] args)
+{
+    var sb = new System.Text.StringBuilder();
+    int argIdx = 0;
+
+    for (int i = 0; i < format.Length; i++)
+    {
+        if (format[i] == '\\' && i + 1 < format.Length)
+        {
+            switch (format[i + 1])
+            {
+                case 'n': sb.Append('\n'); i++; continue;
+                case 't': sb.Append('\t'); i++; continue;
+                case '\\': sb.Append('\\'); i++; continue;
+                case '0': sb.Append('\0'); i++; continue;
+            }
+        }
+
+        if (format[i] == '%' && i + 1 < format.Length)
+        {
+            var spec = format[i + 1];
+            if (spec == '%') { sb.Append('%'); i++; continue; }
+
+            var arg = argIdx < args.Length ? args[argIdx++] : "";
+            switch (spec)
+            {
+                case 's': sb.Append(arg); break;
+                case 'd': sb.Append(int.TryParse(arg, out var iv) ? iv : 0); break;
+                case 'f': sb.Append(double.TryParse(arg, out var dv) ? dv.ToString("F6") : "0.000000"); break;
+                case 'x': sb.Append(int.TryParse(arg, out var xv) ? xv.ToString("x") : "0"); break;
+                default: sb.Append('%').Append(spec); break;
+            }
+            i++;
+            continue;
+        }
+
+        sb.Append(format[i]);
+    }
+
+    return sb.ToString();
+}
+
+/// <summary>Strip surrounding single or double quotes from a string.</summary>
+static string StripQuotes(string s)
+{
+    if (s.Length >= 2 &&
+        ((s[0] == '\'' && s[^1] == '\'') || (s[0] == '"' && s[^1] == '"')))
+        return s[1..^1];
+    return s;
+}
+
 // ── Tilde Expansion ────────────────────────────────────────────────
+
+// ── Brace Expansion ─────────────────────────────────────────────
+
+/// <summary>
+/// Expand brace patterns: file.{bak,txt} → file.bak file.txt
+/// Handles nested braces: {a,{b,c}} → a b c
+/// Respects quotes — no expansion inside quoted strings.
+/// Must run before tilde expansion (bash canonical order).
+/// </summary>
+static string ExpandBraces(string input)
+{
+    if (!input.Contains('{')) return input;
+
+    var parts = CommandTranslator.SplitCommandLine(input);
+    var expanded = new List<string>();
+
+    foreach (var part in parts)
+    {
+        // Skip quoted strings
+        if (part.Length >= 2 &&
+            ((part[0] == '\'' && part[^1] == '\'') ||
+             (part[0] == '"' && part[^1] == '"')))
+        {
+            expanded.Add(part);
+            continue;
+        }
+
+        expanded.AddRange(ExpandBraceWord(part));
+    }
+
+    return string.Join(' ', expanded);
+}
+
+static List<string> ExpandBraceWord(string word)
+{
+    // Find the first top-level { that has a matching } with at least one comma
+    int braceStart = -1, braceEnd = -1;
+    int depth = 0;
+
+    for (int i = 0; i < word.Length; i++)
+    {
+        if (word[i] == '{')
+        {
+            if (depth == 0) braceStart = i;
+            depth++;
+        }
+        else if (word[i] == '}')
+        {
+            depth--;
+            if (depth == 0 && braceStart >= 0)
+            {
+                // Check for at least one comma at depth 0 inside braces
+                bool hasComma = false;
+                int d = 0;
+                for (int j = braceStart + 1; j < i; j++)
+                {
+                    if (word[j] == '{') d++;
+                    else if (word[j] == '}') d--;
+                    else if (word[j] == ',' && d == 0) { hasComma = true; break; }
+                }
+
+                if (hasComma) { braceEnd = i; break; }
+                braceStart = -1; // no comma — not a brace expansion
+            }
+        }
+    }
+
+    if (braceStart < 0 || braceEnd < 0)
+        return new List<string> { word };
+
+    var prefix = word[..braceStart];
+    var suffix = word[(braceEnd + 1)..];
+    var inner = word[(braceStart + 1)..braceEnd];
+
+    // Split inner on top-level commas
+    var alternatives = SplitBraceAlternatives(inner);
+
+    var results = new List<string>();
+    foreach (var alt in alternatives)
+        results.AddRange(ExpandBraceWord(prefix + alt + suffix)); // recurse for nesting
+
+    return results;
+}
+
+static List<string> SplitBraceAlternatives(string inner)
+{
+    var alts = new List<string>();
+    var current = new System.Text.StringBuilder();
+    int depth = 0;
+
+    foreach (var ch in inner)
+    {
+        if (ch == '{') depth++;
+        else if (ch == '}') depth--;
+        else if (ch == ',' && depth == 0)
+        {
+            alts.Add(current.ToString());
+            current.Clear();
+            continue;
+        }
+        current.Append(ch);
+    }
+    alts.Add(current.ToString());
+    return alts;
+}
+
+// ── Tilde Expansion ─────────────────────────────────────────────
 
 /// <summary>
 /// Expand ~ and ~/ to the user's home directory.
@@ -1175,6 +1691,24 @@ static string ExpandTilde(string input)
                 {
                     sb.Append(home);
                     continue;
+                }
+
+                // ~username/... → /Users/username or /home/username
+                if (i + 1 < input.Length && char.IsLetterOrDigit(input[i + 1]))
+                {
+                    int end = i + 1;
+                    while (end < input.Length && input[end] is not '/' and not ' ' and not '\t')
+                        end++;
+                    var username = input[(i + 1)..end];
+                    var usersDir = OperatingSystem.IsMacOS() ? "/Users" : "/home";
+                    var candidate = Path.Combine(usersDir, username);
+                    if (Directory.Exists(candidate))
+                    {
+                        sb.Append(candidate);
+                        i = end - 1; // skip past username (loop will increment)
+                        continue;
+                    }
+                    // Unknown user — leave ~username as-is
                 }
             }
         }
@@ -1460,6 +1994,65 @@ static string ExecuteSubstitution(string innerCommand, CommandTranslator transla
     }
 }
 
+// ── Process Substitution ────────────────────────────────────────────
+
+/// <summary>
+/// Expand process substitution: diff &lt;(cmd1) &lt;(cmd2)
+/// Executes each command, writes output to temp file, substitutes path.
+/// </summary>
+static (string expanded, List<string> tempFiles) ExpandProcessSubstitution(
+    string input, CommandTranslator translator, Runspace runspace)
+{
+    var tempFiles = new List<string>();
+    var sb = new System.Text.StringBuilder();
+    bool inSingleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'') { inSingleQuote = !inSingleQuote; sb.Append('\''); continue; }
+        if (inSingleQuote) { sb.Append(input[i]); continue; }
+
+        if (input[i] == '<' && i + 1 < input.Length && input[i + 1] == '(')
+        {
+            int depth = 1;
+            int pos = i + 2;
+            while (pos < input.Length && depth > 0)
+            {
+                if (input[pos] == '(') depth++;
+                else if (input[pos] == ')') depth--;
+                if (depth > 0) pos++;
+            }
+
+            if (depth == 0)
+            {
+                var innerCmd = input[(i + 2)..pos];
+                var translated = translator.Translate(innerCmd) ?? innerCmd;
+                string output;
+                try
+                {
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = runspace;
+                    ps.AddScript(translated);
+                    var results = ps.Invoke();
+                    output = string.Join('\n', results.Select(r => r?.ToString() ?? ""));
+                }
+                catch { output = ""; }
+
+                var tmpFile = Path.GetTempFileName();
+                File.WriteAllText(tmpFile, output);
+                tempFiles.Add(tmpFile);
+                sb.Append(tmpFile);
+                i = pos;
+                continue;
+            }
+        }
+
+        sb.Append(input[i]);
+    }
+
+    return (sb.ToString(), tempFiles);
+}
+
 // ── Glob Expansion (native/passthrough commands only) ────────────────
 
 /// <summary>
@@ -1620,6 +2213,61 @@ static string ExpandEnvVars(string input)
     return sb.ToString();
 }
 
+// ── Arithmetic Expansion ────────────────────────────────────────────
+
+/// <summary>
+/// Expand $((expr)) arithmetic expressions.
+/// Evaluates via the PowerShell runspace for full expression support.
+/// Respects single quotes — no expansion inside.
+/// </summary>
+static string ExpandArithmetic(string input, Runspace runspace)
+{
+    if (!input.Contains("$((")) return input;
+
+    var sb = new System.Text.StringBuilder(input.Length);
+    bool inSingleQuote = false;
+
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inSingleQuote) { inSingleQuote = true; sb.Append('\''); continue; }
+        if (input[i] == '\'' && inSingleQuote) { inSingleQuote = false; sb.Append('\''); continue; }
+        if (inSingleQuote) { sb.Append(input[i]); continue; }
+
+        if (i + 2 < input.Length && input[i] == '$' && input[i + 1] == '(' && input[i + 2] == '(')
+        {
+            // Find matching ))
+            int depth = 1;
+            int pos = i + 3;
+            while (pos < input.Length - 1 && depth > 0)
+            {
+                if (input[pos] == '(' && input[pos + 1] == '(') { depth++; pos += 2; continue; }
+                if (input[pos] == ')' && input[pos + 1] == ')') { depth--; if (depth == 0) break; pos += 2; continue; }
+                pos++;
+            }
+
+            if (depth == 0)
+            {
+                var expr = input[(i + 3)..pos];
+                try
+                {
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = runspace;
+                    ps.AddScript(expr);
+                    var results = ps.Invoke();
+                    sb.Append(results.FirstOrDefault()?.ToString() ?? "0");
+                }
+                catch { sb.Append("0"); }
+                i = pos + 1; // skip past ))
+                continue;
+            }
+        }
+
+        sb.Append(input[i]);
+    }
+
+    return sb.ToString();
+}
+
 // ── Chain Operators ─────────────────────────────────────────────────
 
 /// <summary>
@@ -1736,6 +2384,33 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         path = path == "~" ? home : Path.Combine(home, path[2..]);
     }
 
+    // ~user expansion (e.g., ~mark → /Users/mark or /home/mark)
+    if (path.StartsWith('~') && path.Length > 1 && char.IsLetterOrDigit(path[1]))
+    {
+        int end = 1;
+        while (end < path.Length && path[end] is not '/' and not ' ') end++;
+        var username = path[1..end];
+        var rest = end < path.Length ? path[end..] : "";
+        var usersDir = OperatingSystem.IsMacOS() ? "/Users" : "/home";
+        var candidate = Path.Combine(usersDir, username);
+        if (Directory.Exists(candidate))
+            path = candidate + rest;
+    }
+
+    // CDPATH: if path is relative and doesn't exist in cwd, search CDPATH
+    if (!Path.IsPathRooted(path) && !Directory.Exists(path))
+    {
+        var cdpath = Environment.GetEnvironmentVariable("CDPATH");
+        if (cdpath != null)
+        {
+            foreach (var dir in cdpath.Split(':'))
+            {
+                var candidate = Path.Combine(dir, path);
+                if (Directory.Exists(candidate)) { path = candidate; break; }
+            }
+        }
+    }
+
     try
     {
         using var ps = PowerShell.Create();
@@ -1785,7 +2460,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "sync", "pushd", "popd", "dirs" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -1956,6 +2631,14 @@ static void RunNonInteractive(string command)
     rs.Open();
     var tr = new CommandTranslator();
 
+    // Full expansion pipeline (same order as interactive mode)
+    command = ExpandBraces(command);
+    command = ExpandTilde(command);
+    command = ExpandEnvVars(command);
+    command = ExpandArithmetic(command, rs);
+    var (procExpanded, procTempFiles) = ExpandProcessSubstitution(command, tr, rs);
+    command = procExpanded;
+
     // Parse redirections before translation
     var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(command);
     var translated = tr.Translate(cmdPart) ?? cmdPart;
@@ -2011,6 +2694,13 @@ static void RunNonInteractive(string command)
     {
         Console.Error.WriteLine();
         Environment.ExitCode = 130; // Standard Ctrl+C exit code
+    }
+    finally
+    {
+        // Clean up process substitution temp files
+        if (procTempFiles != null)
+            foreach (var f in procTempFiles)
+                try { File.Delete(f); } catch { }
     }
 }
 

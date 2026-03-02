@@ -162,7 +162,7 @@ public class TabCompleter
     private void CompleteCommands(string prefix)
     {
         // Rush built-in commands
-        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "reload", "clear", "pushd", "popd", "dirs" };
+        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "unalias", "reload", "clear", "pushd", "popd", "dirs", "jobs", "fg", "bg", "wait", "export", "unset", "source", "printf", "read", "exec", "trap" };
         foreach (var cmd in builtins)
         {
             if (cmd.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))

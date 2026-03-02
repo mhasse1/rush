@@ -235,7 +235,13 @@ public class ScriptEngine
             || word.Equals("sync", StringComparison.OrdinalIgnoreCase)
             || word.Equals("pushd", StringComparison.OrdinalIgnoreCase)
             || word.Equals("popd", StringComparison.OrdinalIgnoreCase)
-            || word.Equals("dirs", StringComparison.OrdinalIgnoreCase);
+            || word.Equals("dirs", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("wait", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("unalias", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("printf", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("read", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("exec", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("trap", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

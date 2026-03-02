@@ -11,7 +11,10 @@ public class LineEditor
 {
     private readonly List<string> _history = new();
     private int _historyIndex;
-    private const int MaxHistory = 500;
+    private int _maxHistory = 500;
+
+    /// <summary>Maximum history entries (default 500, min 10). Set via config.</summary>
+    public int MaxHistory { get => _maxHistory; set => _maxHistory = Math.Max(10, value); }
 
     public EditMode Mode { get; set; } = EditMode.Vi;
     private ViMode _viMode = ViMode.Insert;
@@ -1089,6 +1092,14 @@ public class LineEditor
     {
         if (_history.Count > 0)
             _history[^1] = replacement;
+    }
+
+    /// <summary>Clear all history entries and persist the empty state.</summary>
+    public void ClearHistory()
+    {
+        _history.Clear();
+        _historyIndex = 0;
+        SaveHistory();
     }
 
     // ── Cursor Shape ────────────────────────────────────────────────────

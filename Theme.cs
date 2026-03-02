@@ -138,6 +138,9 @@ public class Theme
     /// <summary>Bang expansion (!!, !$).</summary>
     public string AnsiBang { get; }
 
+    /// <summary>Rush scripting keywords (if, for, def, etc.).</summary>
+    public string AnsiKeyword { get; }
+
     /// <summary>Autosuggestion ghost text — must be clearly dimmer than any typed text.</summary>
     public string AnsiSuggestion { get; }
 
@@ -190,6 +193,7 @@ public class Theme
             AnsiPipe           = "\x1b[90m";   // DarkGray
             AnsiUnknownCommand = "\x1b[37m";   // White
             AnsiBang           = "\x1b[35m";   // Magenta
+            AnsiKeyword        = "\x1b[38;5;204m"; // Pink/rose — distinct from cyan commands
             AnsiSuggestion     = "\x1b[38;5;240m"; // 256-color dark gray — dimmer than DarkGray/bright-black
         }
         else
@@ -235,6 +239,7 @@ public class Theme
             AnsiPipe           = "\x1b[90m";         // DarkGray
             AnsiUnknownCommand = "\x1b[30m";         // Black
             AnsiBang           = "\x1b[35m";         // Magenta
+            AnsiKeyword        = "\x1b[38;5;161m";   // Dark pink
             AnsiSuggestion     = "\x1b[38;5;246m";   // 256-color mid-gray (~3:1 contrast on white)
         }
     }

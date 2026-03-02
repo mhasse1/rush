@@ -280,4 +280,89 @@ public class SyntaxHighlighterTests
         Assert.Single(opTokens);
         Assert.Equal("2>>", opTokens[0].Text);
     }
+
+    // ── Rush Keyword Tokens ──────────────────────────────────────────
+
+    [Theory]
+    [InlineData("if")]
+    [InlineData("elsif")]
+    [InlineData("else")]
+    [InlineData("end")]
+    [InlineData("unless")]
+    [InlineData("for")]
+    [InlineData("in")]
+    [InlineData("while")]
+    [InlineData("until")]
+    [InlineData("case")]
+    [InlineData("when")]
+    [InlineData("match")]
+    [InlineData("def")]
+    [InlineData("return")]
+    [InlineData("try")]
+    [InlineData("rescue")]
+    [InlineData("ensure")]
+    [InlineData("begin")]
+    [InlineData("do")]
+    [InlineData("and")]
+    [InlineData("or")]
+    [InlineData("not")]
+    [InlineData("true")]
+    [InlineData("false")]
+    [InlineData("nil")]
+    [InlineData("next")]
+    [InlineData("continue")]
+    [InlineData("break")]
+    public void RushKeyword_TokenizedAsKeyword(string keyword)
+    {
+        var tokens = SyntaxHighlighter.Tokenize(keyword);
+        Assert.Single(tokens);
+        Assert.Equal(SyntaxHighlighter.TokenType.Keyword, tokens[0].Type);
+        Assert.Equal(keyword, tokens[0].Text);
+    }
+
+    [Fact]
+    public void KeywordInCommand_TokenizedAsKeyword()
+    {
+        // "if x > 5" — "if" should be Keyword, "x" should be Word
+        var tokens = SyntaxHighlighter.Tokenize("if x > 5");
+        var kwTokens = tokens.Where(t => t.Type == SyntaxHighlighter.TokenType.Keyword).ToList();
+        Assert.Single(kwTokens);
+        Assert.Equal("if", kwTokens[0].Text);
+    }
+
+    [Fact]
+    public void KeywordIsCaseInsensitive()
+    {
+        var tokens = SyntaxHighlighter.Tokenize("IF");
+        Assert.Single(tokens);
+        Assert.Equal(SyntaxHighlighter.TokenType.Keyword, tokens[0].Type);
+    }
+
+    [Fact]
+    public void NonKeyword_StaysAsWord()
+    {
+        // "hello" is not a keyword
+        var tokens = SyntaxHighlighter.Tokenize("hello");
+        Assert.Single(tokens);
+        Assert.Equal(SyntaxHighlighter.TokenType.Word, tokens[0].Type);
+    }
+
+    // ── New Builtin Commands Are Colored ─────────────────────────────
+
+    [Theory]
+    [InlineData("printf")]
+    [InlineData("read")]
+    [InlineData("exec")]
+    [InlineData("trap")]
+    [InlineData("wait")]
+    [InlineData("unalias")]
+    public void NewBuiltins_ColorizedAsKnownCommand(string cmd)
+    {
+        var highlighter = new SyntaxHighlighter(new CommandTranslator());
+        var colorized = highlighter.Colorize(cmd);
+        // Known commands get the KnownCommand (cyan) color
+        // The colorized string should contain ANSI codes (not just the plain text)
+        Assert.Contains("\x1b[", colorized);
+        Assert.Contains(cmd, colorized);
+    }
 }

@@ -18,16 +18,30 @@ public class SyntaxHighlighter
     private static string DarkGray => Theme.Current.AnsiPipe;
     private static string White => Theme.Current.AnsiUnknownCommand;
     private static string Bang => Theme.Current.AnsiBang;
+    private static string Keyword => Theme.Current.AnsiKeyword;
 
     private static readonly HashSet<string> BuiltinCommands = new(StringComparer.OrdinalIgnoreCase)
     {
-        "exit", "quit", "help", "history", "alias", "reload", "clear", "cd", "set",
+        "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "set",
         "as", "from", // Pipe-context format commands
         "export", "unset", "source", // Shell builtins
         "count", "first", "last", "skip", "tee", "distinct", // Pipe utilities
         "sum", "avg", "min", "max", // Math aggregations
-        "jobs", "fg", "bg", // Job control
-        "pushd", "popd", "dirs" // Directory stack
+        "jobs", "fg", "bg", "wait", // Job control
+        "pushd", "popd", "dirs", // Directory stack
+        "printf", "read", "exec", "trap" // Shell builtins
+    };
+
+    private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "if", "elsif", "else", "end", "unless",
+        "for", "in", "while", "until",
+        "case", "when", "match",
+        "def", "return",
+        "try", "rescue", "ensure", "begin",
+        "do", "and", "or", "not",
+        "true", "false", "nil",
+        "next", "continue", "break"
     };
 
     public SyntaxHighlighter(CommandTranslator translator)
@@ -70,6 +84,11 @@ public class SyntaxHighlighter
                     sb.Append(Bang).Append(token.Text).Append(Reset);
                     break;
 
+                case TokenType.Keyword:
+                    sb.Append(Keyword).Append(token.Text).Append(Reset);
+                    expectCommand = false;
+                    break;
+
                 case TokenType.Flag:
                     sb.Append(Yellow).Append(token.Text).Append(Reset);
                     break;
@@ -107,7 +126,7 @@ public class SyntaxHighlighter
 
     // ── Tokenizer ─────────────────────────────────────────────────────────
 
-    internal enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace }
+    internal enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace, Keyword }
     internal record Token(TokenType Type, string Text);
 
     internal static List<Token> Tokenize(string input)
@@ -230,16 +249,21 @@ public class SyntaxHighlighter
                 continue;
             }
 
-            // Word or flag
+            // Word, flag, or keyword
             {
                 int start = i;
                 while (i < input.Length && !IsBreak(input, i)) i++;
                 var text = input[start..i];
                 if (text.Length > 0)
                 {
-                    tokens.Add(new Token(
-                        text.StartsWith('-') ? TokenType.Flag : TokenType.Word,
-                        text));
+                    TokenType type;
+                    if (text.StartsWith('-'))
+                        type = TokenType.Flag;
+                    else if (RushKeywords.Contains(text))
+                        type = TokenType.Keyword;
+                    else
+                        type = TokenType.Word;
+                    tokens.Add(new Token(type, text));
                 }
             }
         }

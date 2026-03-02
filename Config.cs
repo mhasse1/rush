@@ -10,6 +10,7 @@ public class RushConfig
     public string EditMode { get; set; } = "vi";
     public Dictionary<string, string> Aliases { get; set; } = new();
     public string PromptFormat { get; set; } = "default";
+    public int HistorySize { get; set; } = 500;
 
     /// <summary>
     /// Theme override: "auto" (detect background), "dark", or "light".
@@ -94,6 +95,9 @@ public class RushConfig
         editor.Mode = EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
             ? Rush.EditMode.Emacs
             : Rush.EditMode.Vi;
+
+        // History size
+        editor.MaxHistory = HistorySize;
 
         // Custom aliases
         foreach (var (alias, command) in Aliases)
