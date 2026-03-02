@@ -10,10 +10,15 @@
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
     <SelfContained>true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.7" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Rush.Tests" />
   </ItemGroup>
 
 </Project>

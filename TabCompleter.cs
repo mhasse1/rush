@@ -409,7 +409,7 @@ public class TabCompleter
 
     // ── Token Extraction ────────────────────────────────────────────────
 
-    private static string ExtractFirstWord(string text)
+    internal static string ExtractFirstWord(string text)
     {
         // Get the command name from text before the current token
         // Handles pipes: "ls | grep " → "grep"
@@ -420,7 +420,7 @@ public class TabCompleter
         return spacePos > 0 ? trimmed[..spacePos] : trimmed;
     }
 
-    private static (string token, int startIndex) ExtractToken(string input, int cursor)
+    internal static (string token, int startIndex) ExtractToken(string input, int cursor)
     {
         if (cursor <= 0 || string.IsNullOrEmpty(input))
             return ("", 0);
@@ -434,7 +434,7 @@ public class TabCompleter
         return (token, start);
     }
 
-    private static int FindTokenEnd(string input, int tokenStart)
+    internal static int FindTokenEnd(string input, int tokenStart)
     {
         int pos = tokenStart;
         while (pos < input.Length && input[pos] != ' ') pos++;

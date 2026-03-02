@@ -111,7 +111,6 @@ RunStartupScript(runspace);
 string? previousDirectory = null;
 var dirStack = new Stack<string>();
 PowerShell? runningPs = null;
-bool sigtstpReceived = false;
 
 // ── Signal Handling ──────────────────────────────────────────────────
 Console.CancelKeyPress += (_, e) =>
@@ -125,18 +124,19 @@ Console.CancelKeyPress += (_, e) =>
     // If at the prompt (runningPs == null), LineEditor already handles Ctrl+C
 };
 
-// Ctrl+Z (SIGTSTP) — suspend foreground job instead of stopping Rush
+// Ctrl+Z (SIGTSTP) — ignore it. .NET's process model makes proper Unix
+// job control (setpgid/tcsetpgrp/waitpid) unreliable: Process.Start()
+// doesn't expose the fork-to-exec window needed for setpgid, and the
+// dotnet host process doesn't handle SIGTSTP. Rather than half-working
+// suspend/resume that corrupts terminal state, we simply swallow it.
+// Modern workflows (tmux, multiple tabs, SSH multiplexing) make Ctrl+Z
+// suspension largely unnecessary.
 PosixSignalRegistration? sigtstpReg = null;
 if (!OperatingSystem.IsWindows())
 {
-    sigtstpReg = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, _ =>
+    sigtstpReg = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, ctx =>
     {
-        sigtstpReceived = true;
-        if (runningPs != null)
-        {
-            try { runningPs.Stop(); } // Will throw PipelineStoppedException
-            catch { }
-        }
+        ctx.Cancel = true; // Swallow — do nothing
     });
 }
 
@@ -370,13 +370,11 @@ while (true)
             {
                 foreach (var job in allJobs)
                 {
-                    var status = job.IsSuspended ? "suspended"
-                               : job.IsCompleted ? "done" : "running";
+                    var status = job.IsCompleted ? "done" : "running";
                     var elapsed = DateTime.Now - job.StartTime;
                     Console.ForegroundColor = Theme.Current.Muted;
                     Console.Write($"  [{job.JobId}] ");
-                    Console.ForegroundColor = job.IsSuspended ? Theme.Current.Warning
-                                            : job.IsCompleted ? Theme.Current.Accent
+                    Console.ForegroundColor = job.IsCompleted ? Theme.Current.Accent
                                             : Theme.Current.Warning;
                     Console.Write($"{status,-10}");
                     Console.ResetColor();
@@ -394,9 +392,8 @@ while (true)
             int fgId;
             if (!int.TryParse(idStr, out fgId))
             {
-                // Default to most recent non-completed job
                 var recent = jobManager.GetJobs()
-                    .Where(j => !j.IsCompleted || j.IsSuspended)
+                    .Where(j => !j.IsCompleted)
                     .OrderByDescending(j => j.JobId)
                     .FirstOrDefault();
                 if (recent != null) fgId = recent.JobId;
@@ -420,116 +417,21 @@ while (true)
                 continue;
             }
 
-            if (job.IsSuspended && job.SuspendedProcess != null)
-            {
-                // Resume suspended native process
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  [{job.JobId}] resumed: {job.Command}");
-                Console.ResetColor();
-                Posix.SendCONT(job.SuspendedProcess.Id);
-                job.IsSuspended = false;
-
-                while (!job.SuspendedProcess.HasExited)
-                {
-                    if (sigtstpReceived)
-                    {
-                        sigtstpReceived = false;
-                        job.IsSuspended = true;
-                        Console.ForegroundColor = Theme.Current.Muted;
-                        Console.WriteLine($"\n  [{job.JobId}] suspended: {job.Command}");
-                        Console.ResetColor();
-                        break;
-                    }
-                    job.SuspendedProcess.WaitForExit(100);
-                }
-
-                if (!job.IsSuspended)
-                {
-                    lastExitCode = job.SuspendedProcess.ExitCode;
-                    lastSegmentFailed = lastExitCode != 0;
-                    job.Reported = true;
-                }
-            }
-            else if (job.IsSuspended && job.SuspendedCommand != null)
-            {
-                // Re-run suspended PS pipeline in foreground
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  [{job.JobId}] resumed: {job.Command}");
-                Console.ResetColor();
-                using var fgPs = PowerShell.Create();
-                fgPs.Runspace = runspace;
-                fgPs.AddScript(job.SuspendedCommand);
-                runningPs = fgPs;
-                try
-                {
-                    var fgResults = fgPs.Invoke().ToList();
-                    if (fgResults.Count > 0) OutputRenderer.Render(fgResults.ToArray());
-                    if (fgPs.HadErrors) OutputRenderer.RenderErrors(fgPs.Streams);
-                }
-                catch (PipelineStoppedException) { Console.WriteLine(); }
-                finally { runningPs = null; }
-                job.IsSuspended = false;
-                job.Reported = true;
-            }
-            else
-            {
-                // Running background job — wait for it
-                var fgResults = jobManager.WaitForJob(fgId);
-                if (fgResults != null && fgResults.Count > 0)
-                    OutputRenderer.Render(fgResults);
-            }
+            // Bring background job to foreground — wait for it
+            var fgResults = jobManager.WaitForJob(fgId);
+            if (fgResults != null && fgResults.Count > 0)
+                OutputRenderer.Render(fgResults);
             continue;
         }
 
-        // ── bg ──────────────────────────────────────────────────────
+        // ── bg (no-op: suspension is disabled) ──────────────────────
         if (segment.StartsWith("bg ", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("bg", StringComparison.OrdinalIgnoreCase))
         {
-            var idStr = segment.Length > 3 ? segment[3..].Trim().TrimStart('%') : "";
-            int bgId;
-            if (!int.TryParse(idStr, out bgId))
-            {
-                var recent = jobManager.GetJobs()
-                    .Where(j => j.IsSuspended)
-                    .OrderByDescending(j => j.JobId)
-                    .FirstOrDefault();
-                if (recent != null) bgId = recent.JobId;
-                else
-                {
-                    Console.ForegroundColor = Theme.Current.Error;
-                    Console.Error.WriteLine("bg: no suspended job");
-                    Console.ResetColor();
-                    lastSegmentFailed = true;
-                    continue;
-                }
-            }
-
-            var bgJob = jobManager.GetJob(bgId);
-            if (bgJob == null || !bgJob.IsSuspended)
-            {
-                Console.ForegroundColor = Theme.Current.Error;
-                Console.Error.WriteLine($"bg: job {bgId} not suspended");
-                Console.ResetColor();
-                lastSegmentFailed = true;
-                continue;
-            }
-
-            if (bgJob.SuspendedProcess != null)
-            {
-                Posix.SendCONT(bgJob.SuspendedProcess.Id);
-                bgJob.IsSuspended = false;
-            }
-            else if (bgJob.SuspendedCommand != null)
-            {
-                jobManager.StartBackground(bgJob.Command, bgJob.SuspendedCommand);
-                bgJob.IsSuspended = false;
-                bgJob.Reported = true;
-            }
-
-            Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine($"  [{bgJob.JobId}] running: {bgJob.Command}");
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine("bg: job suspension not supported");
             Console.ResetColor();
-            lastSegmentFailed = false;
+            lastSegmentFailed = true;
             continue;
         }
 
@@ -860,7 +762,7 @@ while (true)
         }
 
         // ── Parse Redirection ─────────────────────────────────────
-        var (cmdPart, redirect, stdinRedirect) = ParseRedirection(segment);
+        var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(segment);
 
         // ── Translate & Execute (with timing) ────────────────────────
         var translated = translator.Translate(cmdPart);
@@ -887,23 +789,11 @@ while (true)
         if (translated == null && IsInteractiveTui(cmdPart) && redirect == null && stdinRedirect == null)
         {
             var sw2 = Stopwatch.StartNew();
-            var (tuiExitCode, wasSuspended, suspendedProc) =
-                RunInteractive(commandToRun, ref sigtstpReceived);
-            if (wasSuspended && suspendedProc != null)
-            {
-                var jobId = jobManager.RegisterSuspendedProcess(cmdPart, suspendedProc);
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"\n  [{jobId}] suspended: {cmdPart}");
-                Console.ResetColor();
-                lastSegmentFailed = false;
-            }
-            else
-            {
-                lastSegmentFailed = tuiExitCode != 0;
-                lastExitCode = tuiExitCode;
-            }
+            var tuiExitCode = RunInteractive(commandToRun);
+            lastSegmentFailed = tuiExitCode != 0;
+            lastExitCode = tuiExitCode;
             sw2.Stop();
-            if (sw2.Elapsed.TotalSeconds >= 0.5 && !wasSuspended)
+            if (sw2.Elapsed.TotalSeconds >= 0.5)
             {
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
@@ -953,26 +843,12 @@ while (true)
             }
             catch (PipelineStoppedException)
             {
+                // Ctrl+C — cancel the running pipeline
                 Console.WriteLine();
                 sw.Stop();
                 runningPs = null;
-                if (sigtstpReceived)
-                {
-                    // Ctrl+Z — register as suspended job
-                    sigtstpReceived = false;
-                    var jobId = jobManager.RegisterSuspendedPipeline(segment, commandToRun);
-                    Console.ForegroundColor = Theme.Current.Muted;
-                    Console.WriteLine($"  [{jobId}] suspended: {segment}");
-                    Console.ResetColor();
-                    lastSegmentFailed = false;
-                    lastExitCode = 0;
-                }
-                else
-                {
-                    // Ctrl+C — cancel
-                    lastSegmentFailed = true;
-                    lastExitCode = 130;
-                }
+                lastSegmentFailed = true;
+                lastExitCode = 130;
                 continue;
             }
             finally
@@ -1229,11 +1105,8 @@ static bool IsInteractiveTui(string cmdPart)
 /// <summary>
 /// Run a command directly with inherited stdio (no capture).
 /// Used for interactive/TUI programs that need a real terminal.
-/// Returns (exitCode, wasSuspended, process). When suspended via Ctrl+Z,
-/// the process handle is returned so it can be registered as a job.
 /// </summary>
-static (int exitCode, bool suspended, Process? process) RunInteractive(
-    string command, ref bool sigtstpFlag)
+static int RunInteractive(string command)
 {
     try
     {
@@ -1247,29 +1120,19 @@ static (int exitCode, bool suspended, Process? process) RunInteractive(
         };
 
         var proc = Process.Start(psi);
-        if (proc == null) return (1, false, null);
+        if (proc == null) return 1;
 
-        // Poll instead of blocking WaitForExit — allows detecting Ctrl+Z
-        while (!proc.HasExited)
-        {
-            if (sigtstpFlag)
-            {
-                sigtstpFlag = false;
-                return (0, true, proc); // Process is stopped, return handle
-            }
-            proc.WaitForExit(100);
-        }
-
+        proc.WaitForExit();
         var exitCode = proc.ExitCode;
         proc.Dispose();
-        return (exitCode, false, null);
+        return exitCode;
     }
     catch (Exception ex)
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"  {ex.Message}");
         Console.ResetColor();
-        return (1, false, null);
+        return 1;
     }
 }
 
@@ -1897,136 +1760,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
 }
 
 // ── Redirection ─────────────────────────────────────────────────────
-
-static (string command, RedirectInfo? redirect, StdinInfo? stdin) ParseRedirection(string input)
-{
-    var trimmed = input.TrimEnd();
-    if (string.IsNullOrEmpty(trimmed)) return (input, null, null);
-
-    bool inSQ = false, inDQ = false;
-
-    // Phase 1: Scan for redirect operators (respecting quotes).
-    // 2> and 2>> are recognised so their '>' isn't mistaken for stdout,
-    // but they stay in the command string for PowerShell to handle natively.
-    var ops = new List<(int pos, string op)>();
-
-    for (int i = 0; i < trimmed.Length; i++)
-    {
-        char ch = trimmed[i];
-        if (ch == '\'' && !inDQ) { inSQ = !inSQ; continue; }
-        if (ch == '"' && !inSQ) { inDQ = !inDQ; continue; }
-        if (inSQ || inDQ) continue;
-
-        // 2>&1 — tracked (may need stripping when combined with stdout redirect)
-        if (ch == '2' && i + 3 < trimmed.Length
-            && trimmed[i + 1] == '>' && trimmed[i + 2] == '&' && trimmed[i + 3] == '1')
-        { ops.Add((i, "2>&1")); i += 3; }
-        // 2>> — skip past but leave in command for PowerShell
-        else if (ch == '2' && i + 2 < trimmed.Length
-                 && trimmed[i + 1] == '>' && trimmed[i + 2] == '>')
-        { i += 2; }
-        // 2> — skip past but leave in command for PowerShell
-        else if (ch == '2' && i + 1 < trimmed.Length && trimmed[i + 1] == '>')
-        { i += 1; }
-        // >>
-        else if (ch == '>' && i + 1 < trimmed.Length && trimmed[i + 1] == '>')
-        { ops.Add((i, ">>")); i += 1; }
-        // >
-        else if (ch == '>')
-        { ops.Add((i, ">")); }
-        // <
-        else if (ch == '<')
-        { ops.Add((i, "<")); }
-    }
-
-    if (ops.Count == 0) return (input, null, null);
-
-    // Phase 2: Process operators — parse file targets, decide what to strip.
-    RedirectInfo? stdoutRedirect = null;
-    StdinInfo? stdinRedirect = null;
-    bool hasMerge = false;
-    var stripRanges = new List<(int start, int end)>(); // [start, end)
-
-    foreach (var (pos, op) in ops)
-    {
-        int opEnd = pos + op.Length;
-
-        if (op == "2>&1")
-        {
-            hasMerge = true;
-            // Stripping decision deferred to Phase 3
-            continue;
-        }
-
-        // For >, >>, < — parse the target file path
-        int j = opEnd;
-        while (j < trimmed.Length && trimmed[j] == ' ') j++;
-        if (j >= trimmed.Length) continue; // no target — leave as-is
-
-        string filePath;
-        if (trimmed[j] is '\'' or '"')
-        {
-            char q = trimmed[j];
-            int pathStart = j + 1;
-            j++;
-            while (j < trimmed.Length && trimmed[j] != q) j++;
-            filePath = trimmed[pathStart..j];
-            if (j < trimmed.Length) j++; // skip closing quote
-        }
-        else
-        {
-            int pathStart = j;
-            while (j < trimmed.Length
-                   && trimmed[j] != ' ' && trimmed[j] != '\t'
-                   && trimmed[j] != '|' && trimmed[j] != ';'
-                   && trimmed[j] != '>' && trimmed[j] != '<')
-                j++;
-            filePath = trimmed[pathStart..j];
-        }
-
-        if (string.IsNullOrEmpty(filePath)) continue;
-
-        // Resolve ~ paths
-        if (filePath == "~" || filePath.StartsWith("~/"))
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            filePath = filePath == "~" ? home : Path.Combine(home, filePath[2..]);
-        }
-
-        stripRanges.Add((pos, j));
-
-        if (op == "<")
-            stdinRedirect = new StdinInfo(filePath);
-        else
-            stdoutRedirect = new RedirectInfo(filePath, op == ">>");
-    }
-
-    // Phase 3: If 2>&1 appears with a stdout redirect, merge stderr into the
-    // captured output and strip 2>&1 from the command.  Without a stdout
-    // redirect, leave 2>&1 in the command for PowerShell to handle inline.
-    if (hasMerge && stdoutRedirect != null)
-    {
-        stdoutRedirect = stdoutRedirect with { MergeStderr = true };
-        foreach (var (pos, op) in ops)
-            if (op == "2>&1") stripRanges.Add((pos, pos + 4));
-    }
-
-    if (stripRanges.Count == 0)
-        return (input, stdoutRedirect, stdinRedirect);
-
-    // Phase 4: Build clean command by removing strip ranges.
-    var sorted = stripRanges.OrderBy(r => r.start).ToList();
-    var sb = new System.Text.StringBuilder();
-    int cursor = 0;
-    foreach (var (start, end) in sorted)
-    {
-        if (start > cursor) sb.Append(trimmed[cursor..start]);
-        cursor = end;
-    }
-    if (cursor < trimmed.Length) sb.Append(trimmed[cursor..]);
-
-    return (sb.ToString().Trim(), stdoutRedirect, stdinRedirect);
-}
+// ParseRedirection extracted to RedirectionParser.cs for testability.
 
 static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo redirect)
 {
@@ -2223,7 +1957,7 @@ static void RunNonInteractive(string command)
     var tr = new CommandTranslator();
 
     // Parse redirections before translation
-    var (cmdPart, redirect, stdinRedirect) = ParseRedirection(command);
+    var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(command);
     var translated = tr.Translate(cmdPart) ?? cmdPart;
     var commandToRun = translated;
 
@@ -2281,5 +2015,4 @@ static void RunNonInteractive(string command)
 }
 
 // ── Types ────────────────────────────────────────────────────────────
-record RedirectInfo(string FilePath, bool Append, bool MergeStderr = false);
-record StdinInfo(string FilePath);
+// RedirectInfo and StdinInfo moved to RedirectionParser.cs

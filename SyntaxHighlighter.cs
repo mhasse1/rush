@@ -107,10 +107,10 @@ public class SyntaxHighlighter
 
     // ── Tokenizer ─────────────────────────────────────────────────────────
 
-    private enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace }
-    private record Token(TokenType Type, string Text);
+    internal enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace }
+    internal record Token(TokenType Type, string Text);
 
-    private static List<Token> Tokenize(string input)
+    internal static List<Token> Tokenize(string input)
     {
         var tokens = new List<Token>();
         int i = 0;
@@ -247,7 +247,7 @@ public class SyntaxHighlighter
         return tokens;
     }
 
-    private static bool IsBreak(string input, int i)
+    internal static bool IsBreak(string input, int i)
     {
         char ch = input[i];
         if (ch is ' ' or '\t' or '|' or '>' or '<' or '\'' or '"' or ';') return true;
