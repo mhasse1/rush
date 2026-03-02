@@ -280,6 +280,7 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
+                ClearSuggestionDisplay();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -380,6 +381,7 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
+                ClearSuggestionDisplay();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -519,6 +521,16 @@ public class LineEditor
 
     private void HandleTab()
     {
+        // In vi mode, Tab accepts the autosuggestion when one is visible
+        // and cursor is at end of input. This keeps hands on home row —
+        // the primary ergonomic advantage of vi mode.
+        // In emacs mode, Tab always does completion (use → or End to accept suggestions).
+        if (Mode == EditMode.Vi && _suggestion != null && _cursor == _buffer.Count)
+        {
+            AcceptSuggestion();
+            return;
+        }
+
         if (CompleteHandler == null) return;
 
         var input = new string(_buffer.ToArray());
@@ -723,9 +735,9 @@ public class LineEditor
         int ghostLen = 0;
         if (_suggestion != null && _cursor == _buffer.Count)
         {
-            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write(Theme.Current.AnsiSuggestion);
             Console.Write(_suggestion);
-            Console.ResetColor();
+            Console.Write(Theme.Current.AnsiReset);
             ghostLen = _suggestion.Length;
         }
 
@@ -783,6 +795,19 @@ public class LineEditor
                 return;
             }
         }
+    }
+
+    /// <summary>
+    /// Erase ghost suggestion text from the display so it doesn't
+    /// linger in scrollback when Enter is pressed.
+    /// Cursor is already positioned at end of typed text (after last Redraw).
+    /// ESC[J erases from cursor to end of display, handling wrapped ghosts too.
+    /// </summary>
+    private void ClearSuggestionDisplay()
+    {
+        if (_suggestion == null) return;
+        _suggestion = null;
+        Console.Write("\x1b[J");
     }
 
     private void AcceptSuggestion()

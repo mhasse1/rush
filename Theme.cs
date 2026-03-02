@@ -40,8 +40,26 @@ public class Theme
     /// <summary>Prompt — success indicator (>).</summary>
     public ConsoleColor PromptSuccess { get; }
 
-    /// <summary>Prompt — failure indicator (>).</summary>
+    /// <summary>Prompt — failure indicator (✗).</summary>
     public ConsoleColor PromptFailed { get; }
+
+    /// <summary>Prompt — [ROOT] indicator (forced, non-overridable).</summary>
+    public ConsoleColor PromptRoot { get; }
+
+    /// <summary>Prompt — time display (HH:mm).</summary>
+    public ConsoleColor PromptTime { get; }
+
+    /// <summary>Prompt — username.</summary>
+    public ConsoleColor PromptUser { get; }
+
+    /// <summary>Prompt — hostname (local session).</summary>
+    public ConsoleColor PromptHost { get; }
+
+    /// <summary>Prompt — hostname when in an SSH session (emphasized).</summary>
+    public ConsoleColor PromptSshHost { get; }
+
+    /// <summary>Prompt — git dirty indicator (*).</summary>
+    public ConsoleColor PromptGitDirty { get; }
 
     /// <summary>Directory names in ls output, tab completion.</summary>
     public ConsoleColor Directory { get; }
@@ -82,6 +100,15 @@ public class Theme
     /// <summary>Search query text in Ctrl+R.</summary>
     public ConsoleColor SearchQuery { get; }
 
+    /// <summary>Read permission (r) in ls -l output.</summary>
+    public ConsoleColor PermRead { get; }
+
+    /// <summary>Write permission (w) in ls -l output.</summary>
+    public ConsoleColor PermWrite { get; }
+
+    /// <summary>Execute permission (x/s/t) in ls -l output.</summary>
+    public ConsoleColor PermExec { get; }
+
     // ── ANSI String Properties (SyntaxHighlighter) ──────────────────────
 
     /// <summary>ANSI reset sequence.</summary>
@@ -111,6 +138,9 @@ public class Theme
     /// <summary>Bang expansion (!!, !$).</summary>
     public string AnsiBang { get; }
 
+    /// <summary>Autosuggestion ghost text — must be clearly dimmer than any typed text.</summary>
+    public string AnsiSuggestion { get; }
+
     // ── Construction ─────────────────────────────────────────────────────
 
     private Theme(bool isDark)
@@ -127,8 +157,14 @@ public class Theme
             Warning         = ConsoleColor.Yellow;
             PromptPath      = ConsoleColor.Green;
             PromptGitBranch = ConsoleColor.DarkYellow;
-            PromptSuccess   = ConsoleColor.Cyan;
+            PromptGitDirty  = ConsoleColor.Yellow;
+            PromptSuccess   = ConsoleColor.Green;
             PromptFailed    = ConsoleColor.Red;
+            PromptRoot      = ConsoleColor.Red;
+            PromptTime      = ConsoleColor.DarkGray;
+            PromptUser      = ConsoleColor.Cyan;
+            PromptHost      = ConsoleColor.DarkGray;
+            PromptSshHost   = ConsoleColor.Yellow;
             Directory       = ConsoleColor.Blue;
             Executable      = ConsoleColor.Green;
             Archive         = ConsoleColor.Red;
@@ -142,6 +178,9 @@ public class Theme
             Metadata        = ConsoleColor.DarkGray;
             Memory          = ConsoleColor.DarkYellow;
             SearchQuery     = ConsoleColor.Yellow;
+            PermRead        = ConsoleColor.Yellow;
+            PermWrite       = ConsoleColor.Red;
+            PermExec        = ConsoleColor.Green;
 
             AnsiKnownCommand   = "\x1b[36m";   // Cyan
             AnsiFilePath       = "\x1b[96m";   // BrightCyan
@@ -151,6 +190,7 @@ public class Theme
             AnsiPipe           = "\x1b[90m";   // DarkGray
             AnsiUnknownCommand = "\x1b[37m";   // White
             AnsiBang           = "\x1b[35m";   // Magenta
+            AnsiSuggestion     = "\x1b[38;5;240m"; // 256-color dark gray — dimmer than DarkGray/bright-black
         }
         else
         {
@@ -162,8 +202,14 @@ public class Theme
             Warning         = ConsoleColor.DarkYellow;
             PromptPath      = ConsoleColor.DarkGreen;
             PromptGitBranch = ConsoleColor.DarkYellow;
-            PromptSuccess   = ConsoleColor.DarkCyan;
+            PromptGitDirty  = ConsoleColor.DarkYellow;
+            PromptSuccess   = ConsoleColor.DarkGreen;
             PromptFailed    = ConsoleColor.DarkRed;
+            PromptRoot      = ConsoleColor.DarkRed;
+            PromptTime      = ConsoleColor.Gray;
+            PromptUser      = ConsoleColor.DarkCyan;
+            PromptHost      = ConsoleColor.Gray;
+            PromptSshHost   = ConsoleColor.DarkYellow;
             Directory       = ConsoleColor.DarkBlue;
             Executable      = ConsoleColor.DarkGreen;
             Archive         = ConsoleColor.DarkRed;
@@ -177,6 +223,9 @@ public class Theme
             Metadata        = ConsoleColor.Gray;
             Memory          = ConsoleColor.DarkYellow;
             SearchQuery     = ConsoleColor.DarkYellow;
+            PermRead        = ConsoleColor.DarkYellow;
+            PermWrite       = ConsoleColor.DarkRed;
+            PermExec        = ConsoleColor.DarkGreen;
 
             AnsiKnownCommand   = "\x1b[34m";         // Blue
             AnsiFilePath       = "\x1b[34m";         // Blue
@@ -186,6 +235,7 @@ public class Theme
             AnsiPipe           = "\x1b[90m";         // DarkGray
             AnsiUnknownCommand = "\x1b[30m";         // Black
             AnsiBang           = "\x1b[35m";         // Magenta
+            AnsiSuggestion     = "\x1b[38;5;246m";   // 256-color mid-gray (~3:1 contrast on white)
         }
     }
 

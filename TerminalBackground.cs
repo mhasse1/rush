@@ -9,16 +9,60 @@ namespace Rush;
 /// Detects the terminal background color to enable contrast-aware theming.
 /// Uses a cascade of detection methods: OSC 11 query → COLORFGBG env var →
 /// macOS appearance → fallback to dark.
+///
+/// All detection methods are time-bounded to prevent hangs in nested shells,
+/// broken ptys, or unresponsive terminal environments.
 /// </summary>
 public static class TerminalBackground
 {
     public record TerminalBg(bool IsDark, double BgLuminance);
 
     /// <summary>
+    /// Saved stty settings for emergency restore if detection times out.
+    /// Set before modifying terminal state, cleared after restore.
+    /// </summary>
+    private static volatile string? _savedStty;
+
+    /// <summary>
     /// Detect the terminal background. Returns dark/light classification
     /// and the background luminance (0.0 = black, 1.0 = white).
+    ///
+    /// Guaranteed to return within ~2 seconds — never hangs, even in
+    /// nested shells, broken ptys, or over SSH with lag.
     /// </summary>
     public static TerminalBg Detect()
+    {
+        _savedStty = null;
+
+        try
+        {
+            // Run detection on a background thread with a hard timeout.
+            // This is the safety net: even if stty or read() blocks in
+            // some unexpected way, we bail and return the fallback.
+            var task = Task.Run(DetectCore);
+            if (task.Wait(TimeSpan.FromMilliseconds(2000)))
+                return task.Result;
+        }
+        catch { }
+
+        // Timeout — try to restore terminal settings if they were modified
+        // before the timeout fired (e.g., stty set raw mode, then read() blocked)
+        var saved = _savedStty;
+        if (saved != null)
+        {
+            _savedStty = null;
+            RunSttySafe(saved);
+            Console.Write("\r\x1b[K");
+        }
+
+        // Default to dark (most developer terminals)
+        return new TerminalBg(true, 0.0);
+    }
+
+    /// <summary>
+    /// Core detection cascade, runs on background thread.
+    /// </summary>
+    private static TerminalBg DetectCore()
     {
         try
         {
@@ -65,15 +109,23 @@ public static class TerminalBackground
         // Save terminal settings via stty (avoids termios struct layout
         // differences between macOS arm64 and Linux — tcflag_t is 8 bytes
         // on macOS but 4 on Linux, making P/Invoke fragile)
-        var saved = CaptureStty("-g");
+        var saved = CaptureSttyWithTimeout("-g");
         if (string.IsNullOrEmpty(saved)) return false;
+
+        // Store for emergency restore if the outer timeout fires while
+        // we're in raw mode (e.g., read() blocks in a nested shell)
+        _savedStty = saved.Trim();
 
         try
         {
             // Disable echo and canonical mode, set read timeout
             // min 0 + time 1 = return immediately with whatever is available,
             // or after 100ms with nothing
-            RunStty("-echo -icanon min 0 time 1");
+            if (!RunSttyWithTimeout("-echo -icanon min 0 time 1"))
+            {
+                // Couldn't change terminal settings — can't safely query
+                return false;
+            }
 
             // Send OSC 11 query: ESC ] 11 ; ? ESC backslash
             var query = "\x1b]11;?\x1b\\";
@@ -83,33 +135,45 @@ public static class TerminalBackground
             ttyWrite.Write(queryBytes);
             ttyWrite.Flush();
 
-            // Read response using native read() on fd 0
+            // Read response — use poll() before each read() to guarantee
+            // we never block, even if stty settings didn't take effect
+            // (which can happen in nested shells or broken ptys)
             var response = new StringBuilder();
-            var deadline = DateTime.UtcNow.AddMilliseconds(200);
+            var deadline = DateTime.UtcNow.AddMilliseconds(300);
             var buf = new byte[1];
 
             while (DateTime.UtcNow < deadline)
             {
-                var bytesRead = read(0, buf, 1);
-                if (bytesRead > 0)
-                {
-                    response.Append((char)buf[0]);
+                // poll() with 50ms timeout — returns >0 if data available
+                var pfd = new Pollfd { fd = 0, events = POLLIN };
+                var ready = poll(ref pfd, 1, 50);
 
-                    // Response ends with ST (ESC \) or BEL (\x07)
-                    var s = response.ToString();
-                    if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
-                        break;
-                }
-                else
+                if (ready > 0 && (pfd.revents & POLLIN) != 0)
                 {
-                    Thread.Sleep(5);
+                    var bytesRead = read(0, buf, 1);
+                    if (bytesRead > 0)
+                    {
+                        response.Append((char)buf[0]);
+
+                        // Response ends with ST (ESC \) or BEL (\x07)
+                        var s = response.ToString();
+                        if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
+                            break;
+                    }
+                    else
+                    {
+                        break; // EOF or error
+                    }
                 }
+                // poll returned 0 (timeout) or -1 (error) — loop checks deadline
             }
 
             // Drain any remaining bytes before restoring echo
             var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
             while (DateTime.UtcNow < drainDeadline)
             {
+                var pfd2 = new Pollfd { fd = 0, events = POLLIN };
+                if (poll(ref pfd2, 1, 10) <= 0) break;
                 if (read(0, buf, 1) <= 0) break;
             }
 
@@ -118,15 +182,22 @@ public static class TerminalBackground
         finally
         {
             // Restore terminal settings (re-enables echo)
-            RunStty(saved.Trim());
+            RunSttySafe(saved.Trim());
+            _savedStty = null; // Successfully restored
 
             // Clear any response artifacts that leaked to the display
             Console.Write("\r\x1b[K");
         }
     }
 
-    /// <summary>Capture stty output (e.g., stty -g for saved settings).</summary>
-    private static string? CaptureStty(string args)
+    // ── Process Helpers (with proper timeouts) ──────────────────────────
+
+    /// <summary>
+    /// Capture stty output with a hard timeout. Kills the process if it hangs.
+    /// The old version used ReadToEnd() which blocks forever if stty hangs
+    /// (e.g., in nested shells where the controlling terminal is unavailable).
+    /// </summary>
+    private static string? CaptureSttyWithTimeout(string args)
     {
         try
         {
@@ -139,15 +210,29 @@ public static class TerminalBackground
             };
             using var proc = Process.Start(psi);
             if (proc == null) return null;
-            var output = proc.StandardOutput.ReadToEnd();
-            proc.WaitForExit(1000);
-            return proc.ExitCode == 0 ? output : null;
+
+            // Read output asynchronously so WaitForExit can actually timeout.
+            // ReadToEnd() blocks until the process closes stdout — if stty
+            // hangs, ReadToEnd() hangs too and WaitForExit never runs.
+            var outputTask = proc.StandardOutput.ReadToEndAsync();
+
+            if (!proc.WaitForExit(500))
+            {
+                try { proc.Kill(); } catch { }
+                return null;
+            }
+
+            // Process exited — output should be available almost immediately
+            if (!outputTask.Wait(100)) return null;
+            return proc.ExitCode == 0 ? outputTask.Result : null;
         }
         catch { return null; }
     }
 
-    /// <summary>Run stty to change terminal settings (no output capture needed).</summary>
-    private static void RunStty(string args)
+    /// <summary>
+    /// Run stty with a timeout. Returns false if stty hangs or fails.
+    /// </summary>
+    private static bool RunSttyWithTimeout(string args)
     {
         try
         {
@@ -159,10 +244,44 @@ public static class TerminalBackground
                 CreateNoWindow = true
             };
             using var proc = Process.Start(psi);
-            proc?.WaitForExit(1000);
+            if (proc == null) return false;
+
+            if (!proc.WaitForExit(500))
+            {
+                try { proc.Kill(); } catch { }
+                return false;
+            }
+
+            return proc.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Best-effort stty restore — used in finally blocks and timeout recovery.
+    /// Doesn't throw, doesn't return status.
+    /// </summary>
+    private static void RunSttySafe(string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("stty", args)
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc != null && !proc.WaitForExit(500))
+            {
+                try { proc.Kill(); } catch { }
+            }
         }
         catch { }
     }
+
+    // ── OSC 11 Response Parser ──────────────────────────────────────────
 
     /// <summary>
     /// Parse an OSC 11 response like: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
@@ -243,8 +362,15 @@ public static class TerminalBackground
             using var proc = Process.Start(psi);
             if (proc == null) return false;
 
-            var output = proc.StandardOutput.ReadToEnd().Trim();
-            proc.WaitForExit(500);
+            var outputTask = proc.StandardOutput.ReadToEndAsync();
+            if (!proc.WaitForExit(500))
+            {
+                try { proc.Kill(); } catch { }
+                return false;
+            }
+
+            if (!outputTask.Wait(100)) return false;
+            var output = outputTask.Result.Trim();
 
             if (proc.ExitCode == 0)
             {
@@ -293,4 +419,22 @@ public static class TerminalBackground
 
     [DllImport("libc", SetLastError = true)]
     private static extern int read(int fd, byte[] buf, int count);
+
+    /// <summary>
+    /// poll() — check if file descriptors have data available without blocking.
+    /// Used before read() to guarantee we never block on fd 0, even when
+    /// terminal settings weren't properly applied (nested shells, broken ptys).
+    /// </summary>
+    [DllImport("libc", SetLastError = true)]
+    private static extern int poll(ref Pollfd fds, int nfds, int timeout);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Pollfd
+    {
+        public int fd;
+        public short events;
+        public short revents;
+    }
+
+    private const short POLLIN = 0x0001;
 }

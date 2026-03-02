@@ -51,7 +51,6 @@ Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
-Console.WriteLine();
 
 // ── Initialize PowerShell Engine ─────────────────────────────────────
 var hostUI = new RushHostUI();
@@ -157,7 +156,7 @@ while (true)
         while (scriptEngine.IsIncomplete(input))
         {
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.Write("... ");
+            Console.Write(Prompt.Continuation);
             Console.ResetColor();
             var continuation = lineEditor.ReadLine();
             if (continuation == null) break;
@@ -313,6 +312,7 @@ while (true)
     var (chainSegments, chainOps) = SplitChainOperators(input);
 
     bool lastSegmentFailed = false;
+    int lastExitCode = 0;
     bool shouldExit = false;
 
     for (int ci = 0; ci < chainSegments.Count; ci++)
@@ -626,6 +626,20 @@ while (true)
             continue;
         }
 
+        // ── ls builtin (when not piped) ─────────────────────────
+        // Direct .NET file enumeration with multi-column/long format.
+        // When piped (ls | grep), falls through to Get-ChildItem path below.
+        if ((segment.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("ls ", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("ls\t", StringComparison.OrdinalIgnoreCase)) &&
+            !segment.Contains('|'))
+        {
+            var lsArgs = segment.Length > 2 ? segment[2..].TrimStart() : "";
+            lastSegmentFailed = !FileListCommand.Execute(lsArgs);
+            lastExitCode = lastSegmentFailed ? 1 : 0;
+            continue;
+        }
+
         // ── Parse Redirection ─────────────────────────────────────
         var (cmdPart, redirect) = ParseRedirection(segment);
 
@@ -654,7 +668,9 @@ while (true)
         if (translated == null && IsInteractiveTui(cmdPart) && redirect == null)
         {
             var sw2 = Stopwatch.StartNew();
-            lastSegmentFailed = !RunInteractive(commandToRun);
+            var tuiExitCode = RunInteractiveWithExitCode(commandToRun);
+            lastSegmentFailed = tuiExitCode != 0;
+            lastExitCode = tuiExitCode;
             sw2.Stop();
             if (sw2.Elapsed.TotalSeconds >= 0.5)
             {
@@ -687,6 +703,7 @@ while (true)
                 sw.Stop();
                 runningPs = null;
                 lastSegmentFailed = true;
+                lastExitCode = 130;
                 continue;
             }
             finally
@@ -700,6 +717,13 @@ while (true)
             {
                 OutputRenderer.RenderErrors(ps.Streams);
                 lastSegmentFailed = true;
+                // Try to get the actual exit code from $LASTEXITCODE (set by native commands)
+                try
+                {
+                    var lec = runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+                    lastExitCode = lec is int code ? code : 1;
+                }
+                catch { lastExitCode = 1; }
 
                 // Smart error correction: suggest similar commands
                 foreach (var error in ps.Streams.Error)
@@ -716,6 +740,7 @@ while (true)
             else
             {
                 lastSegmentFailed = false;
+                lastExitCode = 0;
             }
 
             if (results.Count > 0)
@@ -739,11 +764,13 @@ while (true)
             sw.Stop();
             Console.WriteLine();
             lastSegmentFailed = true;
+            lastExitCode = 130;
         }
         catch (Exception ex)
         {
             sw.Stop();
             lastSegmentFailed = true;
+            lastExitCode = 1;
             var msg = ex.InnerException?.Message ?? ex.Message;
             Console.ForegroundColor = Theme.Current.Error;
             Console.Error.WriteLine($"error: {msg}");
@@ -765,7 +792,11 @@ while (true)
 
     if (shouldExit) break;
 
-    prompt.SetLastCommandFailed(lastSegmentFailed);
+    // Normalize exit code: ensure consistency with failure flag
+    if (lastSegmentFailed && lastExitCode == 0) lastExitCode = 1;
+    if (!lastSegmentFailed) lastExitCode = 0;
+
+    prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
     lineEditor.SaveHistory();
 }
 
@@ -912,6 +943,7 @@ static bool IsInteractiveTui(string cmdPart)
         "less", "more", "most",
         "top", "htop", "btop",
         "man",
+        "sudo",
         "ssh", "tmux", "screen",
         "python", "python3", "node", "irb", "lua", "ghci",  // REPLs
         "fzf", "tig", "lazygit", "nnn", "ranger", "mc"
@@ -928,8 +960,9 @@ static bool IsInteractiveTui(string cmdPart)
 /// <summary>
 /// Run a command directly with inherited stdio (no capture).
 /// Used for interactive/TUI programs that need a real terminal.
+/// Returns the process exit code (0 = success).
 /// </summary>
-static bool RunInteractive(string command)
+static int RunInteractiveWithExitCode(string command)
 {
     try
     {
@@ -945,16 +978,16 @@ static bool RunInteractive(string command)
         };
 
         using var proc = Process.Start(psi);
-        if (proc == null) return false;
+        if (proc == null) return 1;
         proc.WaitForExit();
-        return proc.ExitCode == 0;
+        return proc.ExitCode;
     }
     catch (Exception ex)
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"  {ex.Message}");
         Console.ResetColor();
-        return false;
+        return 1;
     }
 }
 
@@ -1032,7 +1065,7 @@ static string ReadContinuationLines(string input)
             sb.Clear();
             sb.Append(trimmed[..^1]); // Strip the backslash
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.Write("... ");
+            Console.Write(Prompt.Continuation);
             Console.ResetColor();
             var next = Console.ReadLine();
             if (next == null) break;
@@ -1044,7 +1077,7 @@ static string ReadContinuationLines(string input)
         if (HasUnclosedQuote(current))
         {
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.Write("... ");
+            Console.Write(Prompt.Continuation);
             Console.ResetColor();
             var next = Console.ReadLine();
             if (next == null) break;
@@ -1057,7 +1090,7 @@ static string ReadContinuationLines(string input)
         if (HasUnclosedBrackets(current))
         {
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.Write("... ");
+            Console.Write(Prompt.Continuation);
             Console.ResetColor();
             var next = Console.ReadLine();
             if (next == null) break;
