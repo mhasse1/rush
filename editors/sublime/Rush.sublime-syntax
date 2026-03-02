@@ -1,0 +1,270 @@
+%YAML 1.2
+---
+# Rush Language Syntax Highlighting for Sublime Text 3+
+# Rush is a shell scripting language that transpiles to PowerShell 7
+# File extension: .rush
+name: Rush
+scope: source.rush
+file_extensions:
+  - rush
+first_line_match: '^#!.*\brush\b'
+
+variables:
+  identifier: '[a-zA-Z_][a-zA-Z0-9_]*'
+  method_with_question: '[a-zA-Z_][a-zA-Z0-9_]*\??'
+
+contexts:
+  main:
+    - include: comments
+    - include: strings
+    - include: command-substitution
+    - include: numbers
+    - include: symbols
+    - include: special-variables
+    - include: env-variables
+    - include: keywords
+    - include: builtin-functions
+    - include: stdlib-classes
+    - include: method-calls
+    - include: operators
+    - include: identifiers
+
+  # ──────────────────────────────────────────────
+  # Comments
+  # ──────────────────────────────────────────────
+  comments:
+    # Line comments: # to end of line
+    # Avoid matching inside strings or interpolation
+    - match: '#(?!\{)'
+      scope: punctuation.definition.comment.rush
+      push: line-comment
+
+  line-comment:
+    - meta_scope: comment.line.number-sign.rush
+    - match: $\n?
+      pop: true
+
+  # ──────────────────────────────────────────────
+  # Strings
+  # ──────────────────────────────────────────────
+  strings:
+    # Double-quoted strings with interpolation
+    - match: '"'
+      scope: punctuation.definition.string.begin.rush
+      push: double-quoted-string
+    # Single-quoted strings (no interpolation)
+    - match: "'"
+      scope: punctuation.definition.string.begin.rush
+      push: single-quoted-string
+
+  double-quoted-string:
+    - meta_scope: string.quoted.double.rush
+    - match: '\\[\\nrtae"#0]'
+      scope: constant.character.escape.rush
+    - match: '#\{'
+      scope: punctuation.section.interpolation.begin.rush
+      push: string-interpolation
+    - match: '"'
+      scope: punctuation.definition.string.end.rush
+      pop: true
+
+  single-quoted-string:
+    - meta_scope: string.quoted.single.rush
+    - match: "\\\\[\\\\']"
+      scope: constant.character.escape.rush
+    - match: "'"
+      scope: punctuation.definition.string.end.rush
+      pop: true
+
+  string-interpolation:
+    - clear_scopes: 1
+    - meta_scope: string.interpolated.rush
+    - meta_content_scope: source.rush.embedded
+    - match: '\}'
+      scope: punctuation.section.interpolation.end.rush
+      pop: true
+    - include: main
+
+  # ──────────────────────────────────────────────
+  # Command Substitution: $(command)
+  # ──────────────────────────────────────────────
+  command-substitution:
+    - match: '\$\('
+      scope: punctuation.section.interpolation.begin.rush
+      push: command-substitution-body
+
+  command-substitution-body:
+    - meta_scope: string.interpolated.rush
+    - meta_content_scope: source.rush.embedded
+    - match: '\)'
+      scope: punctuation.section.interpolation.end.rush
+      pop: true
+    - include: main
+
+  # ──────────────────────────────────────────────
+  # Numbers
+  # ──────────────────────────────────────────────
+  numbers:
+    # Floats: 3.14, .5, 1.0e10, 2.5E-3
+    - match: '\b[0-9]+\.[0-9]+(?:[eE][+-]?[0-9]+)?\b'
+      scope: constant.numeric.float.rush
+    - match: '\b[0-9]+(?:[eE][+-]?[0-9]+)\b'
+      scope: constant.numeric.float.rush
+    # Hex integers
+    - match: '\b0[xX][0-9a-fA-F]+\b'
+      scope: constant.numeric.hex.rush
+    # Octal integers
+    - match: '\b0[oO][0-7]+\b'
+      scope: constant.numeric.octal.rush
+    # Binary integers
+    - match: '\b0[bB][01]+\b'
+      scope: constant.numeric.binary.rush
+    # Decimal integers
+    - match: '\b[0-9]+\b'
+      scope: constant.numeric.integer.rush
+
+  # ──────────────────────────────────────────────
+  # Symbols: :name
+  # ──────────────────────────────────────────────
+  symbols:
+    - match: ':{{identifier}}'
+      scope: constant.other.symbol.rush
+
+  # ──────────────────────────────────────────────
+  # Special Variables
+  # ──────────────────────────────────────────────
+  special-variables:
+    # $? exit status
+    - match: '\$\?'
+      scope: variable.language.rush
+
+  # ──────────────────────────────────────────────
+  # Environment Variables: env.NAME
+  # ──────────────────────────────────────────────
+  env-variables:
+    - match: '\benv\.{{identifier}}'
+      scope: variable.other.rush
+
+  # ──────────────────────────────────────────────
+  # Keywords
+  # ──────────────────────────────────────────────
+  keywords:
+    # Control flow
+    - match: '\b(if|elsif|else|end|unless|for|in|while|until|match|case|when)\b'
+      scope: keyword.control.rush
+    # Functions
+    - match: '\b(def|return)\b'
+      scope: keyword.control.rush
+    # Error handling
+    - match: '\b(try|rescue|ensure|begin)\b'
+      scope: keyword.control.rush
+    # Loop control
+    - match: '\b(do|next|continue|break)\b'
+      scope: keyword.control.rush
+    # Logic keywords
+    - match: '\b(and|or|not)\b'
+      scope: keyword.control.rush
+    # Constants
+    - match: '\b(true|false|nil)\b'
+      scope: keyword.control.rush
+
+  # ──────────────────────────────────────────────
+  # Builtin Functions
+  # ──────────────────────────────────────────────
+  builtin-functions:
+    - match: '\b(puts|print|warn|die|ask|sleep|exit|ping)\b(?=\s|$|\()'
+      scope: support.function.rush
+
+  # ──────────────────────────────────────────────
+  # Standard Library Classes
+  # ──────────────────────────────────────────────
+  stdlib-classes:
+    - match: '\b(File|Dir)\b'
+      scope: support.class.rush
+
+  # ──────────────────────────────────────────────
+  # Method Calls (after dot)
+  # ──────────────────────────────────────────────
+  method-calls:
+    # Safe navigation operator &. followed by method
+    - match: '&\.(each|select|reject|map|flat_map|sort_by|first|last|count|any\?|all\?|group_by|uniq|reverse|join|to_json|to_csv|include\?|sort|skip|skip_while|push|compact|flatten)\b'
+      scope: support.function.method.rush
+    - match: '&\.(strip|lstrip|rstrip|upcase|downcase|split|split_whitespace|lines|trim_end|start_with\?|end_with\?|empty\?|nil\?|ljust|rjust|replace|sub|gsub|scan|match)\b'
+      scope: support.function.method.rush
+    - match: '&\.(round|abs|times|to_currency|to_filesize|to_percent)\b'
+      scope: support.function.method.rush
+    - match: '&\.(to_i|to_f|to_s)\b'
+      scope: support.function.method.rush
+    - match: '&\.(red|green|blue|cyan|yellow|magenta|white|gray)\b'
+      scope: support.function.method.rush
+
+    # Regular dot method calls - Collection methods
+    - match: '\.(each|select|reject|map|flat_map|sort_by|first|last|count|any\?|all\?|group_by|uniq|reverse|join|to_json|to_csv|include\?|sort|skip|skip_while|push|compact|flatten)\b'
+      scope: support.function.method.rush
+    # String methods
+    - match: '\.(strip|lstrip|rstrip|upcase|downcase|split|split_whitespace|lines|trim_end|start_with\?|end_with\?|empty\?|nil\?|ljust|rjust|replace|sub|gsub|scan|match)\b'
+      scope: support.function.method.rush
+    # Numeric methods
+    - match: '\.(round|abs|times|to_currency|to_filesize|to_percent)\b'
+      scope: support.function.method.rush
+    # Type conversion methods
+    - match: '\.(to_i|to_f|to_s)\b'
+      scope: support.function.method.rush
+    # Color methods
+    - match: '\.(red|green|blue|cyan|yellow|magenta|white|gray)\b'
+      scope: support.function.method.rush
+
+  # ──────────────────────────────────────────────
+  # Operators
+  # ──────────────────────────────────────────────
+  operators:
+    # Regex match / not-match (before comparison to avoid conflicts)
+    - match: '=~|!~'
+      scope: keyword.operator.rush
+    # Comparison (multi-char first)
+    - match: '==|!=|<=|>='
+      scope: keyword.operator.rush
+    - match: '<|>'
+      scope: keyword.operator.rush
+    # Logical operators
+    - match: '&&|\|\|'
+      scope: keyword.operator.rush
+    # Assignment operators (multi-char before single)
+    - match: '\+=|-='
+      scope: keyword.operator.rush
+    # Range
+    - match: '\.\.'
+      scope: keyword.operator.rush
+    # Safe navigation (standalone, not before method -- methods handled above)
+    - match: '&\.'
+      scope: keyword.operator.rush
+    # Pipe
+    - match: '\|(?!\|)'
+      scope: keyword.operator.rush
+    # Arithmetic
+    - match: '[+\-*/%]'
+      scope: keyword.operator.rush
+    # Assignment (single = but not == which is handled above)
+    - match: '(?<!=|!)=(?!=)'
+      scope: keyword.operator.rush
+
+  # ──────────────────────────────────────────────
+  # Identifiers (catch-all, low priority)
+  # ──────────────────────────────────────────────
+  identifiers:
+    # Block parameters: |x| or |x, y|
+    - match: '\|(?=\s*{{identifier}})'
+      scope: punctuation.separator.rush
+      push: block-parameters
+
+  block-parameters:
+    - match: '{{identifier}}'
+      scope: variable.parameter.rush
+    - match: ','
+      scope: punctuation.separator.rush
+    - match: '\|'
+      scope: punctuation.separator.rush
+      pop: true
+    - match: '\s+'
+    - match: '(?=[^\s,|a-zA-Z_])'
+      pop: true

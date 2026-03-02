@@ -1,0 +1,854 @@
+# ============================================================================
+# Rush Language Specification — Machine-Readable Reference
+# ============================================================================
+# This file is the source of truth for Rush's scripting language.
+# It is designed to be consumed by LLMs in a single read to enable
+# correct Rush code generation. Human docs are derived from this.
+#
+# Architecture: Rush code transpiles to PowerShell 7, which executes
+# on the embedded PS engine. This means every .NET type, cmdlet, and
+# module is available automatically.
+#
+# Design philosophy: Bash's pipeline/process model + Ruby's clean syntax.
+# If you know bash and Ruby, you can guess the Rush syntax and be right.
+# ============================================================================
+
+meta:
+  version: "0.1.0"
+  status: "design"  # design → alpha → beta → stable
+  engine: "PowerShell 7 via Microsoft.PowerShell.SDK"
+  runtime: ".NET 8"
+  file_extension: ".rush"
+  config_file: "~/.config/rush/config.rush"
+
+# ============================================================================
+# CORE PRINCIPLES
+# ============================================================================
+# 1. Shell commands are first-class — `ls -la /tmp` just works
+# 2. Scripting constructs transpile to PowerShell — full .NET access
+# 3. No sigils for variables — `name = "mark"` not `$name = "mark"`
+# 4. Pipeline operator `|` works for both shell commands and objects
+# 5. String interpolation uses #{expr} (Ruby-style)
+# 6. Blocks use Ruby-style end keywords, not braces for control flow
+# 7. Braces { } are for lambdas/blocks only
+
+# ============================================================================
+# VARIABLES & ASSIGNMENT
+# ============================================================================
+variables:
+  description: |
+    Assignment uses `name = value`. No `let`, `var`, `set`, or `$` prefix.
+    The transpiler distinguishes assignment from command execution by context:
+    if the first token is followed by `=`, it's an assignment.
+
+  syntax:
+    assignment: "name = expr"
+    multiple: "a, b, c = 1, 2, 3"
+
+  transpiles_to:
+    assignment: "$name = expr"
+    multiple: "$a = 1; $b = 2; $c = 3"
+
+  examples:
+    - rush: 'name = "world"'
+      powershell: '$name = "world"'
+
+    - rush: 'count = 42'
+      powershell: '$count = 42'
+
+    - rush: 'files = ls /tmp'
+      powershell: '$files = Get-ChildItem /tmp'
+      note: "Command output captured into variable"
+
+    - rush: 'today = Time.now'
+      powershell: '$today = [DateTime]::Now'
+      note: ".NET types accessible via clean syntax"
+
+  rules:
+    - "No $ prefix — Rush adds it during transpilation"
+    - "First token + `=` → assignment; first token without `=` → command"
+    - "Variable names: letters, digits, underscores; must start with letter/underscore"
+    - "Variables are dynamically typed (PowerShell semantics)"
+
+# ============================================================================
+# STRINGS
+# ============================================================================
+strings:
+  description: |
+    Double-quoted strings support interpolation. Single-quoted strings are literal.
+    Heredocs for multi-line strings.
+
+  interpolation:
+    syntax: '"hello #{expr}"'
+    transpiles_to: '"hello $($expr)"'
+
+  examples:
+    - rush: '"hello #{name}"'
+      powershell: '"hello $($name)"'
+
+    - rush: '"there are #{items.count} items"'
+      powershell: '"there are $($items.Count) items"'
+
+    - rush: "'no #{interpolation} here'"
+      powershell: "'no #{interpolation} here'"
+      note: "Single quotes are literal"
+
+  heredoc:
+    syntax: |
+      text = <<END
+        multi-line content
+        with #{interpolation}
+      END
+    transpiles_to: |
+      $text = @"
+        multi-line content
+        with $($interpolation)
+      "@
+
+# ============================================================================
+# REGULAR EXPRESSIONS
+# ============================================================================
+regex:
+  description: |
+    Clean, unambiguous regex support. /pattern/ literals, =~ for match,
+    string methods for substitution. No obscure operators to memorize.
+
+  literals:
+    syntax: "/pattern/flags"
+    flags: ["i (case-insensitive)", "m (multiline)", "x (extended/verbose)"]
+    transpiles_to: "[regex]'pattern'"
+    examples:
+      - { rush: '/^test/', powershell: "[regex]'^test'" }
+      - { rush: '/error|warn/i', powershell: "[regex]'(?i)error|warn'" }
+
+  match:
+    - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
+    - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
+    examples:
+      - { rush: 'name =~ /^test/', powershell: '$name -match "^test"' }
+      - { rush: 'name !~ /admin/', powershell: '$name -notmatch "admin"' }
+
+  string_methods:
+    description: "Substitution via methods — no sed s/// syntax"
+    methods:
+      - name: ".sub(pattern, replacement)"
+        description: "Replace first match"
+        example: { rush: 'line.sub(/^#\s*/, "")', powershell: '$line -replace "^#\s*", "" | Select-Object -First 1' }
+      - name: ".gsub(pattern, replacement)"
+        description: "Replace all matches"
+        example: { rush: 'text.gsub(/\t/, "  ")', powershell: '$text -replace "\t", "  "' }
+      - name: ".scan(pattern)"
+        description: "Return all matches as array"
+        example: { rush: 'path.scan(/[^\/]+/)', powershell: '[regex]::Matches($path, "[^/]+").Value' }
+      - name: ".match(pattern)"
+        description: "Return match object with captures"
+        example: { rush: 'line.match(/^(\w+)=(.*)$/)', note: "Access groups: m[1], m[2]" }
+
+  design_principles:
+    - "/pattern/ for literals — universally understood"
+    - "=~ for match, !~ for not match — Ruby/Perl convention, unambiguous"
+    - ".sub / .gsub / .scan for substitution — method syntax, not s/// syntax"
+    - "No obscure operators to memorize"
+
+# ============================================================================
+# STRING METHODS (color + formatting)
+# ============================================================================
+string_methods:
+  color:
+    description: |
+      Colored output via string methods. Colors are SO common in shell scripts
+      they should be ergonomic. Transpiles to Write-Host with -ForegroundColor.
+    methods: ["red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"]
+    syntax: '"text".color_name'
+    examples:
+      - { rush: 'puts "OK".green', transpiles_to: 'Write-Host "OK" -ForegroundColor Green' }
+      - { rush: 'puts "FAIL".red', transpiles_to: 'Write-Host "FAIL" -ForegroundColor Red' }
+      - { rush: 'puts "#{count} errors".red', note: "Interpolation + color" }
+    note: "Also works in chaining: price.round(2).to_currency.green"
+
+  formatting:
+    methods:
+      - { name: ".upcase", description: "Uppercase" }
+      - { name: ".downcase", description: "Lowercase" }
+      - { name: ".strip", description: "Remove leading/trailing whitespace" }
+      - { name: ".lstrip / .rstrip", description: "Remove leading/trailing only" }
+      - { name: ".trim_end(chars)", description: "Remove trailing specific chars (e.g. trim_end('%'))" }
+      - { name: ".ljust(n) / .rjust(n)", description: "Pad to n characters" }
+      - { name: ".split(sep)", description: "Split into array by separator (string or regex)" }
+      - { name: ".split_whitespace", description: "Split by any whitespace (like awk default)" }
+      - { name: ".lines", description: "Split by newline into array" }
+      - { name: ".skip(n)", description: "Skip first n elements (works on arrays and line collections)" }
+      - { name: ".to_i / .to_f", description: "Convert to integer/float" }
+      - { name: ".to_s", description: "Convert to string" }
+
+# ============================================================================
+# NUMERIC METHODS
+# ============================================================================
+numeric_methods:
+  description: |
+    Method chaining on numbers for formatting. Extends the "text".green
+    philosophy: ergonomic methods on everything, daisy-chainable.
+
+  methods:
+    - name: ".round(n)"
+      description: "Round to n decimal places"
+      examples:
+        - { rush: "3.1415.round(2)", result: "3.14" }
+        - { rush: "elapsed.round(1)", result: "e.g. 3.2" }
+    - name: ".to_i / .to_f"
+      description: "Convert between integer and float"
+    - name: ".abs"
+      description: "Absolute value"
+    - name: ".to_currency(pad: 0)"
+      description: "Format as currency string"
+      examples:
+        - { rush: "14.25.to_currency", result: '"$14.25"' }
+        - { rush: "4.25.to_currency(pad: 10)", result: '"     $4.25"', note: "Right-aligned in field" }
+      note: "Returns a string — chainable with .green etc."
+    - name: ".to_filesize"
+      description: "Human-readable file size"
+      examples:
+        - { rush: "1048576.to_filesize", result: '"1.0 MB"' }
+        - { rush: "(bytes / 1kb).to_filesize", result: '"e.g. 4.2 GB"' }
+    - name: ".to_percent(decimals: 1)"
+      description: "Format as percentage"
+      examples:
+        - { rush: "0.8734.to_percent", result: '"87.3%"' }
+    - name: ".times { |i| }"
+      description: "Iterate N times (0-indexed)"
+      transpiles_to: "0..(N-1) | ForEach-Object { }"
+
+  chaining:
+    description: "Numeric and string methods chain freely"
+    examples:
+      - { rush: 'price.round(2).to_currency.green', note: '"$14.25" printed in green' }
+      - { rush: 'elapsed.round(1).to_s + " seconds"', note: '"3.2 seconds"' }
+      - { rush: '(bytes / 1mb).round(1).to_s.rjust(8) + " MB"', note: '"    14.2 MB"' }
+
+# ============================================================================
+# CONTROL FLOW
+# ============================================================================
+control_flow:
+  description: |
+    Ruby-style block keywords: if/elsif/else/end, unless/end.
+    No braces for control flow — braces are reserved for lambdas.
+
+  if:
+    syntax: |
+      if condition
+        body
+      elsif condition
+        body
+      else
+        body
+      end
+    transpiles_to: |
+      if (condition) {
+        body
+      } elseif (condition) {
+        body
+      } else {
+        body
+      }
+    examples:
+      - rush: |
+          if count > 10
+            puts "many"
+          elsif count > 0
+            puts "some"
+          else
+            puts "none"
+          end
+        powershell: |
+          if ($count -gt 10) {
+            Write-Output "many"
+          } elseif ($count -gt 0) {
+            Write-Output "some"
+          } else {
+            Write-Output "none"
+          }
+
+  unless:
+    syntax: |
+      unless condition
+        body
+      end
+    transpiles_to: |
+      if (-not (condition)) {
+        body
+      }
+    note: "Sugar for negated if. No elsif/else allowed with unless."
+
+  inline:
+    syntax: "puts 'hello' if verbose"
+    transpiles_to: "if ($verbose) { Write-Output 'hello' }"
+    note: "Trailing if/unless for one-liners"
+
+  operators:
+    description: "Comparison operators use words, not symbols (like PowerShell)"
+    mappings:
+      - { rush: "==",  powershell: "-eq" }
+      - { rush: "!=",  powershell: "-ne" }
+      - { rush: ">",   powershell: "-gt" }
+      - { rush: "<",   powershell: "-lt" }
+      - { rush: ">=",  powershell: "-ge" }
+      - { rush: "<=",  powershell: "-le" }
+      - { rush: "&&",  powershell: "-and" }
+      - { rush: "||",  powershell: "-or" }
+      - { rush: "!",   powershell: "-not" }
+    note: "Regex operators =~ and !~ documented in the regex section above"
+
+  safe_navigation:
+    syntax: "obj&.method"
+    transpiles_to: "if ($null -ne $obj) { $obj.Method }"
+    description: |
+      Ruby-style safe navigation operator. If obj is nil, returns nil
+      instead of throwing. Very useful in shell scripts where values
+      may not exist.
+    examples:
+      - { rush: "ip&.IPAddress", note: "Returns nil if ip is nil, instead of crashing" }
+      - { rush: "user&.name&.upcase", note: "Chains safely — any nil short-circuits" }
+
+# ============================================================================
+# LOOPS
+# ============================================================================
+loops:
+  for_in:
+    syntax: |
+      for item in collection
+        body
+      end
+    transpiles_to: |
+      foreach ($item in $collection) {
+        body
+      }
+    examples:
+      - rush: |
+          for f in ls /tmp
+            puts f.name
+          end
+        powershell: |
+          foreach ($f in (Get-ChildItem /tmp)) {
+            Write-Output $f.Name
+          }
+
+  while:
+    syntax: |
+      while condition
+        body
+      end
+    transpiles_to: |
+      while (condition) {
+        body
+      }
+
+  until:
+    syntax: |
+      until condition
+        body
+      end
+    transpiles_to: |
+      while (-not (condition)) {
+        body
+      }
+
+  loop:
+    syntax: |
+      loop
+        body
+        break if condition
+      end
+    transpiles_to: |
+      while ($true) {
+        body
+        if (condition) { break }
+      }
+    note: "Infinite loop with explicit break"
+
+  times:
+    syntax: |
+      5.times { |i|
+        puts i
+      }
+    transpiles_to: |
+      0..4 | ForEach-Object {
+        Write-Output $_
+      }
+    note: "Ruby-style numeric iteration"
+
+  loop_control:
+    - name: "next"
+      description: "Skip to next iteration (preferred)"
+      transpiles_to: "continue"
+      examples:
+        - rush: "next if line.empty?"
+          powershell: "if ($line -eq '') { continue }"
+        - rush: "next unless item.valid?"
+          powershell: "if (-not $item.IsValid) { continue }"
+      note: "Ruby-style. Reads naturally: 'next if blank'. Preferred over continue."
+    - name: "continue"
+      description: "Alias for next — supported for familiarity"
+      transpiles_to: "continue"
+      note: "Some developers expect C-style continue. Both work, next is preferred in style guide."
+    - name: "break"
+      description: "Exit loop immediately"
+      transpiles_to: "break"
+      examples:
+        - rush: "break if count > 100"
+          powershell: "if ($count -gt 100) { break }"
+
+  increment:
+    description: "No ++ or -- operators. Use += and -= exclusively."
+    examples:
+      - { rush: "count += 1", powershell: "$count += 1" }
+      - { rush: "total += item.price", powershell: "$total += $item.Price" }
+      - { rush: "retries -= 1", powershell: "$retries -= 1" }
+    note: "No pre/post increment ambiguity. Accessible to non-C developers."
+
+  match:
+    description: "Pattern matching — modern alias for case/when/end"
+    syntax: |
+      match expr
+      when value1
+        body
+      when value2
+        body
+      else
+        body
+      end
+    transpiles_to: |
+      switch (expr) {
+        value1 { body }
+        value2 { body }
+        default { body }
+      }
+    note: "'match' is modern (Rust, Ruby 3). Avoids bash case/esac baggage. 'case' also works as alias."
+
+# ============================================================================
+# FUNCTIONS
+# ============================================================================
+functions:
+  description: |
+    Defined with `def name(params) ... end`. Parameters are positional
+    by default, with optional type annotations and defaults.
+
+  syntax: |
+    def greet(name, greeting = "hello")
+      puts "#{greeting}, #{name}!"
+    end
+  transpiles_to: |
+    function greet {
+      param(
+        [Parameter(Position=0)] $name,
+        [Parameter(Position=1)] $greeting = "hello"
+      )
+      Write-Output "$($greeting), $($name)!"
+    }
+
+  examples:
+    - rush: |
+        def deploy(env, dry_run = false)
+          if dry_run
+            puts "would deploy to #{env}"
+          else
+            puts "deploying to #{env}..."
+            # shell commands work inside functions
+            rsync -avz ./dist/ "#{env}.example.com:/var/www/"
+          end
+        end
+
+        deploy("staging")
+        deploy("production", dry_run: true)
+
+  return:
+    description: |
+      Last expression is the implicit return value (Ruby-style).
+      Explicit `return expr` also works.
+    example:
+      rush: |
+        def double(n)
+          n * 2
+        end
+        result = double(21)  # result is 42
+
+  named_args:
+    syntax: 'deploy("staging", dry_run: true)'
+    note: "Named arguments use Ruby-style colon syntax"
+
+# ============================================================================
+# BLOCKS & LAMBDAS
+# ============================================================================
+blocks:
+  description: |
+    Blocks use curly braces with optional parameters in pipes: { |x| body }
+    Used with iteration methods (.each, .map, .select, .reject).
+
+  syntax: "collection.method { |item| body }"
+
+  examples:
+    - rush: |
+        files.each { |f|
+          puts f.name
+        }
+      powershell: |
+        $files | ForEach-Object {
+          Write-Output $_.Name
+        }
+
+    - rush: 'names = users.map { |u| u.name }'
+      powershell: '$names = $users | ForEach-Object { $_.Name }'
+
+    - rush: 'big = files.select { |f| f.length > 1mb }'
+      powershell: '$big = $files | Where-Object { $_.Length -gt 1mb }'
+
+    - rush: 'small = files.reject { |f| f.length > 1mb }'
+      powershell: '$small = $files | Where-Object { -not ($_.Length -gt 1mb) }'
+
+  method_chaining:
+    description: "Methods can be chained for pipeline-style data processing"
+    example:
+      rush: |
+        ls /var/log
+          .select { |f| f.name =~ /\.log$/ }
+          .sort_by { |f| f.length }
+          .reverse
+          .first(10)
+          .each { |f| puts "#{f.name}: #{f.length}" }
+
+# ============================================================================
+# PIPELINES
+# ============================================================================
+pipelines:
+  description: |
+    The | operator works for both shell commands and Rush object methods.
+    Shell commands in a pipeline use the existing command translation layer.
+
+  examples:
+    - rush: "ps aux | grep nginx | grep -v grep"
+      note: "Pure shell pipeline — passes through to PowerShell as-is"
+
+    - rush: "ls /tmp | sort_by { |f| f.size } | first(5)"
+      note: "Rush object pipeline — transpiles to PS pipeline"
+
+    - rush: 'cat server.log | grep "ERROR" | wc -l'
+      note: "Mixed — shell commands translated by CommandTranslator"
+
+# ============================================================================
+# ERROR HANDLING
+# ============================================================================
+error_handling:
+  description: |
+    Ruby-style begin/rescue/ensure/end for exception handling.
+
+  syntax: |
+    begin
+      risky_operation()
+    rescue IOError => e
+      puts "IO failed: #{e.message}"
+    rescue => e
+      puts "something failed: #{e.message}"
+    ensure
+      cleanup()
+    end
+  transpiles_to: |
+    try {
+      risky_operation
+    } catch [System.IO.IOException] {
+      $e = $_
+      Write-Output "IO failed: $($e.Message)"
+    } catch {
+      $e = $_
+      Write-Output "something failed: $($e.Message)"
+    } finally {
+      cleanup
+    }
+
+# ============================================================================
+# CLASSES (future — design TBD)
+# ============================================================================
+classes:
+  status: "planned"
+  description: |
+    Ruby-style class definitions that transpile to PowerShell classes.
+    Design not yet finalized.
+
+  sketch: |
+    class Server
+      attr :name, :host, :port
+
+      def initialize(name, host, port = 22)
+        @name = name
+        @host = host
+        @port = port
+      end
+
+      def connect
+        ssh "#{@host}" -p @port
+      end
+    end
+
+# ============================================================================
+# SHELL INTEGRATION
+# ============================================================================
+shell_integration:
+  description: |
+    Rush is a shell first, scripting language second. Shell commands
+    are always available and take precedence unless the line matches
+    a Rush construct (if/def/for/class/begin/etc.).
+
+  line_triage:
+    description: |
+      ScriptEngine decides if a line is Rush syntax or a shell command:
+      1. Starts with Rush keyword (if, def, for, while, class, begin) → Rush
+      2. Contains `=` after first token → Rush assignment
+      3. Method call on object (foo.bar) → Rush
+      4. Everything else → shell command (goes through CommandTranslator)
+
+  command_substitution:
+    syntax: "name = $(whoami)"
+    transpiles_to: "$name = (whoami)"
+    note: "Capture shell command output into variable"
+
+  exit_codes:
+    syntax: |
+      ls /nonexistent
+      if $?.failed?
+        puts "command failed with code #{$?.code}"
+      end
+    note: "$? gives access to the last command's exit status. Predicate methods: .ok?, .failed?"
+
+# ============================================================================
+# BUILT-IN VARIABLES
+# ============================================================================
+builtin_variables:
+  - { name: "$?", description: "Last command exit status (has .ok?, .failed?, .code)" }
+  - { name: "ARGV", description: "Script arguments array" }
+  - name: "env"
+    description: "Environment variables — dot access, bracket access, or regex filter"
+    examples:
+      - { rush: "env.HOME", powershell: "$env:HOME", note: "Dot access for clean names (99% of cases)" }
+      - { rush: "env.PATH", powershell: "$env:PATH" }
+      - { rush: 'env["LD_LIBRARY_PATH"]', powershell: '$env:LD_LIBRARY_PATH', note: "Bracket access for any name" }
+      - { rush: 'env["MY-VAR"]', powershell: '${env:MY-VAR}', note: "Bracket required for names with hyphens/special chars" }
+      - rush: 'env[/PATH/]'
+        powershell: 'Get-ChildItem env: | Where-Object { $_.Name -match "PATH" }'
+        note: "Regex filter — returns hash of all matching env vars"
+      - rush: 'env[/^RUSH_/]'
+        note: "All env vars starting with RUSH_"
+      - rush: 'env[/PATH/].each { |k, v| puts "#{k}=#{v}" }'
+        note: "Iterate over filtered env vars"
+    note: "Lowercase `env` — no Ruby-style SHOUTING. Transpiles to PowerShell $env: provider"
+  - { name: "__FILE__", description: "Current script path" }
+  - { name: "__DIR__", description: "Current script directory" }
+
+# ============================================================================
+# BUILT-IN FUNCTIONS
+# ============================================================================
+builtin_functions:
+  - { name: "puts", transpiles_to: "Write-Output", description: "Print with newline" }
+  - { name: "print", transpiles_to: "Write-Host -NoNewline", description: "Print without newline" }
+  - { name: "warn", transpiles_to: "Write-Warning", description: "Print to stderr" }
+  - { name: "die", transpiles_to: "throw", description: "Raise fatal error" }
+  - { name: "exit", transpiles_to: "exit", description: "Exit with code" }
+  - { name: "sleep", transpiles_to: "Start-Sleep -Seconds", description: "Sleep N seconds" }
+  - { name: "cd", transpiles_to: "Set-Location", description: "Change directory" }
+  - { name: "pwd", transpiles_to: "Get-Location", description: "Current directory" }
+  - { name: "which", transpiles_to: "Get-Command", description: "Find command" }
+  - { name: "type", transpiles_to: "Get-Content", description: "Read file contents" }
+  - name: "ask"
+    description: "Interactive prompt — returns user input"
+    examples:
+      - { rush: 'name = ask "What is your name? "', note: "Returns string input" }
+      - { rush: 'ans = ask "Continue? (y/n) ", char: true', note: "Single character, no Enter needed" }
+    transpiles_to: "Read-Host (with char: true → [Console]::ReadKey())"
+
+# ============================================================================
+# STANDARD LIBRARY OBJECTS
+# ============================================================================
+stdlib:
+  File:
+    description: "File operations — clean OO interface over .NET System.IO"
+    methods:
+      - { name: "File.read(path)", description: "Read entire file as string" }
+      - { name: "File.read_lines(path)", description: "Read file as array of lines" }
+      - { name: "File.write(path, content)", description: "Write string to file (overwrites)" }
+      - { name: "File.append(path, content)", description: "Append string to file" }
+      - { name: "File.exist?(path)", description: "Check if file exists" }
+      - { name: "File.delete(path)", description: "Delete a file" }
+      - { name: "File.size(path)", description: "File size in bytes" }
+
+  Dir:
+    description: "Directory operations"
+    methods:
+      - name: "Dir.files(path, recursive: false)"
+        description: "List files in directory. Replaces `find . -type f`"
+        examples:
+          - { rush: 'Dir.files(".")', note: "Files in current dir" }
+          - { rush: 'Dir.files("src", recursive: true)', note: "All files recursively" }
+        note: "`files` is instantly clear. Shell `find` still works for complex cases"
+      - { name: "Dir.dirs(path)", description: "List subdirectories" }
+      - { name: "Dir.exist?(path)", description: "Check if directory exists" }
+      - { name: "Dir.mkdir(path)", description: "Create directory (and parents)" }
+
+  predicate_methods:
+    description: |
+      Methods ending in `?` return boolean. This is one of Ruby's best ideas —
+      self-documenting, clearly boolean, reads like English.
+    examples:
+      - { method: ".empty?", description: "True if string/array is empty" }
+      - { method: ".include?(x)", description: "True if collection contains x" }
+      - { method: ".start_with?(s)", description: "True if string starts with s" }
+      - { method: ".end_with?(s)", description: "True if string ends with s" }
+      - { method: ".nil?", description: "True if value is nil/null" }
+      - { method: ".exist?", description: "True if file/dir exists (File/Dir)" }
+      - { method: ".ok?", description: "True if exit status was 0 ($?)" }
+      - { method: ".failed?", description: "True if exit status was non-zero ($?)" }
+    transpilation: |
+      `.empty?` → `.Length -eq 0` or `-eq ''`
+      `.include?(x)` → `-contains x` or `.Contains(x)`
+      `.start_with?(s)` → `.StartsWith(s)`
+      `.ok?` → `$LASTEXITCODE -eq 0`
+    note: "Transpiler strips the `?` and maps to .NET/PS equivalents"
+
+# ============================================================================
+# SIZE LITERALS
+# ============================================================================
+hash_literals:
+  description: |
+    Hash (dictionary) literals use Ruby-style { key: value } syntax.
+    Transpile to PowerShell hashtables @{ Key = Value }.
+  syntax: "{ key1: value1, key2: value2 }"
+  transpiles_to: "@{ key1 = value1; key2 = value2 }"
+  examples:
+    - rush: '{ name: "DNS", port: 53 }'
+      powershell: '@{ name = "DNS"; port = 53 }'
+    - rush: |
+        ports = [
+          { port: 53,  name: "DNS" },
+          { port: 88,  name: "Kerberos" },
+        ]
+      note: "Array of hashes — very common pattern"
+  iteration:
+    syntax: 'hash.each { |k, v| puts "#{k}=#{v}" }'
+    transpiles_to: '$hash.GetEnumerator() | ForEach-Object { ... }'
+    note: "Block receives key and value parameters"
+
+# ============================================================================
+# SIZE LITERALS
+# ============================================================================
+size_literals:
+  description: "Numeric suffixes for byte sizes (PowerShell-native)"
+  examples:
+    - { rush: "1kb", value: 1024 }
+    - { rush: "5mb", value: 5242880 }
+    - { rush: "2gb", value: 2147483648 }
+  note: "These are PowerShell-native and pass through unchanged"
+
+# ============================================================================
+# TIME / DURATION (future)
+# ============================================================================
+time_duration:
+  status: "planned"
+  description: |
+    Duration methods on numbers for readable time expressions.
+    Used in examples like `Time.now - 24.hours`.
+  examples:
+    - { rush: "24.hours", note: "TimeSpan of 24 hours" }
+    - { rush: "30.minutes", note: "TimeSpan of 30 minutes" }
+    - { rush: "7.days", note: "TimeSpan of 7 days" }
+    - { rush: "Time.now - 24.hours", note: "Files modified in last 24 hours" }
+  note: "Not yet implemented. Use PowerShell [TimeSpan] directly for now."
+
+# ============================================================================
+# EXAMPLE SCRIPTS
+# ============================================================================
+# These examples define the target experience — what Rush code SHOULD
+# look and feel like. The transpiler is implemented to make these work.
+
+examples:
+  simple_deploy:
+    description: "Deploy script showing shell + scripting integration"
+    rush: |
+      #!/usr/bin/env rush
+
+      target = ARGV[0] || die("usage: deploy.rush <env>")
+      branch = $(git rev-parse --abbrev-ref HEAD).strip
+
+      unless branch == "main" || target == "staging"
+        die "can only deploy to production from main (on #{branch})"
+      end
+
+      puts "deploying #{branch} to #{target}..."
+
+      # Shell commands just work
+      git pull origin #{branch}
+      npm run build
+
+      if target == "production"
+        rsync -avz --delete dist/ prod.example.com:/var/www/
+      else
+        rsync -avz --delete dist/ staging.example.com:/var/www/
+      end
+
+      puts "done."
+
+  file_processor:
+    description: "Log file analysis showing method chaining"
+    rush: |
+      # Find the top 10 largest log files modified in the last 24 hours
+      ls /var/log
+        .select { |f| f.name =~ /\.log$/ }
+        .select { |f| f.last_write_time > Time.now - 24.hours }
+        .sort_by { |f| f.length }
+        .reverse
+        .first(10)
+        .each { |f|
+          puts "#{f.name.ljust(30)} #{(f.length / 1mb).round(1)} MB"
+        }
+
+  config_reader:
+    description: "Reading and processing structured data"
+    rush: |
+      def load_servers(path)
+        servers = []
+        for line in File.read_lines(path)
+          next if line.strip.empty? || line.start_with?("#")
+          name, host, port = line.split(",").map { |s| s.strip }
+          servers.push({ name: name, host: host, port: port.to_i })
+        end
+        servers
+      end
+
+      servers = load_servers("servers.csv")
+      for s in servers
+        puts "checking #{s.name}..."
+        result = $(ssh #{s.host} -p #{s.port} "uptime" 2>/dev/null)
+        if $?.failed?
+          warn "  UNREACHABLE"
+        else
+          puts "  #{result.strip}"
+        end
+      end
+
+  system_monitor:
+    description: "System health check showing error handling"
+    rush: |
+      def check_disk(threshold = 90)
+        df -h
+          .skip(1)  # header
+          .each { |line|
+            parts = line.split_whitespace
+            usage = parts[4].trim_end("%").to_i
+            mount = parts[5]
+            if usage > threshold
+              warn "CRITICAL: #{mount} at #{usage}%"
+            end
+          }
+      end
+
+      begin
+        check_disk(85)
+      rescue => e
+        warn "health check failed: #{e.message}"
+        exit 1
+      end

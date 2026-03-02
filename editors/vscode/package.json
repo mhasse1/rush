@@ -1,0 +1,51 @@
+{
+  "name": "rush-lang",
+  "displayName": "Rush Language",
+  "description": "Syntax highlighting for Rush (.rush) scripting language",
+  "version": "0.1.0",
+  "publisher": "rush-shell",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mhasse1/rush"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "rush",
+    "shell",
+    "scripting",
+    "powershell",
+    "transpiler"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "rush",
+        "aliases": [
+          "Rush",
+          "rush"
+        ],
+        "extensions": [
+          ".rush"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/rush-light.png",
+          "dark": "./icons/rush-dark.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rush",
+        "scopeName": "source.rush",
+        "path": "./syntaxes/rush.tmLanguage.json"
+      }
+    ]
+  }
+}

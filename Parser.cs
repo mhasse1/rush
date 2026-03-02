@@ -21,6 +21,18 @@ public class AssignmentNode : RushNode
     public AssignmentNode(string name, RushNode value) { Name = name; Value = value; }
 }
 
+/// <summary>Compound assignment: name += expr, name -= expr</summary>
+public class CompoundAssignmentNode : RushNode
+{
+    public string Name { get; }
+    public string Op { get; }  // "+=" or "-="
+    public RushNode Value { get; }
+    public CompoundAssignmentNode(string name, string op, RushNode value)
+    {
+        Name = name; Op = op; Value = value;
+    }
+}
+
 /// <summary>if / elsif / else / end</summary>
 public class IfNode : RushNode
 {
@@ -84,9 +96,10 @@ public class ParamDef
 {
     public string Name { get; }
     public RushNode? DefaultValue { get; }
-    public ParamDef(string name, RushNode? defaultValue = null)
+    public bool IsNamed { get; }
+    public ParamDef(string name, RushNode? defaultValue = null, bool isNamed = false)
     {
-        Name = name; DefaultValue = defaultValue;
+        Name = name; DefaultValue = defaultValue; IsNamed = isNamed;
     }
 }
 
@@ -97,7 +110,7 @@ public class ReturnNode : RushNode
     public ReturnNode(RushNode? value) { Value = value; }
 }
 
-/// <summary>try ... rescue ... ensure ... end</summary>
+/// <summary>try/begin ... rescue ... ensure ... end</summary>
 public class TryNode : RushNode
 {
     public List<RushNode> Body { get; }
@@ -107,13 +120,20 @@ public class TryNode : RushNode
     public TryNode(List<RushNode> body) { Body = body; }
 }
 
-/// <summary>case expr / when val ... / else ... / end</summary>
+/// <summary>case/match expr / when val ... / else ... / end</summary>
 public class CaseNode : RushNode
 {
     public RushNode Subject { get; }
     public List<(RushNode Pattern, List<RushNode> Body)> Whens { get; } = new();
     public List<RushNode>? ElseBody { get; set; }
     public CaseNode(RushNode subject) { Subject = subject; }
+}
+
+/// <summary>Loop control: next, continue, break (with optional postfix if/unless)</summary>
+public class LoopControlNode : RushNode
+{
+    public string Keyword { get; }  // "next", "continue", or "break"
+    public LoopControlNode(string keyword) { Keyword = keyword; }
 }
 
 /// <summary>A variable reference (bare name).</summary>
@@ -183,6 +203,17 @@ public class PropertyAccessNode : RushNode
     }
 }
 
+/// <summary>Safe navigation: receiver&.property (returns nil if receiver is nil)</summary>
+public class SafeNavNode : RushNode
+{
+    public RushNode Receiver { get; }
+    public string Member { get; }
+    public SafeNavNode(RushNode receiver, string member)
+    {
+        Receiver = receiver; Member = member;
+    }
+}
+
 /// <summary>A block literal: { |params| body } or do |params| ... end</summary>
 public class BlockLiteral : RushNode
 {
@@ -222,6 +253,28 @@ public class ArrayLiteralNode : RushNode
     public ArrayLiteralNode(List<RushNode> elements) { Elements = elements; }
 }
 
+/// <summary>Hash literal: { key: val, key2: val2 }</summary>
+public class HashLiteralNode : RushNode
+{
+    public List<(RushNode Key, RushNode Value)> Entries { get; }
+    public HashLiteralNode(List<(RushNode Key, RushNode Value)> entries) { Entries = entries; }
+}
+
+/// <summary>Named argument in function call: name: value</summary>
+public class NamedArgNode : RushNode
+{
+    public string Name { get; }
+    public RushNode Value { get; }
+    public NamedArgNode(string name, RushNode value) { Name = name; Value = value; }
+}
+
+/// <summary>Command substitution: $(command)</summary>
+public class CommandSubNode : RushNode
+{
+    public string Command { get; }
+    public CommandSubNode(string command) { Command = command; }
+}
+
 /// <summary>A shell command passed through to the existing pipeline.</summary>
 public class ShellPassthroughNode : RushNode
 {
@@ -239,6 +292,15 @@ public class ShellPassthroughNode : RushNode
 /// </summary>
 public class Parser
 {
+    /// <summary>
+    /// Known builtin function names that can be called without parentheses.
+    /// Example: puts "hello" instead of puts("hello")
+    /// </summary>
+    private static readonly HashSet<string> BuiltinFunctions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "puts", "print", "warn", "die", "ask", "sleep", "exit"
+    };
+
     private readonly List<RushToken> _tokens;
     private int _pos;
 
@@ -322,9 +384,23 @@ public class Parser
             RushTokenType.Def => ParseFunctionDef(),
             RushTokenType.Return => ParseReturn(),
             RushTokenType.Try => ParseTry(),
+            RushTokenType.Begin => ParseTry(),        // begin is identical to try
             RushTokenType.Case => ParseCase(),
+            RushTokenType.Next => ParseLoopControl(),
+            RushTokenType.Continue => ParseLoopControl(),
+            RushTokenType.Break => ParseLoopControl(),
             _ => ParseExpressionStatement()
         };
+    }
+
+    /// <summary>
+    /// Parse loop control: next [if cond], continue [if cond], break [if cond]
+    /// </summary>
+    private RushNode ParseLoopControl()
+    {
+        var keyword = Advance().Value; // "next", "continue", or "break"
+        var node = new LoopControlNode(keyword);
+        return WrapPostfix(node);
     }
 
     /// <summary>
@@ -332,6 +408,16 @@ public class Parser
     /// </summary>
     private RushNode ParseExpressionStatement()
     {
+        // Check for compound assignment: identifier += expr or identifier -= expr
+        if (Current.Type == RushTokenType.Identifier &&
+            Peek(1).Type is RushTokenType.PlusAssign or RushTokenType.MinusAssign)
+        {
+            var name = Advance().Value;
+            var op = Advance().Value; // += or -=
+            var value = ParseExpression();
+            return WrapPostfix(new CompoundAssignmentNode(name, op, value));
+        }
+
         // Check for assignment: identifier = expr
         if (Current.Type == RushTokenType.Identifier && Peek(1).Type == RushTokenType.Assign
             && Peek(2).Type != RushTokenType.Assign) // not ==
@@ -471,9 +557,21 @@ public class Parser
                 {
                     var paramName = Expect(RushTokenType.Identifier).Value;
                     RushNode? defaultVal = null;
-                    if (Match(RushTokenType.Assign))
+                    bool isNamed = false;
+
+                    // Check for named parameter with colon: "name:"
+                    // In def, name: default means a named parameter (keyword arg)
+                    if (Match(RushTokenType.Colon))
+                    {
+                        isNamed = true;
                         defaultVal = ParseExpression();
-                    parameters.Add(new ParamDef(paramName, defaultVal));
+                    }
+                    else if (Match(RushTokenType.Assign))
+                    {
+                        defaultVal = ParseExpression();
+                    }
+
+                    parameters.Add(new ParamDef(paramName, defaultVal, isNamed));
                 } while (Match(RushTokenType.Comma));
             }
             Expect(RushTokenType.RParen);
@@ -499,7 +597,7 @@ public class Parser
 
     private TryNode ParseTry()
     {
-        Advance(); // skip 'try'
+        Advance(); // skip 'try' or 'begin'
         SkipNewlines();
         var body = ParseBody(RushTokenType.Rescue, RushTokenType.Ensure, RushTokenType.End);
 
@@ -508,8 +606,35 @@ public class Parser
         if (Current.Type == RushTokenType.Rescue)
         {
             Advance(); // skip 'rescue'
-            if (Current.Type == RushTokenType.Identifier)
-                node.RescueVariable = Advance().Value;
+
+            // Handle: rescue => e, rescue SomeType => e, rescue e (legacy)
+            if (Current.Type == RushTokenType.Assign && Peek(1).Type == RushTokenType.GreaterThan)
+            {
+                // rescue => e
+                Advance(); // skip =
+                Advance(); // skip >
+                if (Current.Type == RushTokenType.Identifier)
+                    node.RescueVariable = Advance().Value;
+            }
+            else if (Current.Type == RushTokenType.Identifier)
+            {
+                var firstIdent = Advance().Value;
+                if (Current.Type == RushTokenType.Assign && Peek(1).Type == RushTokenType.GreaterThan)
+                {
+                    // rescue IOError => e
+                    Advance(); // skip =
+                    Advance(); // skip >
+                    if (Current.Type == RushTokenType.Identifier)
+                        node.RescueVariable = Advance().Value;
+                    // firstIdent is exception type — stored in rescue variable comment for now
+                }
+                else
+                {
+                    // rescue e (legacy: just variable name)
+                    node.RescueVariable = firstIdent;
+                }
+            }
+
             SkipNewlines();
             node.RescueBody = ParseBody(RushTokenType.Ensure, RushTokenType.End);
         }
@@ -527,7 +652,7 @@ public class Parser
 
     private CaseNode ParseCase()
     {
-        Advance(); // skip 'case'
+        Advance(); // skip 'case' or 'match'
         var subject = ParseExpression();
         SkipNewlines();
 
@@ -555,9 +680,36 @@ public class Parser
 
     // ── Expression Parsing (Precedence Climbing) ─────────────────────────
 
-    private RushNode ParseExpression()
+    /// <summary>
+    /// Public entry point for expression parsing (used by string interpolation sub-parser).
+    /// </summary>
+    public RushNode ParseExpression()
     {
-        return ParseOr();
+        return ParsePipePipe();
+    }
+
+    private RushNode ParsePipePipe()
+    {
+        var left = ParseAmpAmp();
+        while (Current.Type == RushTokenType.PipePipe)
+        {
+            Advance();
+            var right = ParseAmpAmp();
+            left = new BinaryOpNode(left, "||", right);
+        }
+        return left;
+    }
+
+    private RushNode ParseAmpAmp()
+    {
+        var left = ParseOr();
+        while (Current.Type == RushTokenType.AmpAmp)
+        {
+            Advance();
+            var right = ParseOr();
+            left = new BinaryOpNode(left, "&&", right);
+        }
+        return left;
     }
 
     private RushNode ParseOr()
@@ -601,11 +753,12 @@ public class Parser
         if (Current.Type is RushTokenType.Equals or RushTokenType.NotEquals
             or RushTokenType.LessThan or RushTokenType.GreaterThan
             or RushTokenType.LessEqual or RushTokenType.GreaterEqual
-            or RushTokenType.Match or RushTokenType.NotMatch)
+            or RushTokenType.Match or RushTokenType.MatchOp or RushTokenType.NotMatch)
         {
-            var op = Advance().Value;
+            var opToken = Advance();
+            var opStr = opToken.Type == RushTokenType.MatchOp ? "=~" : opToken.Value;
             var right = ParseRange();
-            return new BinaryOpNode(left, op, right);
+            return new BinaryOpNode(left, opStr, right);
         }
         return left;
     }
@@ -658,7 +811,7 @@ public class Parser
     }
 
     /// <summary>
-    /// Parse postfix operations: .method, .property, (args), [index]
+    /// Parse postfix operations: .method, .property, &.method, (args), [index]
     /// </summary>
     private RushNode ParsePostfix()
     {
@@ -701,6 +854,24 @@ public class Parser
                     node = new PropertyAccessNode(node, member);
                 }
             }
+            else if (Current.Type == RushTokenType.SafeNav) // &.
+            {
+                Advance(); // skip &.
+                var member = Expect(RushTokenType.Identifier).Value;
+
+                // Safe navigation supports property access and method calls
+                if (Current.Type == RushTokenType.LParen)
+                {
+                    // For now, treat as property — method call through safe nav is complex
+                    var args = ParseArgList();
+                    // Wrap in SafeNavNode with the method call result
+                    node = new SafeNavNode(node, member);
+                }
+                else
+                {
+                    node = new SafeNavNode(node, member);
+                }
+            }
             else if (Current.Type == RushTokenType.LBracket)
             {
                 Advance(); // skip [
@@ -721,7 +892,6 @@ public class Parser
     /// <summary>
     /// Determine if a '{' starts a block (has |params|) or is something else.
     /// Look ahead for { |identifier| or { |identifier, ...| pattern.
-    /// Also treat known block methods (.each, .select, etc.) as block context.
     /// </summary>
     private bool IsBlockStart()
     {
@@ -798,7 +968,7 @@ public class Parser
         return new BlockLiteral(parameters, body);
     }
 
-    /// <summary>Parse parenthesized argument list: (arg1, arg2, ...)</summary>
+    /// <summary>Parse parenthesized argument list: (arg1, arg2, name: val, ...)</summary>
     private List<RushNode> ParseArgList()
     {
         Expect(RushTokenType.LParen);
@@ -807,7 +977,20 @@ public class Parser
         {
             do
             {
-                args.Add(ParseExpression());
+                SkipNewlines();
+                // Check for named argument: identifier: value
+                if (Current.Type == RushTokenType.Identifier && Peek(1).Type == RushTokenType.Colon)
+                {
+                    var name = Advance().Value;
+                    Advance(); // skip :
+                    var value = ParseExpression();
+                    args.Add(new NamedArgNode(name, value));
+                }
+                else
+                {
+                    args.Add(ParseExpression());
+                }
+                SkipNewlines();
             } while (Match(RushTokenType.Comma));
         }
         Expect(RushTokenType.RParen);
@@ -821,7 +1004,10 @@ public class Parser
         {
             case RushTokenType.Integer:
             case RushTokenType.Float:
-                return new LiteralNode(Advance().Value, Current.Type == RushTokenType.Float ? RushTokenType.Float : RushTokenType.Integer);
+            {
+                var tok = Advance();
+                return new LiteralNode(tok.Value, tok.Type);
+            }
 
             case RushTokenType.StringLiteral:
                 return ParseStringLiteral();
@@ -853,13 +1039,23 @@ public class Parser
             case RushTokenType.LBracket:
                 return ParseArrayLiteral();
 
+            case RushTokenType.LBrace:
+                return ParseHashLiteral();
+
+            case RushTokenType.DollarParen:
+                return new CommandSubNode(Advance().Value);
+
+            case RushTokenType.DollarQuestion:
+                Advance();
+                return new VariableRefNode("$?");
+
             default:
                 throw new RushParseException($"Unexpected token {Current.Type} ('{Current.Value}') at position {Current.Position}");
         }
     }
 
     /// <summary>
-    /// Parse an identifier which could be: variable ref, function call, or command call.
+    /// Parse an identifier which could be: variable ref, function call, builtin call, or command call.
     /// </summary>
     private RushNode ParseIdentifierExpr()
     {
@@ -880,7 +1076,26 @@ public class Parser
             return new FunctionCallNode(name, args);
         }
 
+        // Builtin function call without parens: puts "hello", warn "error", die "msg"
+        if (BuiltinFunctions.Contains(name) && IsExpressionStart())
+        {
+            var arg = ParseExpression();
+            return new FunctionCallNode(name, new List<RushNode> { arg });
+        }
+
         return new VariableRefNode(name);
+    }
+
+    /// <summary>
+    /// Check if the current token could start an expression (for detecting builtin args).
+    /// </summary>
+    private bool IsExpressionStart()
+    {
+        return Current.Type is RushTokenType.StringLiteral or RushTokenType.Integer
+            or RushTokenType.Float or RushTokenType.Identifier or RushTokenType.LParen
+            or RushTokenType.LBracket or RushTokenType.Not or RushTokenType.True
+            or RushTokenType.False or RushTokenType.Nil or RushTokenType.Minus
+            or RushTokenType.Symbol or RushTokenType.DollarParen or RushTokenType.DollarQuestion;
     }
 
     /// <summary>
@@ -972,6 +1187,51 @@ public class Parser
         }
         Expect(RushTokenType.RBracket);
         return new ArrayLiteralNode(elements);
+    }
+
+    /// <summary>
+    /// Parse a hash literal: { key: val, key2: val2 }
+    /// Distinguished from blocks by the absence of |params|.
+    /// </summary>
+    private HashLiteralNode ParseHashLiteral()
+    {
+        Expect(RushTokenType.LBrace);
+        SkipNewlines();
+
+        var entries = new List<(RushNode Key, RushNode Value)>();
+
+        if (!Check(RushTokenType.RBrace))
+        {
+            do
+            {
+                SkipNewlines();
+
+                // Key: identifier followed by colon
+                if (Current.Type == RushTokenType.Identifier && Peek(1).Type == RushTokenType.Colon)
+                {
+                    var keyName = Advance().Value;
+                    Advance(); // skip colon
+                    SkipNewlines();
+                    var value = ParseExpression();
+                    entries.Add((new SymbolNode(":" + keyName), value));
+                }
+                else
+                {
+                    // Arbitrary key expression (for future use)
+                    var key = ParseExpression();
+                    Expect(RushTokenType.Colon);
+                    SkipNewlines();
+                    var value = ParseExpression();
+                    entries.Add((key, value));
+                }
+
+                SkipNewlines();
+            } while (Match(RushTokenType.Comma));
+        }
+
+        SkipNewlines();
+        Expect(RushTokenType.RBrace);
+        return new HashLiteralNode(entries);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

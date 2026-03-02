@@ -26,7 +26,8 @@ public class SyntaxHighlighter
         "export", "unset", "source", // Shell builtins
         "count", "first", "last", "skip", "tee", "distinct", // Pipe utilities
         "sum", "avg", "min", "max", // Math aggregations
-        "jobs", "fg", "bg" // Job control
+        "jobs", "fg", "bg", // Job control
+        "pushd", "popd", "dirs" // Directory stack
     };
 
     public SyntaxHighlighter(CommandTranslator translator)
@@ -160,6 +161,23 @@ public class SyntaxHighlighter
                 continue;
             }
 
+            // 2>> stderr append redirect
+            if (ch == '2' && i + 2 < input.Length
+                && input[i + 1] == '>' && input[i + 2] == '>')
+            {
+                tokens.Add(new Token(TokenType.Operator, "2>>"));
+                i += 3;
+                continue;
+            }
+
+            // 2> stderr redirect
+            if (ch == '2' && i + 1 < input.Length && input[i + 1] == '>')
+            {
+                tokens.Add(new Token(TokenType.Operator, "2>"));
+                i += 2;
+                continue;
+            }
+
             // >> append redirect
             if (ch == '>' && i + 1 < input.Length && input[i + 1] == '>')
             {
@@ -172,6 +190,14 @@ public class SyntaxHighlighter
             if (ch == '>')
             {
                 tokens.Add(new Token(TokenType.Operator, ">"));
+                i++;
+                continue;
+            }
+
+            // < stdin redirect
+            if (ch == '<')
+            {
+                tokens.Add(new Token(TokenType.Operator, "<"));
                 i++;
                 continue;
             }
@@ -224,7 +250,7 @@ public class SyntaxHighlighter
     private static bool IsBreak(string input, int i)
     {
         char ch = input[i];
-        if (ch is ' ' or '\t' or '|' or '>' or '\'' or '"' or ';') return true;
+        if (ch is ' ' or '\t' or '|' or '>' or '<' or '\'' or '"' or ';') return true;
         if (ch == '&' && i + 1 < input.Length && input[i + 1] == '&') return true;
         if (ch == '!' && i + 1 < input.Length && input[i + 1] is '!' or '$') return true;
         return false;

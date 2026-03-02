@@ -5,7 +5,8 @@ namespace Rush;
 
 /// <summary>
 /// Tab completion engine for Rush.
-/// Handles file/directory paths, command names, and PowerShell completions.
+/// Handles file/directory paths, command names, PATH binaries,
+/// environment variables, flags, and PowerShell completions.
 /// </summary>
 public class TabCompleter
 {
@@ -17,6 +18,10 @@ public class TabCompleter
     private int _completionIndex;
     private List<string> _completions = new();
     private int _completionStart; // Where the completed token starts in the input
+
+    // PATH binary cache
+    private List<string>? _pathBinaries;
+    private string? _cachedPath;
 
     public TabCompleter(Runspace runspace, CommandTranslator translator)
     {
@@ -46,18 +51,33 @@ public class TabCompleter
         _completionStart = tokenStart;
 
         if (string.IsNullOrEmpty(token) && tokenStart == 0)
-        {
-            // At the start with nothing typed — no completion
             return null;
-        }
 
-        // Determine what to complete
-        bool isFirstToken = !input[..tokenStart].TrimEnd().Contains(' ');
+        // Determine context
+        var beforeToken = input[..tokenStart].TrimEnd();
+        bool isFirstToken = !beforeToken.Contains(' ');
+        var firstWord = ExtractFirstWord(beforeToken);
 
-        if (isFirstToken)
+        if (token.StartsWith('$'))
         {
-            // Complete command names
+            // $VAR completion
+            CompleteEnvironmentVariables(token);
+        }
+        else if (token.StartsWith('-') && !isFirstToken)
+        {
+            // Flag completion
+            CompleteFlags(firstWord, token);
+        }
+        else if (isFirstToken)
+        {
+            // Complete command names (builtins + translator + PATH binaries)
             CompleteCommands(token);
+        }
+        else if (firstWord.Equals("cd", StringComparison.OrdinalIgnoreCase) ||
+                 firstWord.Equals("pushd", StringComparison.OrdinalIgnoreCase))
+        {
+            // cd/pushd: directories only
+            CompleteDirectoriesOnly(token);
         }
         else
         {
@@ -137,10 +157,12 @@ public class TabCompleter
         return (newInput, newCursor);
     }
 
+    // ── Command Completion ──────────────────────────────────────────────
+
     private void CompleteCommands(string prefix)
     {
         // Rush built-in commands
-        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "reload", "clear" };
+        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "reload", "clear", "pushd", "popd", "dirs" };
         foreach (var cmd in builtins)
         {
             if (cmd.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -155,8 +177,123 @@ public class TabCompleter
                 _completions.Add(alias);
         }
 
+        // PATH binaries
+        foreach (var bin in GetPathBinaries())
+        {
+            if (bin.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !_completions.Contains(bin))
+                _completions.Add(bin);
+        }
+
         _completions.Sort(StringComparer.OrdinalIgnoreCase);
     }
+
+    // ── PATH Binary Scanning ────────────────────────────────────────────
+
+    private List<string> GetPathBinaries()
+    {
+        var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
+        if (_pathBinaries != null && _cachedPath == pathEnv)
+            return _pathBinaries;
+
+        _cachedPath = pathEnv;
+        var binaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var dir in pathEnv.Split(':'))
+        {
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+            try
+            {
+                foreach (var file in Directory.GetFiles(dir))
+                {
+                    var name = Path.GetFileName(file);
+                    if (!string.IsNullOrEmpty(name))
+                        binaries.Add(name);
+                }
+            }
+            catch { } // Permission errors, etc.
+        }
+
+        _pathBinaries = binaries.OrderBy(b => b, StringComparer.OrdinalIgnoreCase).ToList();
+        return _pathBinaries;
+    }
+
+    // ── Directory-Only Completion (for cd, pushd) ───────────────────────
+
+    private void CompleteDirectoriesOnly(string prefix)
+    {
+        try
+        {
+            string dir;
+            string filePrefix;
+
+            var expandedPrefix = prefix;
+            if (expandedPrefix.StartsWith("~/") || expandedPrefix == "~")
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                expandedPrefix = expandedPrefix == "~" ? home : Path.Combine(home, expandedPrefix[2..]);
+            }
+
+            if (expandedPrefix.Contains('/') || expandedPrefix.Contains(Path.DirectorySeparatorChar))
+            {
+                dir = Path.GetDirectoryName(expandedPrefix) ?? ".";
+                filePrefix = Path.GetFileName(expandedPrefix);
+            }
+            else
+            {
+                dir = GetCurrentDirectory();
+                filePrefix = expandedPrefix;
+            }
+
+            if (!Directory.Exists(dir)) return;
+
+            foreach (var d in Directory.GetDirectories(dir))
+            {
+                var name = Path.GetFileName(d);
+                if (name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
+                    {
+                        var dirPart = Path.GetDirectoryName(prefix) ?? "";
+                        _completions.Add(Path.Combine(dirPart, name) + "/");
+                    }
+                    else
+                    {
+                        _completions.Add(name + "/");
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    // ── $VAR Completion ─────────────────────────────────────────────────
+
+    private void CompleteEnvironmentVariables(string token)
+    {
+        var varPrefix = token[1..]; // Strip leading $
+        foreach (var key in Environment.GetEnvironmentVariables().Keys)
+        {
+            var name = key.ToString()!;
+            if (name.StartsWith(varPrefix, StringComparison.OrdinalIgnoreCase))
+                _completions.Add("$" + name);
+        }
+        _completions.Sort(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // ── Flag Completion ─────────────────────────────────────────────────
+
+    private void CompleteFlags(string command, string flagPrefix)
+    {
+        var flags = _translator.GetFlagsForCommand(command);
+        foreach (var flag in flags)
+        {
+            if (flag.StartsWith(flagPrefix, StringComparison.OrdinalIgnoreCase))
+                _completions.Add(flag);
+        }
+        _completions.Sort(StringComparer.OrdinalIgnoreCase);
+    }
+
+    // ── Path Completion ─────────────────────────────────────────────────
 
     private void CompletePaths(string prefix)
     {
@@ -268,6 +405,19 @@ public class TabCompleter
         {
             return Directory.GetCurrentDirectory();
         }
+    }
+
+    // ── Token Extraction ────────────────────────────────────────────────
+
+    private static string ExtractFirstWord(string text)
+    {
+        // Get the command name from text before the current token
+        // Handles pipes: "ls | grep " → "grep"
+        var trimmed = text.TrimEnd();
+        var pipePos = trimmed.LastIndexOf('|');
+        if (pipePos >= 0) trimmed = trimmed[(pipePos + 1)..].TrimStart();
+        var spacePos = trimmed.IndexOf(' ');
+        return spacePos > 0 ? trimmed[..spacePos] : trimmed;
     }
 
     private static (string token, int startIndex) ExtractToken(string input, int cursor)

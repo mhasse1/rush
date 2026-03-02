@@ -436,6 +436,14 @@ public class CommandTranslator
         return _commands.Keys.OrderBy(k => k);
     }
 
+    /// <summary>Get known flags for a command (e.g., "-l", "-a" for ls).</summary>
+    public IEnumerable<string> GetFlagsForCommand(string command)
+    {
+        if (_commands.TryGetValue(command, out var mapping))
+            return mapping.FlagMap.Keys;
+        return Enumerable.Empty<string>();
+    }
+
     /// <summary>
     /// Get all command mappings (for the 'alias' built-in).
     /// </summary>

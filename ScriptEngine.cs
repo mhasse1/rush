@@ -15,7 +15,8 @@ public class ScriptEngine
     /// </summary>
     private static readonly HashSet<string> BlockStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "if", "unless", "for", "while", "until", "def", "try", "case"
+        "if", "unless", "for", "while", "until", "def", "try", "case",
+        "begin", "match"
     };
 
     /// <summary>
@@ -25,11 +26,12 @@ public class ScriptEngine
     {
         "if", "elsif", "else", "end", "unless",
         "for", "in", "while", "until",
-        "case", "when",
+        "case", "when", "match",
         "def", "return",
-        "try", "rescue", "ensure",
+        "try", "rescue", "ensure", "begin",
         "do", "and", "or", "not",
-        "true", "false", "nil"
+        "true", "false", "nil",
+        "next", "continue", "break"
     };
 
     /// <summary>
@@ -37,10 +39,24 @@ public class ScriptEngine
     /// </summary>
     private static readonly HashSet<string> RushMethods = new(StringComparer.OrdinalIgnoreCase)
     {
+        // Collection/pipeline
         "each", "select", "reject", "map", "flat_map",
         "sort_by", "first", "last", "count",
         "any?", "all?", "group_by", "uniq", "reverse",
-        "join", "to_json", "to_csv", "include?"
+        "join", "to_json", "to_csv", "include?",
+        "sort", "skip", "skip_while", "push", "compact", "flatten",
+        // String methods
+        "strip", "lstrip", "rstrip", "upcase", "downcase",
+        "split", "split_whitespace", "lines", "trim_end",
+        "start_with?", "end_with?", "empty?", "nil?",
+        "ljust", "rjust", "replace",
+        "sub", "gsub", "scan", "match",
+        // Numeric methods
+        "round", "abs", "times", "to_currency", "to_filesize", "to_percent",
+        // Type conversion
+        "to_i", "to_f", "to_s",
+        // Color methods
+        "red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"
     };
 
     public ScriptEngine(CommandTranslator translator)
@@ -84,8 +100,22 @@ public class ScriptEngine
         if (firstWord.Equals("return", StringComparison.OrdinalIgnoreCase))
             return true;
 
-        // Rule 2: Assignment — IDENTIFIER = EXPR
+        // Rule 6: Loop control keywords
+        if (firstWord.Equals("next", StringComparison.OrdinalIgnoreCase)
+            || firstWord.Equals("continue", StringComparison.OrdinalIgnoreCase)
+            || firstWord.Equals("break", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Rule 7: Built-in functions used without parens
+        if (IsBuiltinFunction(firstWord))
+            return true;
+
+        // Rule 2: Assignment — IDENTIFIER = EXPR or IDENTIFIER += EXPR
         if (IsAssignment(trimmed, firstWord))
+            return true;
+
+        // Rule 8: Compound assignment — IDENTIFIER += EXPR or IDENTIFIER -= EXPR
+        if (IsCompoundAssignment(trimmed, firstWord))
             return true;
 
         // Rule 3: Method chaining — contains .rushMethod{ or .rushMethod(
@@ -97,7 +127,10 @@ public class ScriptEngine
 
     /// <summary>
     /// Check if input looks like an assignment: bare_word = expr
-    /// where bare_word is NOT a known command, NOT a path, NOT a flag.
+    /// where bare_word is a plain identifier and = immediately follows.
+    /// The pattern WORD = EXPR is unambiguously an assignment — no shell command
+    /// takes "= something" as its first arguments. This is safe even when WORD
+    /// matches a known command name (e.g., count = 0, sort = "name").
     /// </summary>
     private bool IsAssignment(string input, string firstWord)
     {
@@ -114,10 +147,8 @@ public class ScriptEngine
         if (!char.IsLetter(firstWord[0]) && firstWord[0] != '_') return false;
         if (firstWord.Any(c => c is '-' or '/' or '\\')) return false;
 
-        // First word must NOT be a known shell command
-        if (_translator.IsKnownCommand(firstWord)) return false;
-
-        // Must NOT be a shell builtin
+        // Must NOT be a shell builtin (cd, export, set, etc. — these have
+        // special semantics where = could be meaningful)
         if (IsShellBuiltin(firstWord)) return false;
 
         // The = must come right after the first word (with optional spaces)
@@ -156,6 +187,33 @@ public class ScriptEngine
         return false;
     }
 
+    /// <summary>
+    /// Check if input looks like a compound assignment: bare_word += expr or bare_word -= expr
+    /// </summary>
+    private bool IsCompoundAssignment(string input, string firstWord)
+    {
+        if (firstWord.Length == 0 || !char.IsLetter(firstWord[0]) && firstWord[0] != '_')
+            return false;
+        if (firstWord.Any(c => c is '-' or '/' or '\\'))
+            return false;
+
+        var afterWord = input[firstWord.Length..].TrimStart();
+        return afterWord.StartsWith("+=") || afterWord.StartsWith("-=");
+    }
+
+    /// <summary>
+    /// Rush built-in functions that should be parsed as Rush syntax, not shell commands.
+    /// These are recognized when used without parentheses: puts "hello", warn "error", etc.
+    /// </summary>
+    private static bool IsBuiltinFunction(string word)
+    {
+        return word.Equals("puts", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("warn", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("die", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("print", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("ask", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static bool IsShellBuiltin(string word)
     {
         return word.Equals("cd", StringComparison.OrdinalIgnoreCase)
@@ -174,7 +232,10 @@ public class ScriptEngine
             || word.Equals("fg", StringComparison.OrdinalIgnoreCase)
             || word.Equals("bg", StringComparison.OrdinalIgnoreCase)
             || word.Equals("kill", StringComparison.OrdinalIgnoreCase)
-            || word.Equals("sync", StringComparison.OrdinalIgnoreCase);
+            || word.Equals("sync", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("pushd", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("popd", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("dirs", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -201,6 +262,7 @@ public class ScriptEngine
                     case RushTokenType.Until:
                     case RushTokenType.Def:
                     case RushTokenType.Try:
+                    case RushTokenType.Begin:
                     case RushTokenType.Case:
                     case RushTokenType.Do:
                         depth++;
@@ -247,7 +309,9 @@ public class ScriptEngine
 
     /// <summary>
     /// Parse and transpile an entire .rush script file to PowerShell code.
-    /// Adds fail-fast error handling for script mode.
+    /// Uses per-line triage to handle mixed Rush syntax and shell commands.
+    /// Rush blocks (if/for/while/def/etc.) are accumulated until complete,
+    /// while shell commands are translated through CommandTranslator.
     /// </summary>
     public string? TranspileFile(string source)
     {
@@ -261,17 +325,79 @@ public class ScriptEngine
                     source = source[(firstNewline + 1)..];
             }
 
-            var lexer = new Lexer(source);
-            var tokens = lexer.Tokenize();
-            var parser = new Parser(tokens);
-            var statements = parser.Parse();
+            // Normalize line endings and split
+            source = source.Replace("\r\n", "\n");
+            var lines = source.Split('\n');
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("$ErrorActionPreference = 'Stop'");
 
-            if (statements.Count == 0)
+            // Accumulator for multi-line Rush blocks (if/for/while/def/begin/match/etc.)
+            var rushBlock = new System.Text.StringBuilder();
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var line = lines[i];
+                var trimmed = line.TrimStart();
+
+                // If accumulating a multi-line Rush block, add every line
+                // (including empty lines, comments, and lines that look like shell commands)
+                if (rushBlock.Length > 0)
+                {
+                    rushBlock.Append(line);
+                    rushBlock.Append('\n');
+                    if (!IsIncomplete(rushBlock.ToString()))
+                    {
+                        // Block is complete — transpile the accumulated Rush code
+                        var transpiled = TranspileLine(rushBlock.ToString().TrimEnd());
+                        if (transpiled != null)
+                            sb.AppendLine(transpiled);
+                        rushBlock.Clear();
+                    }
+                    continue;
+                }
+
+                // Top-level: skip empty lines and comment-only lines
+                if (string.IsNullOrWhiteSpace(trimmed))
+                    continue;
+                if (trimmed.StartsWith('#'))
+                    continue;
+
+                // Triage: Rush syntax or shell command?
+                if (IsRushSyntax(trimmed))
+                {
+                    // Start accumulating Rush code
+                    rushBlock.Append(line);
+                    rushBlock.Append('\n');
+                    if (!IsIncomplete(rushBlock.ToString()))
+                    {
+                        // Single-line Rush statement — transpile immediately
+                        var transpiled = TranspileLine(rushBlock.ToString().TrimEnd());
+                        if (transpiled != null)
+                            sb.AppendLine(transpiled);
+                        rushBlock.Clear();
+                    }
+                }
+                else
+                {
+                    // Shell command — translate through CommandTranslator
+                    var translated = _translator.Translate(trimmed);
+                    sb.AppendLine(translated ?? trimmed);
+                }
+            }
+
+            // Handle any remaining incomplete Rush block (unterminated — likely an error)
+            if (rushBlock.Length > 0)
+            {
+                var transpiled = TranspileLine(rushBlock.ToString().TrimEnd());
+                if (transpiled != null)
+                    sb.AppendLine(transpiled);
+            }
+
+            var result = sb.ToString().TrimEnd();
+            // Return null if only the ErrorActionPreference header was emitted
+            if (result == "$ErrorActionPreference = 'Stop'" || string.IsNullOrWhiteSpace(result))
                 return null;
-
-            // Script mode: fail-fast on errors
-            var psCode = "$ErrorActionPreference = 'Stop'\n" + _transpiler.Transpile(statements);
-            return psCode;
+            return result;
         }
         catch (RushParseException ex)
         {

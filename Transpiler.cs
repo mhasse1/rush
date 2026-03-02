@@ -11,6 +11,22 @@ public class RushTranspiler
 {
     private readonly CommandTranslator _translator;
 
+    /// <summary>
+    /// ANSI color codes for string color methods.
+    /// "text".green → ANSI-colored string that works in Write-Output and variables.
+    /// </summary>
+    private static readonly Dictionary<string, string> AnsiColors = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["red"] = "31",
+        ["green"] = "32",
+        ["yellow"] = "33",
+        ["blue"] = "34",
+        ["magenta"] = "35",
+        ["cyan"] = "36",
+        ["white"] = "37",
+        ["gray"] = "90",
+    };
+
     public RushTranspiler(CommandTranslator translator)
     {
         _translator = translator;
@@ -39,6 +55,7 @@ public class RushTranspiler
     public string TranspileNode(RushNode node) => node switch
     {
         AssignmentNode a => TranspileAssignment(a),
+        CompoundAssignmentNode ca => TranspileCompoundAssignment(ca),
         IfNode i => TranspileIf(i),
         PostfixIfNode p => TranspilePostfixIf(p),
         ForNode f => TranspileFor(f),
@@ -47,6 +64,7 @@ public class RushTranspiler
         ReturnNode r => TranspileReturn(r),
         TryNode t => TranspileTry(t),
         CaseNode c => TranspileCase(c),
+        LoopControlNode lc => TranspileLoopControl(lc),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         _ => TranspileExpression(node)
     };
@@ -56,6 +74,24 @@ public class RushTranspiler
     private string TranspileAssignment(AssignmentNode node)
     {
         return $"${node.Name} = {TranspileExpression(node.Value)}";
+    }
+
+    private string TranspileCompoundAssignment(CompoundAssignmentNode node)
+    {
+        // += and -= pass through to PowerShell directly
+        return $"${node.Name} {node.Op} {TranspileExpression(node.Value)}";
+    }
+
+    private string TranspileLoopControl(LoopControlNode node)
+    {
+        // next and continue both map to PowerShell's continue
+        // break maps to PowerShell's break
+        return node.Keyword.ToLower() switch
+        {
+            "next" or "continue" => "continue",
+            "break" => "break",
+            _ => node.Keyword
+        };
     }
 
     private string TranspileIf(IfNode node)
@@ -216,20 +252,34 @@ public class RushTranspiler
     public string TranspileExpression(RushNode node) => node switch
     {
         LiteralNode lit => TranspileLiteral(lit),
-        VariableRefNode v => $"${v.Name}",
+        VariableRefNode v => TranspileVariableRef(v),
         BinaryOpNode b => TranspileBinary(b),
         UnaryOpNode u => TranspileUnary(u),
         MethodCallNode m => TranspileMethodCall(m),
         FunctionCallNode f => TranspileFunctionCall(f),
         PropertyAccessNode p => TranspilePropertyAccess(p),
+        SafeNavNode sn => TranspileSafeNav(sn),
         InterpolatedStringNode s => TranspileInterpolatedString(s),
         RangeNode r => $"{TranspileExpression(r.Start)}..{TranspileExpression(r.End)}",
         SymbolNode sym => $"'{sym.Name[1..]}'", // :name → 'name'
         ArrayLiteralNode a => TranspileArrayLiteral(a),
+        HashLiteralNode h => TranspileHashLiteral(h),
+        CommandSubNode cmd => TranspileCommandSub(cmd),
+        NamedArgNode na => $"-{CapitalizeProperty(na.Name)} {TranspileExpression(na.Value)}",
         AssignmentNode a => TranspileAssignment(a),
+        CompoundAssignmentNode ca => TranspileCompoundAssignment(ca),
+        LoopControlNode lc => TranspileLoopControl(lc),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         _ => $"<# unsupported: {node.GetType().Name} #>"
     };
+
+    private string TranspileVariableRef(VariableRefNode node)
+    {
+        // Special variable $? → last exit status
+        if (node.Name == "$?")
+            return "$LASTEXITCODE";
+        return $"${node.Name}";
+    }
 
     private string TranspileLiteral(LiteralNode node)
     {
@@ -261,22 +311,63 @@ public class RushTranspiler
         };
     }
 
+    private string TranspileHashLiteral(HashLiteralNode node)
+    {
+        if (node.Entries.Count == 0)
+            return "@{}";
+
+        var entries = string.Join("; ", node.Entries.Select(e =>
+        {
+            var key = e.Key is SymbolNode sym ? sym.Name[1..] : TranspileExpression(e.Key);
+            return $"{key} = {TranspileExpression(e.Value)}";
+        }));
+        return $"@{{ {entries} }}";
+    }
+
+    private string TranspileCommandSub(CommandSubNode node)
+    {
+        // Translate the captured command through CommandTranslator
+        var translated = _translator.Translate(node.Command) ?? node.Command;
+        return $"({translated})";
+    }
+
+    private string TranspileSafeNav(SafeNavNode node)
+    {
+        var receiver = TranspileExpression(node.Receiver);
+        var member = CapitalizeProperty(node.Member);
+        return $"$(if ($null -ne {receiver}) {{ {receiver}.{member} }})";
+    }
+
     /// <summary>
     /// Transpile Rush method calls to PowerShell pipeline operators.
     /// This is where .each, .select, .map, etc. become PS cmdlets.
+    /// Also handles string methods, numeric methods, color methods, and stdlib calls.
     /// </summary>
     private string TranspileMethodCall(MethodCallNode node)
     {
+        // ── Stdlib: File.method() ──────────────────────────────────────
+        if (IsStdlibReceiver(node.Receiver, "File"))
+            return TranspileFileMethod(node);
+
+        // ── Stdlib: Dir.method() ───────────────────────────────────────
+        if (IsStdlibReceiver(node.Receiver, "Dir"))
+            return TranspileDirMethod(node);
+
+        // ── env["KEY"] or env[index] ───────────────────────────────────
+        if (IsStdlibReceiver(node.Receiver, "env") && node.Method == "[]")
+            return TranspileEnvAccess(node);
+
         var receiver = TranspileExpression(node.Receiver);
 
         return node.Method switch
         {
+            // ── Collection/pipeline methods ────────────────────────────
             "each" => $"{receiver} | ForEach-Object {{ {TranspileBlockBody(node.Block!)} }}",
             "select" => $"{receiver} | Where-Object {{ {TranspileBlockCondition(node.Block!)} }}",
             "reject" => $"{receiver} | Where-Object {{ -not ({TranspileBlockCondition(node.Block!)}) }}",
             "map" => $"{receiver} | ForEach-Object {{ {TranspileBlockBody(node.Block!)} }}",
             "flat_map" => $"{receiver} | ForEach-Object {{ {TranspileBlockBody(node.Block!)} }}",
-            "sort_by" => TranspileSortBy(receiver, node.Args),
+            "sort_by" => TranspileSortBy(receiver, node),
             "first" => TranspileFirst(receiver, node.Args),
             "last" => TranspileLast(receiver, node.Args),
             "count" => $"@({receiver}).Count",
@@ -284,41 +375,181 @@ public class RushTranspiler
             "all?" => TranspileAll(receiver, node.Block),
             "group_by" => TranspileGroupBy(receiver, node.Args),
             "uniq" => $"{receiver} | Select-Object -Unique",
-            "reverse" => $"@({receiver})[({@receiver}).Count..0]",
+            "reverse" => $"@({receiver})[(@({receiver}).Count - 1)..0]",
             "join" => TranspileJoin(receiver, node.Args),
             "to_json" => $"{receiver} | ConvertTo-Json -Depth 5",
             "to_csv" => $"{receiver} | ConvertTo-Csv -NoTypeInformation",
             "include?" => TranspileInclude(receiver, node.Args),
+            "sort" => $"{receiver} | Sort-Object",
+            "skip" => TranspileSkip(receiver, node.Args),
+            "skip_while" => TranspileSkipWhile(receiver, node.Block),
+            "push" => $"[void]({receiver}).Add({TranspileExpression(node.Args[0])})",
+            "compact" => $"{receiver} | Where-Object {{ $null -ne $_ }}",
+            "flatten" => $"{receiver} | ForEach-Object {{ $_ }}",
+
+            // ── String methods ─────────────────────────────────────────
+            "strip" => $"({receiver}).Trim()",
+            "lstrip" => $"({receiver}).TrimStart()",
+            "rstrip" => $"({receiver}).TrimEnd()",
+            "trim_end" => node.Args.Count > 0
+                ? $"({receiver}).TrimEnd({TranspileExpression(node.Args[0])})"
+                : $"({receiver}).TrimEnd()",
+            "upcase" => $"({receiver}).ToUpper()",
+            "downcase" => $"({receiver}).ToLower()",
+            "split" => TranspileSplit(receiver, node.Args),
+            "split_whitespace" => $"({receiver}).Trim() -split '\\s+'",
+            "lines" => $"({receiver}) -split '\\r?\\n'",
+            "start_with?" => $"({receiver}).StartsWith({TranspileExpression(node.Args[0])})",
+            "end_with?" => $"({receiver}).EndsWith({TranspileExpression(node.Args[0])})",
+            "empty?" => $"(({receiver}).Length -eq 0)",
+            "nil?" => $"($null -eq {receiver})",
+            "replace" => $"({receiver}).Replace({string.Join(", ", node.Args.Select(TranspileExpression))})",
+            "ljust" => $"({receiver}).PadRight({TranspileExpression(node.Args[0])})",
+            "rjust" => $"({receiver}).PadLeft({TranspileExpression(node.Args[0])})",
+            "to_i" => $"[int]({receiver})",
+            "to_f" => $"[double]({receiver})",
+            "to_s" => $"[string]({receiver})",
+
+            // ── Regex string methods ───────────────────────────────────
+            "sub" => TranspileSub(receiver, node.Args),
+            "gsub" => TranspileGsub(receiver, node.Args),
+            "scan" => TranspileScan(receiver, node.Args),
+            "match" => TranspileMatch(receiver, node.Args),
+
+            // ── Numeric methods ────────────────────────────────────────
+            "round" => TranspileRound(receiver, node.Args),
+            "abs" => $"[Math]::Abs({receiver})",
+            "times" => TranspileTimes(receiver, node.Block),
+            "to_currency" => TranspileToCurrency(receiver, node.Args),
+            "to_filesize" => TranspileToFilesize(receiver),
+            "to_percent" => TranspileToPercent(receiver, node.Args),
+
+            // ── Color methods ──────────────────────────────────────────
+            "red" or "green" or "blue" or "cyan" or "yellow"
+                or "magenta" or "white" or "gray"
+                => TranspileColorMethod(receiver, node.Method),
+
+            // ── Index access ───────────────────────────────────────────
             "[]" => $"{receiver}[{TranspileExpression(node.Args[0])}]",
-            _ => $"{receiver}.{node.Method}({string.Join(", ", node.Args.Select(TranspileExpression))})"
+
+            // ── Default: pass through as .NET method call ──────────────
+            _ => TranspileDefaultMethod(receiver, node)
         };
     }
 
+    /// <summary>
+    /// Transpile function calls, including built-in functions (puts, warn, die, etc.)
+    /// </summary>
     private string TranspileFunctionCall(FunctionCallNode node)
     {
-        // Check if it's a known command name — translate through CommandTranslator
+        // ── Built-in functions ─────────────────────────────────────────
+        switch (node.Name.ToLower())
+        {
+            case "puts":
+                return TranspilePuts(node.Args);
+            case "print":
+                return TranspilePrint(node.Args);
+            case "warn":
+                if (node.Args.Count > 0)
+                    return $"Write-Warning {TranspileExpression(node.Args[0])}";
+                return "Write-Warning ''";
+            case "die":
+                if (node.Args.Count > 0)
+                    return $"throw {TranspileExpression(node.Args[0])}";
+                return "throw 'died'";
+            case "ask":
+                return TranspileAsk(node.Args);
+            case "sleep":
+                if (node.Args.Count > 0)
+                    return $"Start-Sleep -Seconds {TranspileExpression(node.Args[0])}";
+                return "Start-Sleep -Seconds 1";
+            case "exit":
+                if (node.Args.Count > 0)
+                    return $"exit {TranspileExpression(node.Args[0])}";
+                return "exit";
+            case "ping":
+                return TranspilePing(node.Args);
+        }
+
+        // ── Known commands → translate through CommandTranslator ───────
         if (_translator.IsKnownCommand(node.Name))
         {
             var argsStr = string.Join(" ", node.Args.Select(a =>
             {
                 var expr = TranspileExpression(a);
-                // Strip $ prefix for command args that are string literals
                 return expr;
             }));
             var cmdLine = string.IsNullOrEmpty(argsStr) ? node.Name : $"{node.Name} {argsStr}";
             return $"@({_translator.Translate(cmdLine) ?? cmdLine})";
         }
 
-        // Regular function call
+        // ── Regular function call ──────────────────────────────────────
         var args = string.Join(" ", node.Args.Select(TranspileExpression));
         if (string.IsNullOrEmpty(args))
             return node.Name;
         return $"{node.Name} {args}";
     }
 
+    /// <summary>
+    /// Transpile property access with special handling for env, $?, color methods, and common methods.
+    /// </summary>
     private string TranspilePropertyAccess(PropertyAccessNode node)
     {
-        return $"{TranspileExpression(node.Receiver)}.{node.Property}";
+        var prop = node.Property;
+
+        // ── env.HOME → $env:HOME ───────────────────────────────────────
+        if (node.Receiver is VariableRefNode vr && vr.Name == "env")
+            return $"$env:{prop}";
+
+        // ── $?.ok? / $?.failed? / $?.code ──────────────────────────────
+        if (node.Receiver is VariableRefNode vr2 && vr2.Name == "$?")
+        {
+            return prop switch
+            {
+                "ok?" => "($LASTEXITCODE -eq 0)",
+                "failed?" => "($LASTEXITCODE -ne 0)",
+                "code" => "$LASTEXITCODE",
+                _ => "$LASTEXITCODE"
+            };
+        }
+
+        var receiver = TranspileExpression(node.Receiver);
+
+        // ── Color methods (zero-arg form) ──────────────────────────────
+        if (AnsiColors.ContainsKey(prop))
+            return TranspileColorMethod(receiver, prop);
+
+        // ── Known zero-arg methods accessed as properties ──────────────
+        return prop switch
+        {
+            "empty?" => $"(({receiver}).Length -eq 0)",
+            "nil?" => $"($null -eq {receiver})",
+            "strip" => $"({receiver}).Trim()",
+            "lstrip" => $"({receiver}).TrimStart()",
+            "rstrip" => $"({receiver}).TrimEnd()",
+            "upcase" => $"({receiver}).ToUpper()",
+            "downcase" => $"({receiver}).ToLower()",
+            "to_i" => $"[int]({receiver})",
+            "to_f" => $"[double]({receiver})",
+            "to_s" => $"[string]({receiver})",
+            "length" => $"({receiver}).Length",
+            "size" => $"@({receiver}).Count",
+            "lines" => $"({receiver}) -split '\\r?\\n'",
+            "sort" => $"{receiver} | Sort-Object",
+            "reverse" => $"@({receiver})[(@({receiver}).Count - 1)..0]",
+            "uniq" => $"{receiver} | Select-Object -Unique",
+            "count" => $"@({receiver}).Count",
+            "first" => $"{receiver} | Select-Object -First 1",
+            "last" => $"{receiver} | Select-Object -Last 1",
+            "abs" => $"[Math]::Abs({receiver})",
+            "to_currency" => $"('$' + [string]::Format('{{0:N2}}', {receiver}))",
+            "to_filesize" => TranspileToFilesize(receiver),
+            "to_percent" => $"([string]::Format('{{0:P1}}', {receiver}))",
+            "ok?" => $"({receiver} -eq 0)",
+            "failed?" => $"({receiver} -ne 0)",
+            "message" => $"{receiver}.Message",
+            _ => $"{receiver}.{CapitalizeProperty(prop)}"
+        };
     }
 
     private string TranspileInterpolatedString(InterpolatedStringNode node)
@@ -353,17 +584,184 @@ public class RushTranspiler
         return $"@({elements})";
     }
 
+    // ── Built-in Function Helpers ──────────────────────────────────────
+
+    /// <summary>
+    /// Transpile puts — detects color methods on the argument for Write-Host output.
+    /// </summary>
+    private string TranspilePuts(List<RushNode> args)
+    {
+        if (args.Count == 0) return "Write-Output ''";
+
+        var arg = args[0];
+
+        // puts "text".green → Write-Host "text" -ForegroundColor Green
+        if (arg is PropertyAccessNode pa && AnsiColors.ContainsKey(pa.Property))
+        {
+            var inner = TranspileExpression(pa.Receiver);
+            var color = char.ToUpper(pa.Property[0]) + pa.Property[1..];
+            return $"Write-Host {inner} -ForegroundColor {color}";
+        }
+
+        // puts expr.method().color → Write-Host (transpiled_expr) -ForegroundColor Color
+        if (arg is MethodCallNode mc && mc.Args.Count == 0 && mc.Block == null
+            && AnsiColors.ContainsKey(mc.Method))
+        {
+            var inner = TranspileExpression(mc.Receiver);
+            var color = char.ToUpper(mc.Method[0]) + mc.Method[1..];
+            return $"Write-Host {inner} -ForegroundColor {color}";
+        }
+
+        var expr = TranspileExpression(arg);
+        // Wrap in parens if expression contains PS operators that could be
+        // misinterpreted as Write-Output parameters (e.g., -join, -split, -match)
+        if (expr.Contains(" -") || expr.StartsWith("["))
+            return $"Write-Output ({expr})";
+        return $"Write-Output {expr}";
+    }
+
+    private string TranspilePrint(List<RushNode> args)
+    {
+        if (args.Count == 0) return "Write-Host '' -NoNewline";
+        return $"Write-Host {TranspileExpression(args[0])} -NoNewline";
+    }
+
+    /// <summary>
+    /// Transpile ask() — interactive prompt.
+    /// ask("prompt") → Read-Host "prompt"
+    /// ask("prompt", char: true) → [Console]::ReadKey() single-character input
+    /// </summary>
+    private string TranspileAsk(List<RushNode> args)
+    {
+        if (args.Count == 0) return "Read-Host";
+
+        // Check for char: true named argument
+        var hasChar = args.Any(a => a is NamedArgNode na
+            && na.Name == "char"
+            && na.Value is LiteralNode lit && lit.Value == "true");
+
+        var prompt = TranspileExpression(args[0]);
+
+        if (hasChar)
+            return $"Write-Host {prompt} -NoNewline; [Console]::ReadKey($true).KeyChar";
+
+        return $"Read-Host {prompt}";
+    }
+
+    /// <summary>
+    /// Transpile ping() — cross-platform ping helper.
+    /// </summary>
+    private string TranspilePing(List<RushNode> args)
+    {
+        if (args.Count == 0) return "$false";
+        var host = TranspileExpression(args[0]);
+
+        // Check for named args
+        var countArg = args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "count");
+        var count = countArg != null ? TranspileExpression(countArg.Value) : "1";
+
+        var quietArg = args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "quiet");
+        var quiet = quietArg != null;
+
+        if (quiet)
+            return $"(Test-Connection {host} -Count {count} -Quiet)";
+        return $"Test-Connection {host} -Count {count}";
+    }
+
+    // ── Stdlib Transpilation ────────────────────────────────────────────
+
+    private string TranspileFileMethod(MethodCallNode node)
+    {
+        return node.Method switch
+        {
+            "read" => $"Get-Content {TranspileExpression(node.Args[0])} -Raw",
+            "read_lines" => $"@(Get-Content {TranspileExpression(node.Args[0])})",
+            "write" => $"Set-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
+            "append" => $"Add-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
+            "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])})",
+            "delete" => $"Remove-Item {TranspileExpression(node.Args[0])}",
+            "size" => $"(Get-Item {TranspileExpression(node.Args[0])}).Length",
+            _ => TranspileDefaultMethod(TranspileExpression(node.Receiver), node)
+        };
+    }
+
+    private string TranspileDirMethod(MethodCallNode node)
+    {
+        return node.Method switch
+        {
+            "files" => TranspileDirFiles(node),
+            "dirs" => node.Args.Count > 0
+                ? $"Get-ChildItem {TranspileExpression(node.Args[0])} -Directory"
+                : "Get-ChildItem -Directory",
+            "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])} -PathType Container)",
+            "mkdir" => $"New-Item -ItemType Directory -Force -Path {TranspileExpression(node.Args[0])}",
+            _ => TranspileDefaultMethod(TranspileExpression(node.Receiver), node)
+        };
+    }
+
+    private string TranspileDirFiles(MethodCallNode node)
+    {
+        var path = node.Args.Count > 0 ? TranspileExpression(node.Args[0]) : "'.'";
+
+        // Check for recursive: true named arg
+        var recursiveArg = node.Args.OfType<NamedArgNode>()
+            .FirstOrDefault(a => a.Name == "recursive");
+        var isRecursive = recursiveArg != null
+            && recursiveArg.Value is LiteralNode lit
+            && lit.Value == "true";
+
+        return isRecursive
+            ? $"Get-ChildItem {path} -File -Recurse"
+            : $"Get-ChildItem {path} -File";
+    }
+
+    /// <summary>
+    /// Transpile env["KEY"] → $env:KEY
+    /// </summary>
+    private string TranspileEnvAccess(MethodCallNode node)
+    {
+        var key = node.Args[0];
+        if (key is LiteralNode lit)
+        {
+            var keyName = lit.Value.Trim('"', '\'');
+            return $"$env:{keyName}";
+        }
+        // Dynamic key: env[variable]
+        return $"[Environment]::GetEnvironmentVariable({TranspileExpression(key)})";
+    }
+
     // ── Method Call Helpers ──────────────────────────────────────────────
 
-    private string TranspileSortBy(string receiver, List<RushNode> args)
+    private string TranspileColorMethod(string receiver, string color)
     {
-        if (args.Count == 0)
-            return $"{receiver} | Sort-Object";
+        if (!AnsiColors.TryGetValue(color, out var code))
+            return $"{receiver}.{color}";
 
-        var prop = ExtractSymbolName(args[0]);
-        var desc = args.Count > 1 && ExtractSymbolName(args[1]) == "desc";
-        var descFlag = desc ? " -Descending" : "";
-        return $"{receiver} | Sort-Object -Property {prop}{descFlag}";
+        // Use PowerShell 7's `e escape for ANSI codes
+        // This makes colored strings work in variables, pipelines, and Write-Output
+        return $"\"`e[{code}m$({receiver})`e[0m\"";
+    }
+
+    private string TranspileSortBy(string receiver, MethodCallNode node)
+    {
+        // sort_by with block: .sort_by { |x| x.name }
+        if (node.Block != null)
+        {
+            var paramName = node.Block.Params.Count > 0 ? node.Block.Params[0] : "_";
+            var body = TranspileBlockBody(node.Block);
+            return $"{receiver} | Sort-Object {{ {body} }}";
+        }
+
+        // sort_by with symbol arg: .sort_by(:name)
+        if (node.Args.Count > 0)
+        {
+            var prop = ExtractSymbolName(node.Args[0]);
+            var desc = node.Args.Count > 1 && ExtractSymbolName(node.Args[1]) == "desc";
+            var descFlag = desc ? " -Descending" : "";
+            return $"{receiver} | Sort-Object -Property {prop}{descFlag}";
+        }
+
+        return $"{receiver} | Sort-Object";
     }
 
     private string TranspileFirst(string receiver, List<RushNode> args)
@@ -418,6 +816,109 @@ public class RushTranspiler
         return "$false";
     }
 
+    private string TranspileSplit(string receiver, List<RushNode> args)
+    {
+        if (args.Count > 0)
+            return $"({receiver}) -split {TranspileExpression(args[0])}";
+        return $"({receiver}) -split '\\s+'";
+    }
+
+    private string TranspileSkip(string receiver, List<RushNode> args)
+    {
+        if (args.Count > 0)
+            return $"{receiver} | Select-Object -Skip {TranspileExpression(args[0])}";
+        return $"{receiver} | Select-Object -Skip 1";
+    }
+
+    private string TranspileSkipWhile(string receiver, BlockLiteral? block)
+    {
+        if (block == null) return receiver;
+        // PowerShell doesn't have skip_while natively — use a helper pattern
+        var condition = TranspileBlockCondition(block);
+        return $"& {{ $skipping = $true; {receiver} | ForEach-Object {{ if ($skipping -and ({condition})) {{ return }}; $skipping = $false; $_ }} }}";
+    }
+
+    // ── Regex String Methods ────────────────────────────────────────────
+
+    private string TranspileSub(string receiver, List<RushNode> args)
+    {
+        if (args.Count < 2) return receiver;
+        // .sub replaces first match only
+        var pattern = TranspileExpression(args[0]);
+        var replacement = TranspileExpression(args[1]);
+        return $"([regex]{pattern}).Replace({receiver}, {replacement}, 1)";
+    }
+
+    private string TranspileGsub(string receiver, List<RushNode> args)
+    {
+        if (args.Count < 2) return receiver;
+        // .gsub replaces all matches — PowerShell -replace is global by default
+        return $"({receiver} -replace {TranspileExpression(args[0])}, {TranspileExpression(args[1])})";
+    }
+
+    private string TranspileScan(string receiver, List<RushNode> args)
+    {
+        if (args.Count == 0) return receiver;
+        return $"[regex]::Matches({receiver}, {TranspileExpression(args[0])}).Value";
+    }
+
+    private string TranspileMatch(string receiver, List<RushNode> args)
+    {
+        if (args.Count == 0) return receiver;
+        return $"[regex]::Match({receiver}, {TranspileExpression(args[0])})";
+    }
+
+    // ── Numeric Methods ─────────────────────────────────────────────────
+
+    private string TranspileRound(string receiver, List<RushNode> args)
+    {
+        if (args.Count > 0)
+            return $"[Math]::Round({receiver}, {TranspileExpression(args[0])})";
+        return $"[Math]::Round({receiver})";
+    }
+
+    private string TranspileTimes(string receiver, BlockLiteral? block)
+    {
+        if (block == null) return receiver;
+        var body = TranspileBlockBody(block);
+        return $"0..({receiver} - 1) | ForEach-Object {{ {body} }}";
+    }
+
+    private string TranspileToCurrency(string receiver, List<RushNode> args)
+    {
+        // Check for pad: N named argument
+        var padArg = args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "pad");
+        if (padArg != null)
+        {
+            var pad = TranspileExpression(padArg.Value);
+            return $"('$' + [string]::Format('{{0:N2}}', {receiver})).PadLeft({pad})";
+        }
+        return $"('$' + [string]::Format('{{0:N2}}', {receiver}))";
+    }
+
+    private string TranspileToFilesize(string receiver)
+    {
+        // Human-readable file size using PowerShell logic
+        return $"& {{ $s = {receiver}; if ($s -ge 1gb) {{ '{0:N1} GB' -f ($s/1gb) }} elseif ($s -ge 1mb) {{ '{0:N1} MB' -f ($s/1mb) }} elseif ($s -ge 1kb) {{ '{0:N1} KB' -f ($s/1kb) }} else {{ \"$s B\" }} }}";
+    }
+
+    private string TranspileToPercent(string receiver, List<RushNode> args)
+    {
+        var decimals = args.OfType<NamedArgNode>()
+            .FirstOrDefault(a => a.Name == "decimals");
+        var format = decimals != null ? $"N{TranspileExpression(decimals.Value)}" : "N1";
+        return $"(({receiver} * 100).ToString('{format}') + '%')";
+    }
+
+    // ── Default Method Transpilation ────────────────────────────────────
+
+    private string TranspileDefaultMethod(string receiver, MethodCallNode node)
+    {
+        var method = CapitalizeProperty(node.Method);
+        var args = string.Join(", ", node.Args.Where(a => a is not NamedArgNode).Select(TranspileExpression));
+        return $"{receiver}.{method}({args})";
+    }
+
     // ── Block Transpilation ─────────────────────────────────────────────
 
     /// <summary>
@@ -468,17 +969,18 @@ public class RushTranspiler
     {
         if (paramName == "_") return psCode;
         // Replace $paramName with $_ (word boundary aware)
+        // NOTE: In .NET Regex.Replace, $_ is a special substitution token meaning
+        // "entire input string". Use $$ to get a literal $ in the replacement.
         return System.Text.RegularExpressions.Regex.Replace(
             psCode,
             @"\$" + System.Text.RegularExpressions.Regex.Escape(paramName) + @"(?!\w)",
-            "$_");
+            "$$_");
     }
 
     // ── Operator Translation ────────────────────────────────────────────
 
     /// <summary>
     /// Translate Rush comparison operators to PowerShell operators.
-    /// Reuses the same logic as CommandTranslator.TranslateWhereOperator().
     /// </summary>
     private static string TranslateOperator(string op) => op switch
     {
@@ -489,10 +991,13 @@ public class RushTranspiler
         "==" => "-eq",
         "!=" => "-ne",
         "~" => "-match",
+        "=~" => "-match",
         "!~" => "-notmatch",
         "and" => "-and",
         "or" => "-or",
         "not" => "-not",
+        "&&" => "-and",
+        "||" => "-or",
         "+" => "+",
         "-" => "-",
         "*" => "*",
@@ -527,6 +1032,8 @@ public class RushTranspiler
         return sb.ToString();
     }
 
+    // ── Utility Helpers ─────────────────────────────────────────────────
+
     /// <summary>
     /// Extract a symbol name from a SymbolNode or string.
     /// :Name → "Name", "Name" → "Name"
@@ -538,5 +1045,47 @@ public class RushTranspiler
         if (node is LiteralNode lit)
             return lit.Value.Trim('"', '\'');
         return TranspileExpression(node);
+    }
+
+    /// <summary>
+    /// Check if a receiver node is a stdlib class reference (File, Dir, etc.)
+    /// </summary>
+    private static bool IsStdlibReceiver(RushNode receiver, string name)
+    {
+        return receiver is VariableRefNode vr
+            && vr.Name.Equals(name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Convert Rush snake_case property names to .NET PascalCase.
+    /// Handles: snake_case → PascalCase, lowercase → Capitalized, UPPERCASE → unchanged.
+    /// PowerShell is case-insensitive for property names, but PascalCase is conventional.
+    /// </summary>
+    private static string CapitalizeProperty(string name)
+    {
+        // Predicate methods: strip trailing ? for .NET mapping
+        if (name.EndsWith('?'))
+        {
+            var baseName = name[..^1];
+            return "Is" + CapitalizeProperty(baseName);
+        }
+
+        // snake_case → PascalCase
+        if (name.Contains('_'))
+        {
+            return string.Join("", name.Split('_')
+                .Where(s => s.Length > 0)
+                .Select(s => char.ToUpper(s[0]) + s[1..]));
+        }
+
+        // Already starts with uppercase → leave it alone (e.g., IPAddress, Name)
+        if (name.Length > 0 && char.IsUpper(name[0]))
+            return name;
+
+        // lowercase → capitalize first letter (name → Name)
+        if (name.Length > 0)
+            return char.ToUpper(name[0]) + name[1..];
+
+        return name;
     }
 }

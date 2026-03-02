@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Management.Automation;
 using System.Management.Automation.Host;
 using System.Management.Automation.Runspaces;
@@ -5,8 +6,8 @@ using System.Management.Automation.Runspaces;
 namespace Rush;
 
 /// <summary>
-/// Manages background jobs. Uses a RunspacePool separate from the main
-/// interactive runspace so background commands don't block the REPL.
+/// Manages background and suspended jobs. Uses a RunspacePool separate from
+/// the main interactive runspace so background commands don't block the REPL.
 /// </summary>
 public class JobManager : IDisposable
 {
@@ -38,7 +39,23 @@ public class JobManager : IDisposable
         return job.JobId;
     }
 
-    /// <summary>All jobs (active and completed).</summary>
+    /// <summary>Register a suspended native process (Ctrl+Z on TUI command).</summary>
+    public int RegisterSuspendedProcess(string command, Process process)
+    {
+        var job = new JobInfo(_nextId++, command, process, DateTime.Now);
+        _jobs.Add(job);
+        return job.JobId;
+    }
+
+    /// <summary>Register a suspended PS pipeline (Ctrl+Z on foreground command).</summary>
+    public int RegisterSuspendedPipeline(string command, string translatedCommand)
+    {
+        var job = new JobInfo(_nextId++, command, translatedCommand, DateTime.Now);
+        _jobs.Add(job);
+        return job.JobId;
+    }
+
+    /// <summary>All jobs (active, completed, and suspended).</summary>
     public IReadOnlyList<JobInfo> GetJobs() => _jobs.AsReadOnly();
 
     /// <summary>Look up a single job by ID.</summary>
@@ -59,7 +76,14 @@ public class JobManager : IDisposable
     {
         var job = GetJob(jobId);
         if (job == null) return false;
-        try { job.Ps.Stop(); } catch { }
+        if (job.SuspendedProcess != null)
+        {
+            try { job.SuspendedProcess.Kill(); } catch { }
+        }
+        else if (job.Ps != null)
+        {
+            try { job.Ps.Stop(); } catch { }
+        }
         return true;
     }
 
@@ -69,7 +93,7 @@ public class JobManager : IDisposable
     public List<PSObject>? WaitForJob(int jobId)
     {
         var job = GetJob(jobId);
-        if (job == null) return null;
+        if (job == null || job.Ps == null || job.AsyncResult == null) return null;
 
         try
         {
@@ -79,7 +103,7 @@ public class JobManager : IDisposable
         catch { }
 
         job.Reported = true;
-        return job.Output.ToList();
+        return job.Output?.ToList() ?? new();
     }
 
     /// <summary>Remove completed+reported jobs from the list.</summary>
@@ -92,8 +116,10 @@ public class JobManager : IDisposable
     {
         foreach (var job in _jobs)
         {
-            try { job.Ps.Stop(); } catch { }
-            try { job.Ps.Dispose(); } catch { }
+            try { job.Ps?.Stop(); } catch { }
+            try { job.Ps?.Dispose(); } catch { }
+            try { job.SuspendedProcess?.Kill(); } catch { }
+            try { job.SuspendedProcess?.Dispose(); } catch { }
         }
         _pool.Close();
         _pool.Dispose();
@@ -101,20 +127,34 @@ public class JobManager : IDisposable
 }
 
 /// <summary>
-/// Tracks a single background job's state.
+/// Tracks a single job's state — background, suspended, or completed.
 /// </summary>
 public class JobInfo
 {
     public int JobId { get; }
     public string Command { get; }
-    public PowerShell Ps { get; }
-    public IAsyncResult AsyncResult { get; }
-    public PSDataCollection<PSObject> Output { get; }
+    public PowerShell? Ps { get; }
+    public IAsyncResult? AsyncResult { get; }
+    public PSDataCollection<PSObject>? Output { get; }
     public DateTime StartTime { get; }
     public bool Reported { get; set; }
 
-    public bool IsCompleted => AsyncResult.IsCompleted;
+    // Suspension support
+    public bool IsSuspended { get; set; }
+    public Process? SuspendedProcess { get; set; }
+    public string? SuspendedCommand { get; set; }
 
+    public bool IsCompleted
+    {
+        get
+        {
+            if (IsSuspended) return false;
+            if (SuspendedProcess != null) return SuspendedProcess.HasExited;
+            return AsyncResult?.IsCompleted ?? true;
+        }
+    }
+
+    /// <summary>Background PS pipeline job.</summary>
     public JobInfo(int jobId, string command, PowerShell ps,
         IAsyncResult asyncResult, PSDataCollection<PSObject> output, DateTime startTime)
     {
@@ -124,5 +164,25 @@ public class JobInfo
         AsyncResult = asyncResult;
         Output = output;
         StartTime = startTime;
+    }
+
+    /// <summary>Suspended native process (Ctrl+Z on TUI command).</summary>
+    public JobInfo(int jobId, string command, Process process, DateTime startTime)
+    {
+        JobId = jobId;
+        Command = command;
+        SuspendedProcess = process;
+        StartTime = startTime;
+        IsSuspended = true;
+    }
+
+    /// <summary>Suspended PS pipeline (Ctrl+Z on foreground command, will re-run on fg).</summary>
+    public JobInfo(int jobId, string command, string suspendedCommand, DateTime startTime)
+    {
+        JobId = jobId;
+        Command = command;
+        SuspendedCommand = suspendedCommand;
+        StartTime = startTime;
+        IsSuspended = true;
     }
 }

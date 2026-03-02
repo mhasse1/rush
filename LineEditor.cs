@@ -31,6 +31,12 @@ public class LineEditor
     private char _lastFindChar;
     private bool _lastFindForward;
 
+    // Vi yank/paste/undo
+    private string _yankBuffer = "";
+    private readonly Stack<(List<char> buffer, int cursor)> _undoStack = new();
+    private char _pendingOperator; // 'd', 'c', 'y', or '\0'
+    private int _pendingCount;
+
     // Fish-style autosuggestion
     private string? _suggestion;
 
@@ -150,6 +156,18 @@ public class LineEditor
         _viCount = 0;
         _viCountActive = false;
 
+        // Operator+motion state machine: if an operator (d/c/y) is pending,
+        // this keystroke is the motion — compute range and apply.
+        if (_pendingOperator != '\0')
+        {
+            var op = _pendingOperator;
+            var opCount = _pendingCount;
+            _pendingOperator = '\0';
+            _pendingCount = 0;
+            ApplyOperatorMotion(op, key, opCount * count);
+            return null;
+        }
+
         switch (key.KeyChar)
         {
             // -- Movement (with count support) --
@@ -200,61 +218,97 @@ public class LineEditor
                 RepeatFindChar(count);
                 return null;
 
-            // -- Enter insert mode --
+            // -- Operators (wait for motion) --
+            case 'd':
+            case 'c':
+            case 'y':
+                _pendingOperator = key.KeyChar;
+                _pendingCount = count;
+                return null;
+
+            // -- Enter insert mode (with undo snapshot) --
             case 'i':
+                PushUndo();
                 _viMode = ViMode.Insert;
                 SetCursorShape(insert: true);
                 return null;
             case 'a':
+                PushUndo();
                 if (_buffer.Count > 0) _cursor++;
                 _viMode = ViMode.Insert;
                 SetCursorPos();
                 SetCursorShape(insert: true);
                 return null;
             case 'I':
+                PushUndo();
                 _cursor = 0;
                 _viMode = ViMode.Insert;
                 SetCursorPos();
                 SetCursorShape(insert: true);
                 return null;
             case 'A':
+                PushUndo();
                 _cursor = _buffer.Count;
                 _viMode = ViMode.Insert;
                 SetCursorPos();
                 SetCursorShape(insert: true);
                 return null;
 
-            // -- Editing (with count support) --
+            // -- Editing (with count, undo, yank) --
             case 'x':
-                for (int i = 0; i < count && _cursor < _buffer.Count; i++)
-                    _buffer.RemoveAt(_cursor);
-                if (_cursor >= _buffer.Count && _cursor > 0) _cursor--;
-                Redraw();
+                if (_buffer.Count > 0)
+                {
+                    PushUndo();
+                    var xChars = new System.Text.StringBuilder();
+                    for (int i = 0; i < count && _cursor < _buffer.Count; i++)
+                    {
+                        xChars.Append(_buffer[_cursor]);
+                        _buffer.RemoveAt(_cursor);
+                    }
+                    _yankBuffer = xChars.ToString();
+                    if (_cursor >= _buffer.Count && _cursor > 0) _cursor--;
+                    Redraw();
+                }
                 return null;
             case 'X':
-                for (int i = 0; i < count && _cursor > 0; i++)
+                if (_cursor > 0)
                 {
-                    _buffer.RemoveAt(_cursor - 1);
-                    _cursor--;
+                    PushUndo();
+                    var xbChars = new System.Text.StringBuilder();
+                    for (int i = 0; i < count && _cursor > 0; i++)
+                    {
+                        xbChars.Insert(0, _buffer[_cursor - 1]);
+                        _buffer.RemoveAt(_cursor - 1);
+                        _cursor--;
+                    }
+                    _yankBuffer = xbChars.ToString();
+                    Redraw();
                 }
-                Redraw();
                 return null;
             case 'D':
                 if (_cursor < _buffer.Count)
                 {
+                    PushUndo();
+                    _yankBuffer = new string(_buffer.GetRange(_cursor, _buffer.Count - _cursor).ToArray());
                     _buffer.RemoveRange(_cursor, _buffer.Count - _cursor);
                     if (_cursor > 0) _cursor--;
                     Redraw();
                 }
                 return null;
             case 'C':
+                PushUndo();
                 if (_cursor < _buffer.Count)
+                {
+                    _yankBuffer = new string(_buffer.GetRange(_cursor, _buffer.Count - _cursor).ToArray());
                     _buffer.RemoveRange(_cursor, _buffer.Count - _cursor);
+                }
                 _viMode = ViMode.Insert;
                 Redraw();
                 SetCursorShape(insert: true);
                 return null;
             case 'S':
+                PushUndo();
+                _yankBuffer = new string(_buffer.ToArray());
                 _buffer.Clear();
                 _cursor = 0;
                 _viMode = ViMode.Insert;
@@ -262,16 +316,68 @@ public class LineEditor
                 SetCursorShape(insert: true);
                 return null;
             case 's':
-                for (int i = 0; i < count && _cursor < _buffer.Count; i++)
-                    _buffer.RemoveAt(_cursor);
+                if (_buffer.Count > 0)
+                {
+                    PushUndo();
+                    var sChars = new System.Text.StringBuilder();
+                    for (int i = 0; i < count && _cursor < _buffer.Count; i++)
+                    {
+                        sChars.Append(_buffer[_cursor]);
+                        _buffer.RemoveAt(_cursor);
+                    }
+                    _yankBuffer = sChars.ToString();
+                }
                 _viMode = ViMode.Insert;
                 Redraw();
                 SetCursorShape(insert: true);
                 return null;
 
+            // -- Yank/Paste/Undo --
             case 'p':
-            case 'u':
+                if (!string.IsNullOrEmpty(_yankBuffer))
+                {
+                    PushUndo();
+                    int insertPos = Math.Min(_cursor + 1, _buffer.Count);
+                    _buffer.InsertRange(insertPos, _yankBuffer);
+                    _cursor = insertPos + _yankBuffer.Length - 1;
+                    Redraw();
+                }
                 return null;
+            case 'P':
+                if (!string.IsNullOrEmpty(_yankBuffer))
+                {
+                    PushUndo();
+                    _buffer.InsertRange(_cursor, _yankBuffer);
+                    _cursor += _yankBuffer.Length - 1;
+                    Redraw();
+                }
+                return null;
+            case 'Y':
+                if (_cursor < _buffer.Count)
+                    _yankBuffer = new string(_buffer.GetRange(_cursor, _buffer.Count - _cursor).ToArray());
+                return null;
+            case 'u':
+                if (_undoStack.Count > 0)
+                {
+                    var (buf, cur) = _undoStack.Pop();
+                    _buffer = buf;
+                    _cursor = Math.Min(cur, Math.Max(0, _buffer.Count - 1));
+                    Redraw();
+                }
+                return null;
+
+            // -- Replace character --
+            case 'r':
+            {
+                var rKey = Console.ReadKey(intercept: true);
+                if (rKey.KeyChar >= 32 && _cursor < _buffer.Count)
+                {
+                    PushUndo();
+                    _buffer[_cursor] = rKey.KeyChar;
+                    Redraw();
+                }
+                return null;
+            }
 
             default:
                 break;
@@ -309,7 +415,7 @@ public class LineEditor
                 return "";
         }
 
-        // j/k for history in normal mode (handle separately since KeyChar check is tricky)
+        // j/k for history in normal mode
         if (key.KeyChar == 'j') { HistoryDown(); return null; }
         if (key.KeyChar == 'k') { HistoryUp(); return null; }
 
@@ -364,6 +470,127 @@ public class LineEditor
                     return;
                 }
             }
+        }
+    }
+
+    // ── Vi Operator+Motion ─────────────────────────────────────────────
+
+    private void PushUndo()
+    {
+        _undoStack.Push((new List<char>(_buffer), _cursor));
+    }
+
+    private void ApplyOperatorMotion(char op, ConsoleKeyInfo key, int count)
+    {
+        // Doubled operator (dd, cc, yy) → whole line
+        if (key.KeyChar == op)
+        {
+            PushUndo();
+            _yankBuffer = new string(_buffer.ToArray());
+            if (op == 'y')
+            {
+                _cursor = 0;
+                SetCursorPos();
+            }
+            else
+            {
+                _buffer.Clear();
+                _cursor = 0;
+                if (op == 'c') { _viMode = ViMode.Insert; SetCursorShape(insert: true); }
+                Redraw();
+            }
+            return;
+        }
+
+        // Compute the range the motion covers
+        var range = ComputeMotionRange(key, count);
+        if (range == null) return;
+        var (start, end) = range.Value;
+        if (start == end) return;
+
+        PushUndo();
+        _yankBuffer = new string(_buffer.GetRange(start, end - start).ToArray());
+
+        switch (op)
+        {
+            case 'd':
+                _buffer.RemoveRange(start, end - start);
+                _cursor = Math.Min(start, Math.Max(0, _buffer.Count - 1));
+                Redraw();
+                break;
+            case 'c':
+                _buffer.RemoveRange(start, end - start);
+                _cursor = start;
+                _viMode = ViMode.Insert;
+                Redraw();
+                SetCursorShape(insert: true);
+                break;
+            case 'y':
+                _cursor = start;
+                SetCursorPos();
+                break;
+        }
+    }
+
+    private (int start, int end)? ComputeMotionRange(ConsoleKeyInfo key, int count)
+    {
+        int from = _cursor;
+        int to;
+
+        switch (key.KeyChar)
+        {
+            case 'w':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWordBoundaryRight(_buffer, to);
+                return (from, Math.Min(to, _buffer.Count));
+
+            case 'b':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWordBoundaryLeft(_buffer, to);
+                return (Math.Min(to, from), Math.Max(to, from));
+
+            case 'e':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWordEnd(_buffer, to);
+                return (from, Math.Min(to + 1, _buffer.Count));
+
+            case '$':
+                return (from, _buffer.Count);
+
+            case '0':
+            case '^':
+                return (0, from);
+
+            case 'h':
+                to = Math.Max(0, from - count);
+                return (to, from);
+
+            case 'l':
+                to = Math.Min(_buffer.Count, from + count);
+                return (from, to);
+
+            case 'f':
+            case 't':
+            {
+                var fKey = Console.ReadKey(intercept: true);
+                if (fKey.KeyChar < 32) return null;
+                to = from;
+                for (int i = 0; i < count; i++)
+                {
+                    int pos = to + 1;
+                    while (pos < _buffer.Count && _buffer[pos] != fKey.KeyChar) pos++;
+                    if (pos < _buffer.Count) to = pos;
+                    else return null;
+                }
+                int rangeEnd = key.KeyChar == 't' ? to : to + 1;
+                return (from, Math.Min(rangeEnd, _buffer.Count));
+            }
+
+            default:
+                return null;
         }
     }
 

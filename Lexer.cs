@@ -14,6 +14,7 @@ public enum RushTokenType
     Case, When, Def, Return,
     Try, Rescue, Ensure,
     Do, And, Or, Not, True, False, Nil,
+    Next, Continue, Break, Begin,
 
     // Operators
     Assign,         // =
@@ -25,6 +26,7 @@ public enum RushTokenType
     GreaterEqual,   // >=
     Plus, Minus, Star, Slash, Percent,
     Match,          // ~
+    MatchOp,        // =~
     NotMatch,       // !~
     Dot,            // .
     DotDot,         // .. (range)
@@ -32,6 +34,9 @@ public enum RushTokenType
     Ampersand,      // &
     AmpAmp,         // &&
     PipePipe,       // ||
+    PlusAssign,     // +=
+    MinusAssign,    // -=
+    SafeNav,        // &.
 
     // Delimiters
     LParen, RParen,
@@ -40,6 +45,8 @@ public enum RushTokenType
     Comma, Colon, Semicolon,
     Newline,
     HashBrace,      // #{ (interpolation start)
+    DollarParen,    // $( command substitution
+    DollarQuestion, // $? exit status
 
     // Special
     ShellCommand,   // Entire line passed through to shell pipeline
@@ -84,6 +91,7 @@ public class Lexer
         ["unless"] = RushTokenType.Unless,
         ["until"] = RushTokenType.Until,
         ["case"] = RushTokenType.Case,
+        ["match"] = RushTokenType.Case,   // modern alias for case
         ["when"] = RushTokenType.When,
         ["def"] = RushTokenType.Def,
         ["return"] = RushTokenType.Return,
@@ -97,6 +105,10 @@ public class Lexer
         ["true"] = RushTokenType.True,
         ["false"] = RushTokenType.False,
         ["nil"] = RushTokenType.Nil,
+        ["next"] = RushTokenType.Next,
+        ["continue"] = RushTokenType.Continue,
+        ["break"] = RushTokenType.Break,
+        ["begin"] = RushTokenType.Begin,
     };
 
     private readonly string _source;
@@ -176,6 +188,18 @@ public class Lexer
         if (char.IsLetter(ch) || ch == '_')
             return ReadIdentifierOrKeyword();
 
+        // Dollar sign — command substitution $() and exit status $?
+        if (ch == '$')
+        {
+            if (_pos + 1 < _source.Length && _source[_pos + 1] == '(')
+                return ReadCommandSubstitution();
+            if (_pos + 1 < _source.Length && _source[_pos + 1] == '?')
+            {
+                _pos += 2;
+                return new RushToken(RushTokenType.DollarQuestion, "$?", start);
+            }
+        }
+
         // Two-character operators (check before single-char)
         if (_pos + 1 < _source.Length)
         {
@@ -209,6 +233,18 @@ public class Lexer
                 case "#{":
                     _pos += 2;
                     return new RushToken(RushTokenType.HashBrace, "#{", start);
+                case "+=":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.PlusAssign, "+=", start);
+                case "-=":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.MinusAssign, "-=", start);
+                case "=~":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.MatchOp, "=~", start);
+                case "&.":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.SafeNav, "&.", start);
             }
         }
 
@@ -307,6 +343,10 @@ public class Lexer
                 // Check for .. (range operator)
                 if (_pos + 1 < _source.Length && _source[_pos + 1] == '.')
                     break;
+                // Dot must be followed by a digit to be a decimal point.
+                // Otherwise it's a method call: 3.times, 42.to_s, etc.
+                if (_pos + 1 >= _source.Length || !char.IsDigit(_source[_pos + 1]))
+                    break;
                 isFloat = true;
             }
             _pos++;
@@ -337,5 +377,29 @@ public class Lexer
             return new RushToken(keywordType, value, start);
 
         return new RushToken(RushTokenType.Identifier, value, start);
+    }
+
+    /// <summary>
+    /// Read a $(...) command substitution — captures everything between $( and matching ).
+    /// The Value of the resulting token is the raw command string (without $( and )).
+    /// </summary>
+    private RushToken ReadCommandSubstitution()
+    {
+        var start = _pos;
+        _pos += 2; // skip $(
+        int depth = 1;
+        var sb = new System.Text.StringBuilder();
+        while (_pos < _source.Length && depth > 0)
+        {
+            if (_source[_pos] == '(') depth++;
+            else if (_source[_pos] == ')')
+            {
+                depth--;
+                if (depth == 0) { _pos++; break; }
+            }
+            sb.Append(_source[_pos]);
+            _pos++;
+        }
+        return new RushToken(RushTokenType.DollarParen, sb.ToString().Trim(), start);
     }
 }
