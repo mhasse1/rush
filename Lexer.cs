@@ -10,7 +10,7 @@ public enum RushTokenType
 
     // Identifiers and keywords
     Identifier,
-    If, Elsif, Else, End, For, In, While, Unless, Until,
+    If, Elsif, Else, End, For, In, While, Unless, Until, Loop,
     Case, When, Def, Return,
     Try, Rescue, Ensure,
     Do, And, Or, Not, True, False, Nil,
@@ -90,6 +90,7 @@ public class Lexer
         ["while"] = RushTokenType.While,
         ["unless"] = RushTokenType.Unless,
         ["until"] = RushTokenType.Until,
+        ["loop"] = RushTokenType.Loop,
         ["case"] = RushTokenType.Case,
         ["match"] = RushTokenType.Case,   // modern alias for case
         ["when"] = RushTokenType.When,

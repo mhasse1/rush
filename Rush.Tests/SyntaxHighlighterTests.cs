@@ -293,6 +293,7 @@ public class SyntaxHighlighterTests
     [InlineData("in")]
     [InlineData("while")]
     [InlineData("until")]
+    [InlineData("loop")]
     [InlineData("case")]
     [InlineData("when")]
     [InlineData("match")]

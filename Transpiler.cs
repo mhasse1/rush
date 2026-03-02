@@ -353,6 +353,10 @@ public class RushTranspiler
         if (IsStdlibReceiver(node.Receiver, "Dir"))
             return TranspileDirMethod(node);
 
+        // ── Stdlib: Time.method() ─────────────────────────────────────
+        if (IsStdlibReceiver(node.Receiver, "Time"))
+            return TranspileTimeMethod(node);
+
         // ── env["KEY"] or env[index] ───────────────────────────────────
         if (IsStdlibReceiver(node.Receiver, "env") && node.Method == "[]")
             return TranspileEnvAccess(node);
@@ -423,6 +427,12 @@ public class RushTranspiler
             "to_currency" => TranspileToCurrency(receiver, node.Args),
             "to_filesize" => TranspileToFilesize(receiver),
             "to_percent" => TranspileToPercent(receiver, node.Args),
+
+            // ── Duration methods ──────────────────────────────────────
+            "hours"   => $"[TimeSpan]::FromHours({receiver})",
+            "minutes" => $"[TimeSpan]::FromMinutes({receiver})",
+            "seconds" => $"[TimeSpan]::FromSeconds({receiver})",
+            "days"    => $"[TimeSpan]::FromDays({receiver})",
 
             // ── Color methods ──────────────────────────────────────────
             "red" or "green" or "blue" or "cyan" or "yellow"
@@ -513,7 +523,42 @@ public class RushTranspiler
             };
         }
 
+        // ── Time.now / Time.today / Time.utc_now ─────────────────────────
+        if (node.Receiver is VariableRefNode tr && tr.Name.Equals("Time", StringComparison.OrdinalIgnoreCase))
+        {
+            return prop switch
+            {
+                "now"     => "[DateTime]::Now",
+                "utc_now" => "[DateTime]::UtcNow",
+                "today"   => "[DateTime]::Today",
+                _ => $"[DateTime]::{CapitalizeProperty(prop)}"
+            };
+        }
+
+        // ── File.xxx / Dir.xxx (property-style fallback) ───────────────
+        // File/Dir methods normally require parens (→ MethodCallNode), but
+        // if someone writes File.separator or Dir.current, produce a
+        // reasonable .NET static property access instead of broken $File.xxx.
+        if (node.Receiver is VariableRefNode fr && fr.Name.Equals("File", StringComparison.OrdinalIgnoreCase))
+            return $"[System.IO.File]::{CapitalizeProperty(prop)}";
+
+        if (node.Receiver is VariableRefNode dr && dr.Name.Equals("Dir", StringComparison.OrdinalIgnoreCase))
+            return $"[System.IO.Directory]::{CapitalizeProperty(prop)}";
+
         var receiver = TranspileExpression(node.Receiver);
+
+        // ── Duration methods (zero-arg form): 24.hours, 30.minutes ────
+        if (prop is "hours" or "minutes" or "seconds" or "days")
+        {
+            return prop switch
+            {
+                "hours"   => $"[TimeSpan]::FromHours({receiver})",
+                "minutes" => $"[TimeSpan]::FromMinutes({receiver})",
+                "seconds" => $"[TimeSpan]::FromSeconds({receiver})",
+                "days"    => $"[TimeSpan]::FromDays({receiver})",
+                _ => throw new InvalidOperationException()
+            };
+        }
 
         // ── Color methods (zero-arg form) ──────────────────────────────
         if (AnsiColors.ContainsKey(prop))
@@ -676,6 +721,8 @@ public class RushTranspiler
         {
             "read" => $"Get-Content {TranspileExpression(node.Args[0])} -Raw",
             "read_lines" => $"@(Get-Content {TranspileExpression(node.Args[0])})",
+            "read_json" => $"(Get-Content {TranspileExpression(node.Args[0])} -Raw | ConvertFrom-Json)",
+            "read_csv" => $"@(Import-Csv {TranspileExpression(node.Args[0])})",
             "write" => $"Set-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
             "append" => $"Add-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
             "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])})",
@@ -694,7 +741,7 @@ public class RushTranspiler
                 ? $"Get-ChildItem {TranspileExpression(node.Args[0])} -Directory"
                 : "Get-ChildItem -Directory",
             "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])} -PathType Container)",
-            "mkdir" => $"New-Item -ItemType Directory -Force -Path {TranspileExpression(node.Args[0])}",
+            "mkdir" => $"$null = New-Item -ItemType Directory -Force -Path {TranspileExpression(node.Args[0])}",
             _ => TranspileDefaultMethod(TranspileExpression(node.Receiver), node)
         };
     }
@@ -713,6 +760,17 @@ public class RushTranspiler
         return isRecursive
             ? $"Get-ChildItem {path} -File -Recurse"
             : $"Get-ChildItem {path} -File";
+    }
+
+    private string TranspileTimeMethod(MethodCallNode node)
+    {
+        return node.Method switch
+        {
+            "now"     => "[DateTime]::Now",
+            "utc_now" => "[DateTime]::UtcNow",
+            "today"   => "[DateTime]::Today",
+            _ => $"[DateTime]::{CapitalizeProperty(node.Method)}({string.Join(", ", node.Args.Select(TranspileExpression))})"
+        };
     }
 
     /// <summary>

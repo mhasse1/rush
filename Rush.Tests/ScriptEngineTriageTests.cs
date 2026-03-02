@@ -24,6 +24,7 @@ public class ScriptEngineTriageTests
     [InlineData("for item in items")]
     [InlineData("while running")]
     [InlineData("until finished")]
+    [InlineData("loop")]
     [InlineData("def greet(name)")]
     [InlineData("try")]
     [InlineData("case value")]
@@ -190,6 +191,7 @@ public class ScriptEngineTriageTests
     [InlineData("for i in 1..5")]      // open for, no end
     [InlineData("def greet(name)")]    // open def, no end
     [InlineData("while true")]         // open while, no end
+    [InlineData("loop")]               // open loop, no end
     public void IncompleteBlocks_AreDetected(string input)
     {
         Assert.True(_engine.IsIncomplete(input));
@@ -199,8 +201,55 @@ public class ScriptEngineTriageTests
     [InlineData("if x > 5\nputs x\nend")]
     [InlineData("for i in 1..5\nputs i\nend")]
     [InlineData("def greet(name)\nputs name\nend")]
+    [InlineData("loop\nbreak\nend")]
     public void CompleteBlocks_AreNotIncomplete(string input)
     {
         Assert.False(_engine.IsIncomplete(input));
+    }
+
+    // ── Duration & Time Triage ────────────────────────────────────────
+
+    [Theory]
+    [InlineData("t = Time.now")]
+    [InlineData("d = 24.hours")]
+    [InlineData("elapsed = Time.now - start")]
+    [InlineData("target = ARGV[0]")]
+    public void NewFeatures_AssignmentTriage(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
+    // ── File/Dir Stdlib Triage ──────────────────────────────────────
+
+    [Theory]
+    [InlineData("File.write(\"test.txt\", \"hello\")")]
+    [InlineData("File.delete(\"test.txt\")")]
+    [InlineData("File.append(\"log.txt\", \"entry\")")]
+    [InlineData("File.read_json(\"config.json\")")]
+    [InlineData("File.read_csv(\"data.csv\")")]
+    [InlineData("Dir.mkdir(\"new_dir\")")]
+    [InlineData("Dir.files(\".\")")]
+    [InlineData("Dir.dirs(\"/tmp\")")]
+    public void StdlibCalls_Standalone_AreRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
+    [Theory]
+    [InlineData("content = File.read(\"test.txt\")")]
+    [InlineData("exists = File.exist?(\"test.txt\")")]
+    [InlineData("data = File.read_json(\"config.json\")")]
+    [InlineData("files = Dir.files(\".\", recursive: true)")]
+    public void StdlibCalls_Assignment_AreRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
+    [Theory]
+    [InlineData("puts File.read(\"test.txt\")")]
+    [InlineData("if File.exist?(\"test.txt\")")]
+    public void StdlibCalls_InExpression_AreRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
     }
 }

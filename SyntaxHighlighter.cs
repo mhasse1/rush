@@ -35,7 +35,7 @@ public class SyntaxHighlighter
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "if", "elsif", "else", "end", "unless",
-        "for", "in", "while", "until",
+        "for", "in", "while", "until", "loop",
         "case", "when", "match",
         "def", "return",
         "try", "rescue", "ensure", "begin",

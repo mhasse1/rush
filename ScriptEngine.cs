@@ -15,7 +15,7 @@ public class ScriptEngine
     /// </summary>
     private static readonly HashSet<string> BlockStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
-        "if", "unless", "for", "while", "until", "def", "try", "case",
+        "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
         "begin", "match"
     };
 
@@ -25,13 +25,22 @@ public class ScriptEngine
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "if", "elsif", "else", "end", "unless",
-        "for", "in", "while", "until",
+        "for", "in", "while", "until", "loop",
         "case", "when", "match",
         "def", "return",
         "try", "rescue", "ensure", "begin",
         "do", "and", "or", "not",
         "true", "false", "nil",
         "next", "continue", "break"
+    };
+
+    /// <summary>
+    /// Stdlib class names that, when followed by a dot, indicate Rush syntax.
+    /// e.g., File.read("test.txt"), Dir.mkdir("new_dir"), Time.now
+    /// </summary>
+    private static readonly HashSet<string> StdlibReceivers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "File", "Dir", "Time"
     };
 
     /// <summary>
@@ -53,6 +62,10 @@ public class ScriptEngine
         "sub", "gsub", "scan", "match",
         // Numeric methods
         "round", "abs", "times", "to_currency", "to_filesize", "to_percent",
+        // Duration methods
+        "hours", "minutes", "seconds", "days",
+        // Time stdlib methods
+        "now", "utc_now", "today",
         // Type conversion
         "to_i", "to_f", "to_s",
         // Color methods
@@ -122,6 +135,10 @@ public class ScriptEngine
         if (ContainsRushMethodCall(trimmed))
             return true;
 
+        // Rule 9: Stdlib receiver — File.xxx, Dir.xxx, Time.xxx
+        if (ContainsStdlibCall(trimmed))
+            return true;
+
         return false;
     }
 
@@ -183,6 +200,22 @@ public class ScriptEngine
             }
 
             dotPos = input.IndexOf('.', nameEnd);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Check if input starts with a stdlib receiver call (e.g., File.read, Dir.mkdir).
+    /// Only matches the first word before the first dot — precise to avoid false positives.
+    /// </summary>
+    private static bool ContainsStdlibCall(string input)
+    {
+        int dotPos = input.IndexOf('.');
+        if (dotPos > 0 && dotPos < input.Length - 1)
+        {
+            var receiver = input[..dotPos];
+            if (StdlibReceivers.Contains(receiver))
+                return true;
         }
         return false;
     }
@@ -266,6 +299,7 @@ public class ScriptEngine
                     case RushTokenType.For:
                     case RushTokenType.While:
                     case RushTokenType.Until:
+                    case RushTokenType.Loop:
                     case RushTokenType.Def:
                     case RushTokenType.Try:
                     case RushTokenType.Begin:

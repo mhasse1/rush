@@ -45,10 +45,10 @@ if (args.Length > 0)
         RunNonInteractive(string.Join(' ', args[1..]));
         return;
     }
-    // Script file execution: rush script.rush
+    // Script file execution: rush script.rush [args...]
     if (args[0].EndsWith(".rush", StringComparison.OrdinalIgnoreCase) && File.Exists(args[0]))
     {
-        RunScriptFile(args[0]);
+        RunScriptFile(args[0], args[1..]);
         return;
     }
 }
@@ -112,7 +112,8 @@ lineEditor.ShowCompletionsHandler = () =>
         System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
         System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
         System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'; $is_login_shell = ${(isLoginShell ? "$true" : "$false")}");
+    var loginVal = isLoginShell ? "$true" : "$false";
+    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'; $is_login_shell = {loginVal}");
     ps.Invoke();
 }
 
@@ -1370,7 +1371,7 @@ static void RunStartupScript(Runspace runspace)
 /// Execute a .rush script file non-interactively.
 /// Used for: rush script.rush
 /// </summary>
-static void RunScriptFile(string path)
+static void RunScriptFile(string path, string[] scriptArgs)
 {
     try
     {
@@ -1394,6 +1395,17 @@ static void RunScriptFile(string path)
                 System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
             initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'");
             initPs.Invoke();
+        }
+
+        // Inject script-specific variables: ARGV, __FILE__, __DIR__
+        {
+            using var scriptPs = PowerShell.Create();
+            scriptPs.Runspace = runspace;
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath) ?? ".";
+            var argvItems = string.Join(", ", scriptArgs.Select(a => $"'{a.Replace("'", "''")}'"));
+            scriptPs.AddScript($"$ARGV = @({argvItems}); $__FILE__ = '{fullPath.Replace("'", "''")}'; $__DIR__ = '{directory.Replace("'", "''")}'");
+            scriptPs.Invoke();
         }
 
         var translator = new CommandTranslator();
@@ -2630,6 +2642,48 @@ static void RunNonInteractive(string command)
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
     var tr = new CommandTranslator();
+    var scriptEngine = new ScriptEngine(tr);
+
+    // Check if the command contains Rush scripting syntax (multi-line blocks,
+    // method chaining, assignments, etc.). If so, route through the transpiler
+    // instead of the shell command path.
+    bool isRushScript = command.Contains('\n')
+        ? scriptEngine.IsRushSyntax(command.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim())
+        : scriptEngine.IsRushSyntax(command);
+
+    if (isRushScript)
+    {
+        var psCode = scriptEngine.TranspileFile(command);
+        if (psCode != null)
+        {
+            using var rushPs = PowerShell.Create();
+            rushPs.Runspace = rs;
+            rushPs.AddScript(psCode);
+            try
+            {
+                var results = rushPs.Invoke().Where(r => r != null).ToList();
+                foreach (var r in results) Console.WriteLine(r);
+                if (rushPs.HadErrors)
+                {
+                    OutputRenderer.RenderErrors(rushPs.Streams);
+                    Environment.ExitCode = 1;
+                }
+            }
+            catch (PipelineStoppedException)
+            {
+                Console.Error.WriteLine();
+                Environment.ExitCode = 130;
+            }
+            catch (ActionPreferenceStopException ex)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine(ex.Message);
+                Console.ResetColor();
+                Environment.ExitCode = 1;
+            }
+        }
+        return;
+    }
 
     // Full expansion pipeline (same order as interactive mode)
     command = ExpandBraces(command);

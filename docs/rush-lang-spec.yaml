@@ -14,8 +14,8 @@
 # ============================================================================
 
 meta:
-  version: "0.1.0"
-  status: "design"  # design → alpha → beta → stable
+  version: "0.2.0"
+  status: "alpha"  # design → alpha → beta → stable
   engine: "PowerShell 7 via Microsoft.PowerShell.SDK"
   runtime: ".NET 8"
   file_extension: ".rush"
@@ -668,17 +668,30 @@ builtin_functions:
 stdlib:
   File:
     description: "File operations — clean OO interface over .NET System.IO"
+    status: "implemented"
     methods:
-      - { name: "File.read(path)", description: "Read entire file as string" }
-      - { name: "File.read_lines(path)", description: "Read file as array of lines" }
-      - { name: "File.write(path, content)", description: "Write string to file (overwrites)" }
-      - { name: "File.append(path, content)", description: "Append string to file" }
-      - { name: "File.exist?(path)", description: "Check if file exists" }
-      - { name: "File.delete(path)", description: "Delete a file" }
-      - { name: "File.size(path)", description: "File size in bytes" }
+      - { name: "File.read(path)", description: "Read entire file as string", transpiles_to: "Get-Content path -Raw" }
+      - { name: "File.read_lines(path)", description: "Read file as array of lines", transpiles_to: "@(Get-Content path)" }
+      - { name: "File.read_json(path)", description: "Read and parse JSON file → object/hash", transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)" }
+      - { name: "File.read_csv(path)", description: "Read and parse CSV file → array of objects", transpiles_to: "@(Import-Csv path)" }
+      - { name: "File.write(path, content)", description: "Write string to file (overwrites)", transpiles_to: "Set-Content -Path path -Value content" }
+      - { name: "File.append(path, content)", description: "Append string to file", transpiles_to: "Add-Content -Path path -Value content" }
+      - { name: "File.exist?(path)", description: "Check if file exists", transpiles_to: "(Test-Path path)" }
+      - { name: "File.delete(path)", description: "Delete a file", transpiles_to: "Remove-Item path" }
+      - { name: "File.size(path)", description: "File size in bytes", transpiles_to: "(Get-Item path).Length" }
+    examples:
+      - rush: 'content = File.read("config.txt")'
+        note: "Read file to string"
+      - rush: 'data = File.read_json("config.json"); puts data.name'
+        note: "Parse JSON and access properties directly"
+      - rush: 'rows = File.read_csv("data.csv"); puts rows.count'
+        note: "Parse CSV — each row is an object with column-name properties"
+      - rush: 'File.write("output.txt", result)'
+        note: "Standalone write — no assignment needed"
 
   Dir:
     description: "Directory operations"
+    status: "implemented"
     methods:
       - name: "Dir.files(path, recursive: false)"
         description: "List files in directory. Replaces `find . -type f`"
@@ -748,7 +761,7 @@ size_literals:
 # TIME / DURATION (future)
 # ============================================================================
 time_duration:
-  status: "planned"
+  status: "implemented"
   description: |
     Duration methods on numbers for readable time expressions.
     Used in examples like `Time.now - 24.hours`.
@@ -757,7 +770,7 @@ time_duration:
     - { rush: "30.minutes", note: "TimeSpan of 30 minutes" }
     - { rush: "7.days", note: "TimeSpan of 7 days" }
     - { rush: "Time.now - 24.hours", note: "Files modified in last 24 hours" }
-  note: "Not yet implemented. Use PowerShell [TimeSpan] directly for now."
+  note: "Transpiles to [TimeSpan]::FromHours/Minutes/Seconds/Days and [DateTime]::Now/UtcNow/Today"
 
 # ============================================================================
 # EXAMPLE SCRIPTS
@@ -852,3 +865,81 @@ examples:
         warn "health check failed: #{e.message}"
         exit 1
       end
+
+# ============================================================================
+# COMMON MISTAKES (for LLM code generation accuracy)
+# ============================================================================
+# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Ruby, NOT Bash.
+# It borrows ideas from all three but has its own syntax rules.
+
+common_mistakes:
+  - wrong: '$name = "Mark"'
+    right: 'name = "Mark"'
+    reason: "No $ prefix for variables in Rush. Just bare identifiers."
+
+  - wrong: 'foreach ($x in $list) { ... }'
+    right: 'for x in list ... end'
+    reason: "Rush uses Ruby-style for/in/end, not PowerShell foreach"
+
+  - wrong: 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }'
+    right: 'Dir.files(".").select { |f| f.Length > 1mb }'
+    reason: "Use Rush stdlib and methods, not raw PowerShell cmdlets"
+
+  - wrong: '[System.IO.File]::ReadAllText("path")'
+    right: 'File.read("path")'
+    reason: "Use Rush stdlib, not raw .NET static calls"
+
+  - wrong: 'puts("hello")'
+    right: 'puts "hello"'
+    reason: "puts/warn/print are keywords used without parens (Ruby-style)"
+
+  - wrong: 'if (x > 5) { puts x }'
+    right: 'if x > 5; puts x; end'
+    reason: "Rush uses if/end blocks, not braces for control flow. Parens optional."
+
+  - wrong: 'data = JSON.parse(File.read("data.json"))'
+    right: 'data = File.read_json("data.json")'
+    reason: "Use File.read_json for one-step JSON loading"
+
+  - wrong: 'require "json"'
+    right: "# No require/import needed — stdlib is always available"
+    reason: "Rush stdlib (File, Dir, Time) is built-in, no imports"
+
+# ============================================================================
+# UNIX → RUSH TRANSLATION GUIDE (for LLMs)
+# ============================================================================
+# Common Unix shell idioms and their Rush equivalents.
+# Use these patterns when translating user intent into Rush code.
+
+unix_translations:
+  - unix: 'cat config.json | jq ".name"'
+    rush: 'data = File.read_json("config.json"); puts data.name'
+    note: "JSON parsing is built into File stdlib"
+
+  - unix: 'find . -name "*.log" -delete'
+    rush: 'Dir.files(".", recursive: true).select { |f| f.Name =~ /\.log$/ }.each { |f| File.delete(f.FullName) }'
+    note: "Method chaining replaces find + xargs"
+
+  - unix: 'wc -l file.txt'
+    rush: 'puts File.read_lines("file.txt").count'
+    note: "read_lines returns array, .count gives line count"
+
+  - unix: 'cat data.csv | head -5'
+    rush: 'File.read_lines("data.csv").first(5).each { |l| puts l }'
+    note: "Method chaining replaces head"
+
+  - unix: 'du -sh * | sort -rh | head -5'
+    rush: 'Dir.files(".").sort_by { |f| f.Length }.reverse.first(5).each { |f| puts "#{f.Name} #{f.Length.to_filesize}" }'
+    note: "Object pipeline — no string parsing needed"
+
+  - unix: 'grep -r "TODO" src/'
+    rush: 'grep -r "TODO" src/'
+    note: "Shell commands just work — no translation needed"
+
+  - unix: 'test -f config.json && echo "exists"'
+    rush: 'puts "exists" if File.exist?("config.json")'
+    note: "Postfix if + predicate method = readable"
+
+  - unix: 'mkdir -p /tmp/myapp/logs'
+    rush: 'Dir.mkdir("/tmp/myapp/logs")'
+    note: "Dir.mkdir creates parent dirs automatically (-Force)"

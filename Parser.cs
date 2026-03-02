@@ -343,7 +343,7 @@ public class Parser
 
     private void SkipNewlines()
     {
-        while (Current.Type == RushTokenType.Newline)
+        while (Current.Type == RushTokenType.Newline || Current.Type == RushTokenType.Semicolon)
             _pos++;
     }
 
@@ -381,6 +381,7 @@ public class Parser
             RushTokenType.For => ParseFor(),
             RushTokenType.While => ParseWhile(),
             RushTokenType.Until => ParseUntil(),
+            RushTokenType.Loop => ParseLoop(),
             RushTokenType.Def => ParseFunctionDef(),
             RushTokenType.Return => ParseReturn(),
             RushTokenType.Try => ParseTry(),
@@ -543,6 +544,16 @@ public class Parser
         return new WhileNode(condition, body, isUntil: true);
     }
 
+    private WhileNode ParseLoop()
+    {
+        Advance(); // skip 'loop'
+        SkipNewlines();
+        var body = ParseBody(RushTokenType.End);
+        Expect(RushTokenType.End);
+        // Infinite loop: while ($true) { body }
+        return new WhileNode(new LiteralNode("true", RushTokenType.True), body);
+    }
+
     private FunctionDefNode ParseFunctionDef()
     {
         Advance(); // skip 'def'
@@ -588,7 +599,7 @@ public class Parser
         Advance(); // skip 'return'
         RushNode? value = null;
         if (Current.Type != RushTokenType.Newline && Current.Type != RushTokenType.EOF
-            && Current.Type != RushTokenType.End)
+            && Current.Type != RushTokenType.End && Current.Type != RushTokenType.Semicolon)
         {
             value = ParseExpression();
         }

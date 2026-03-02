@@ -337,4 +337,380 @@ public class NewFeaturesIntegrationTests
             File.Delete(tmpFile);
         }
     }
+
+    // ── Loop/End ──────────────────────────────────────────────────────
+
+    [Fact]
+    public void Loop_WithBreak_CountsToThree()
+    {
+        var (stdout, _, exitCode) = RunRush("x = 0\nloop\n  x += 1\n  break if x >= 3\nend\nputs x");
+        Assert.Equal("3", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Loop_WithNext_SkipsOddNumbers()
+    {
+        var (stdout, _, _) = RunRush("result = \"\"\ni = 0\nloop\n  i += 1\n  break if i > 6\n  next if i % 2 != 0\n  result += i.to_s + \" \"\nend\nputs result.strip");
+        Assert.Equal("2 4 6", stdout);
+    }
+
+    // ── Duration Literals ────────────────────────────────────────────
+
+    [Fact]
+    public void Duration_Hours_TotalMinutes()
+    {
+        var (stdout, _, _) = RunRush("puts 2.hours.TotalMinutes");
+        Assert.Equal("120", stdout);
+    }
+
+    [Fact]
+    public void Duration_Minutes_TotalSeconds()
+    {
+        var (stdout, _, _) = RunRush("puts 5.minutes.TotalSeconds");
+        Assert.Equal("300", stdout);
+    }
+
+    [Fact]
+    public void Duration_Days_TotalHours()
+    {
+        var (stdout, _, _) = RunRush("puts 3.days.TotalHours");
+        Assert.Equal("72", stdout);
+    }
+
+    [Fact]
+    public void Duration_Seconds_TotalMilliseconds()
+    {
+        var (stdout, _, _) = RunRush("puts 10.seconds.TotalMilliseconds");
+        Assert.Equal("10000", stdout);
+    }
+
+    // ── Time.now ─────────────────────────────────────────────────────
+
+    [Fact]
+    public void TimeNow_ReturnsCurrentYear()
+    {
+        var (stdout, _, _) = RunRush("puts Time.now.Year");
+        Assert.Equal(DateTime.Now.Year.ToString(), stdout);
+    }
+
+    [Fact]
+    public void TimeToday_ReturnsDate()
+    {
+        var (stdout, _, _) = RunRush("puts Time.today.Year");
+        Assert.Equal(DateTime.Today.Year.ToString(), stdout);
+    }
+
+    // ── ARGV / __FILE__ / __DIR__ ────────────────────────────────────
+
+    /// <summary>
+    /// Run a rush script file with arguments and capture output.
+    /// </summary>
+    private static (string stdout, string stderr, int exitCode) RunRushScript(string scriptContent, params string[] scriptArgs)
+    {
+        var tmpFile = Path.GetTempFileName();
+        var scriptPath = Path.ChangeExtension(tmpFile, ".rush");
+        File.Move(tmpFile, scriptPath);
+        try
+        {
+            File.WriteAllText(scriptPath, scriptContent);
+            var psi = new ProcessStartInfo
+            {
+                FileName = RushBinary,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add(scriptPath);
+            foreach (var arg in scriptArgs)
+                psi.ArgumentList.Add(arg);
+            using var proc = Process.Start(psi)!;
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit(30_000);
+            return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
+        }
+        finally
+        {
+            File.Delete(scriptPath);
+        }
+    }
+
+    [Fact]
+    public void ARGV_FirstArgument()
+    {
+        var (stdout, _, _) = RunRushScript("puts ARGV[0]", "hello");
+        Assert.Equal("hello", stdout);
+    }
+
+    [Fact]
+    public void ARGV_MultipleArguments()
+    {
+        var (stdout, _, _) = RunRushScript("puts ARGV[0]\nputs ARGV[1]", "first", "second");
+        Assert.Contains("first", stdout);
+        Assert.Contains("second", stdout);
+    }
+
+    [Fact]
+    public void ARGV_Count()
+    {
+        var (stdout, _, _) = RunRushScript("puts ARGV.Count", "a", "b", "c");
+        Assert.Equal("3", stdout);
+    }
+
+    [Fact]
+    public void FILE_ReturnsScriptPath()
+    {
+        var (stdout, _, _) = RunRushScript("puts __FILE__");
+        Assert.EndsWith(".rush", stdout);
+        Assert.True(Path.IsPathRooted(stdout), "__FILE__ should be an absolute path");
+    }
+
+    [Fact]
+    public void DIR_ReturnsScriptDirectory()
+    {
+        var (stdout, _, _) = RunRushScript("puts __DIR__");
+        Assert.True(Directory.Exists(stdout), "__DIR__ should be an existing directory");
+    }
+
+    // ── Semicolons as Statement Separators ────────────────────────────
+
+    [Fact]
+    public void Semicolons_LoopOneLiner()
+    {
+        var (stdout, _, exitCode) = RunRush("x = 0; loop; x += 1; break if x >= 5; end; puts x");
+        Assert.Equal("5", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Semicolons_DurationAssignment()
+    {
+        var (stdout, _, _) = RunRush("h = 2.hours; puts h.TotalMinutes");
+        Assert.Equal("120", stdout);
+    }
+
+    [Fact]
+    public void Semicolons_MultipleAssignments()
+    {
+        var (stdout, _, _) = RunRush("a = 10; b = 20; puts a + b");
+        Assert.Equal("30", stdout);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── File Stdlib ──────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void File_Write_And_Read()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            var script = $"File.write(\"{tmpFile}\", \"hello rush\")\nputs File.read(\"{tmpFile}\")";
+            var (stdout, _, exitCode) = RunRush(script);
+            Assert.Equal("hello rush", stdout);
+            Assert.Equal(0, exitCode);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_Append()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            var script = $"File.write(\"{tmpFile}\", \"line1\")\nFile.append(\"{tmpFile}\", \"line2\")\nputs File.read(\"{tmpFile}\")";
+            var (stdout, _, _) = RunRush(script);
+            Assert.Contains("line1", stdout);
+            Assert.Contains("line2", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_ReadLines_Count()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            System.IO.File.WriteAllText(tmpFile, "alpha\nbeta\ngamma");
+            var (stdout, _, _) = RunRush($"lines = File.read_lines(\"{tmpFile}\")\nputs lines.Count");
+            Assert.Equal("3", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_Exist_True()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            var (stdout, _, _) = RunRush($"puts File.exist?(\"{tmpFile}\")");
+            Assert.Equal("True", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_Exist_False()
+    {
+        var (stdout, _, _) = RunRush("puts File.exist?(\"/nonexistent_file_12345\")");
+        Assert.Equal("False", stdout);
+    }
+
+    [Fact]
+    public void File_Delete()
+    {
+        var tmpFile = Path.GetTempFileName();
+        var script = $"File.delete(\"{tmpFile}\")\nputs File.exist?(\"{tmpFile}\")";
+        var (stdout, _, _) = RunRush(script);
+        Assert.Equal("False", stdout);
+        Assert.False(System.IO.File.Exists(tmpFile));
+    }
+
+    [Fact]
+    public void File_Size()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            System.IO.File.WriteAllText(tmpFile, "12345");
+            var (stdout, _, _) = RunRush($"puts File.size(\"{tmpFile}\")");
+            Assert.Equal("5", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_ReadJson_AccessProperty()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            System.IO.File.WriteAllText(tmpFile, "{\"name\": \"rush\", \"version\": 2}");
+            var (stdout, _, _) = RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.name");
+            Assert.Equal("rush", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_ReadCsv_Count()
+    {
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            System.IO.File.WriteAllText(tmpFile, "Name,Age\nAlice,30\nBob,25");
+            var (stdout, _, _) = RunRush($"rows = File.read_csv(\"{tmpFile}\")\nputs rows.Count");
+            Assert.Equal("2", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void File_Standalone_Write()
+    {
+        // Tests triage: File.write as standalone statement (not assignment)
+        var tmpFile = Path.GetTempFileName();
+        try
+        {
+            var (_, _, exitCode) = RunRush($"File.write(\"{tmpFile}\", \"standalone test\")");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("standalone test", System.IO.File.ReadAllText(tmpFile).Trim());
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Dir Stdlib ───────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Dir_Exist_True()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            var (stdout, _, _) = RunRush($"puts Dir.exist?(\"{tmpDir}\")");
+            Assert.Equal("True", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_Mkdir()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var (stdout, _, _) = RunRush($"Dir.mkdir(\"{tmpDir}\")\nputs Dir.exist?(\"{tmpDir}\")");
+            Assert.Equal("True", stdout);
+            Assert.True(Directory.Exists(tmpDir));
+        }
+        finally { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_Mkdir_Standalone()
+    {
+        // Tests triage: Dir.mkdir as standalone statement
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var (_, _, exitCode) = RunRush($"Dir.mkdir(\"{tmpDir}\")");
+            Assert.Equal(0, exitCode);
+            Assert.True(Directory.Exists(tmpDir));
+        }
+        finally { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_Files_Count()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
+            var (stdout, _, _) = RunRush($"files = Dir.files(\"{tmpDir}\")\nputs files.Count");
+            Assert.Equal("2", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_Files_Recursive()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        var subDir = Path.Combine(tmpDir, "sub");
+        Directory.CreateDirectory(subDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
+            var (stdout, _, _) = RunRush($"files = Dir.files(\"{tmpDir}\", recursive: true)\nputs files.Count");
+            Assert.Equal("2", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_Dirs_Count()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
+        Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
+        try
+        {
+            var (stdout, _, _) = RunRush($"subdirs = Dir.dirs(\"{tmpDir}\")\nputs subdirs.Count");
+            Assert.Equal("2", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
 }
