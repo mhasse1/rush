@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using Rush;
 
-const string Version = "1.2.0";
+// Version is derived from git at build time (see Rush.csproj GitVersion target).
+// InformationalVersion = "1.2.348-a3b4c5d" (commit count + short SHA)
+string Version = RushVersion.Full;
 
 // ── Login Shell Detection ───────────────────────────────────────────
 // macOS sets argv[0] to "-rush" when launching a login shell.
@@ -1002,6 +1005,15 @@ while (true)
             continue;
         }
 
+        // ── Bare dot shortcuts (.., ..., ...., etc.) ───────────────
+        // .. → cd ..   ... → cd ../..   .... → cd ../../..  etc.
+        if (segment.Length >= 2 && segment.All(c => c == '.'))
+        {
+            var levels = string.Join("/", Enumerable.Repeat("..", segment.Length - 1));
+            segment = $"cd {levels}";
+            // Fall through to cd handler below
+        }
+
         // ── cd (with - support) ─────────────────────────────────────
         if (segment.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) || segment == "cd")
         {
@@ -1393,7 +1405,7 @@ static void RunScriptFile(string path, string[] scriptArgs)
                 System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
                 System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
                 System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'");
+            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{RushVersion.Full}'");
             initPs.Invoke();
         }
 

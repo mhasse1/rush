@@ -6,12 +6,51 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>rush</AssemblyName>
-    <Version>1.2.0</Version>
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
     <SelfContained>true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
+    <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
+    <RushMajorMinor>1.2</RushMajorMinor>
+    <!-- Prevent .NET from appending +commitsha to InformationalVersion -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
+
+  <!-- ── Git-derived versioning ──────────────────────────────────────── -->
+  <!-- Runs before every build. Sets Version/InformationalVersion from git. -->
+  <Target Name="GitVersion" BeforeTargets="BeforeBuild;GenerateNuspec">
+    <!-- Commit count → patch number -->
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+    </Exec>
+    <!-- Short SHA -->
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha" />
+    </Exec>
+    <!-- Dirty check (non-empty = dirty) -->
+    <Exec Command="git status --porcelain" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitDirty" />
+    </Exec>
+
+    <PropertyGroup>
+      <GitCommitCount Condition="'$(GitCommitCount)' == ''">0</GitCommitCount>
+      <GitShortSha Condition="'$(GitShortSha)' == ''">unknown</GitShortSha>
+      <_IsDirty Condition="'$(GitDirty)' != ''">true</_IsDirty>
+      <_IsDirty Condition="'$(GitDirty)' == ''">false</_IsDirty>
+      <_DirtySuffix Condition="'$(_IsDirty)' == 'true'">-dirty</_DirtySuffix>
+      <_DirtySuffix Condition="'$(_IsDirty)' == 'false'"></_DirtySuffix>
+      <!-- SemVer for assembly: Major.Minor.Patch -->
+      <Version>$(RushMajorMinor).$(GitCommitCount)</Version>
+      <!-- Full display version: 1.2.348-a3b4c5d or 0.0.0-dev if dirty dev build -->
+      <InformationalVersion>$(RushMajorMinor).$(GitCommitCount)-$(GitShortSha)$(_DirtySuffix)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+  <!-- ── Block publish on dirty working tree ─────────────────────────── -->
+  <Target Name="EnforceCleanPublish" BeforeTargets="Publish" DependsOnTargets="GitVersion">
+    <Error Condition="'$(_IsDirty)' == 'true'"
+           Text="Cannot publish with uncommitted changes. Commit first, then publish.%0AGit status:%0A$(GitDirty)" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.7" />

@@ -473,7 +473,7 @@ functions:
 
   named_args:
     syntax: 'deploy("staging", dry_run: true)'
-    note: "Named arguments use Ruby-style colon syntax"
+    note: "Named arguments use Ruby-style colon syntax. Space after colon is optional: dry_run:true also works."
 
 # ============================================================================
 # BLOCKS & LAMBDAS
@@ -514,6 +514,13 @@ blocks:
           .reverse
           .first(10)
           .each { |f| puts "#{f.name}: #{f.length}" }
+
+  chained_output:
+    description: ".print and .puts can be chained on any expression to output it"
+    examples:
+      - { rush: 'Dir.files(".", recursive:true).print', note: "List all files" }
+      - { rush: '[1, 2, 3].map { |x| x * 2 }.puts', note: "Output: 2, 4, 6" }
+      - { rush: 'File.read("config.json").puts', note: "Print file contents" }
 
 # ============================================================================
 # PIPELINES

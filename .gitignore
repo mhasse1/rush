@@ -5,3 +5,5 @@ publish/
 *.suo
 .vs/
 *.DotSettings.user
+*.swp
+*~
