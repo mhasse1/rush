@@ -71,46 +71,56 @@ public class LineEditor
         if (Console.IsInputRedirected)
             return Console.ReadLine();
 
-        _buffer = new List<char>();
-        _cursor = 0;
-        _startLeft = Console.CursorLeft;
-        _startTop = Console.CursorTop;
-        _historyIndex = _history.Count;
-        _savedInput = null;
-        _viCount = 0;
-        _viCountActive = false;
-
-        if (Mode == EditMode.Vi)
+        // Treat Ctrl+C as a regular keystroke so Console.ReadKey can capture it.
+        // Restored in finally so CancelKeyPress still works for running commands.
+        Console.TreatControlCAsInput = true;
+        try
         {
-            _viMode = ViMode.Insert;
-            SetCursorShape(insert: true);
-        }
+            _buffer = new List<char>();
+            _cursor = 0;
+            _startLeft = Console.CursorLeft;
+            _startTop = Console.CursorTop;
+            _historyIndex = _history.Count;
+            _savedInput = null;
+            _viCount = 0;
+            _viCountActive = false;
 
-        while (true)
-        {
-            var key = Console.ReadKey(intercept: true);
-
-            string? result;
             if (Mode == EditMode.Vi)
-                result = HandleViKey(key);
-            else
-                result = HandleEmacsKey(key);
-
-            if (result != null)
             {
-                SetCursorShape(insert: true); // Reset cursor on exit
-                var line = result;
-                if (!string.IsNullOrWhiteSpace(line))
-                {
-                    if (_history.Count == 0 || _history[^1] != line)
-                    {
-                        _history.Add(line);
-                        if (_history.Count > MaxHistory)
-                            _history.RemoveAt(0);
-                    }
-                }
-                return result == "\x04" ? null : result;
+                _viMode = ViMode.Insert;
+                SetCursorShape(insert: true);
             }
+
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+
+                string? result;
+                if (Mode == EditMode.Vi)
+                    result = HandleViKey(key);
+                else
+                    result = HandleEmacsKey(key);
+
+                if (result != null)
+                {
+                    SetCursorShape(insert: true); // Reset cursor on exit
+                    var line = result;
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        if (_history.Count == 0 || _history[^1] != line)
+                        {
+                            _history.Add(line);
+                            if (_history.Count > MaxHistory)
+                                _history.RemoveAt(0);
+                        }
+                    }
+                    return result == "\x04" ? null : result;
+                }
+            }
+        }
+        finally
+        {
+            Console.TreatControlCAsInput = false;
         }
     }
 

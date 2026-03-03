@@ -2435,6 +2435,12 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
             OutputRenderer.RenderErrors(ps.Streams);
             return (true, null);
         }
+
+        // Sync .NET process working directory so native commands (ls builtin,
+        // Process.Start for TUI programs) see the correct current directory.
+        try { Environment.CurrentDirectory = Path.GetFullPath(path); }
+        catch { /* ignore — Set-Location succeeded, this is best-effort */ }
+
         return (false, currentDir);
     }
     catch (Exception ex)

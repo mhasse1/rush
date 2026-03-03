@@ -439,6 +439,10 @@ public class RushTranspiler
                 or "magenta" or "white" or "gray"
                 => TranspileColorMethod(receiver, node.Method),
 
+            // ── Output methods ──────────────────────────────────────────
+            "print" => receiver,
+            "puts" => receiver,
+
             // ── Index access ───────────────────────────────────────────
             "[]" => $"{receiver}[{TranspileExpression(node.Args[0])}]",
 
@@ -590,6 +594,8 @@ public class RushTranspiler
             "to_currency" => $"('$' + [string]::Format('{{0:N2}}', {receiver}))",
             "to_filesize" => TranspileToFilesize(receiver),
             "to_percent" => $"([string]::Format('{{0:P1}}', {receiver}))",
+            "print" => receiver,
+            "puts" => receiver,
             "ok?" => $"({receiver} -eq 0)",
             "failed?" => $"({receiver} -ne 0)",
             "message" => $"{receiver}.Message",

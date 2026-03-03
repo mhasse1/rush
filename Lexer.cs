@@ -181,9 +181,21 @@ public class Lexer
         if (char.IsDigit(ch))
             return ReadNumber();
 
-        // Symbols (:name)
+        // Symbols (:name) — but only when NOT immediately after an identifier.
+        // name:value → [Identifier "name"] [Colon] [Identifier "value"] (named arg)
+        // :symbol    → [Symbol ":symbol"] (standalone symbol literal)
         if (ch == ':' && _pos + 1 < _source.Length && char.IsLetter(_source[_pos + 1]))
-            return ReadSymbol();
+        {
+            // If the previous char was a word char or '?', this is a colon (named arg), not a symbol
+            if (_pos > 0 && (char.IsLetterOrDigit(_source[_pos - 1]) || _source[_pos - 1] is '_' or '?'))
+            {
+                // Fall through to operator section — will be emitted as Colon
+            }
+            else
+            {
+                return ReadSymbol();
+            }
+        }
 
         // Identifiers and keywords
         if (char.IsLetter(ch) || ch == '_')
