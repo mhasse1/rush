@@ -7,7 +7,41 @@ SHELLS_FILE="/etc/shells"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PUBLISH_DIR="$SCRIPT_DIR/bin/Release/net8.0/osx-arm64/publish"
 
-# Build release binary
+# ── Dev mode: symlink directly to publish dir ────────────────────────
+# During active development, skip the copy step. Every `dotnet publish`
+# instantly updates the installed binary.
+if [[ "${1:-}" == "--dev" ]]; then
+    echo "Building release binary..."
+    export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"
+    export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
+    dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
+
+    VERSION=$("$PUBLISH_DIR/rush" --version 2>/dev/null || echo "unknown")
+    echo ""
+    echo "Dev install: $VERSION"
+
+    # Remove old install dir if it exists (was a copy)
+    if [[ -d "$INSTALL_DIR" ]]; then
+        echo "  → removing $INSTALL_DIR/ (was a copy, switching to symlink)"
+        sudo rm -rf "$INSTALL_DIR"
+    fi
+
+    echo "  → $BIN_LINK → $PUBLISH_DIR/rush"
+    sudo ln -sf "$PUBLISH_DIR/rush" "$BIN_LINK"
+
+    if ! grep -q "$BIN_LINK" "$SHELLS_FILE" 2>/dev/null; then
+        echo "  → $SHELLS_FILE (registering as valid shell)"
+        echo "$BIN_LINK" | sudo tee -a "$SHELLS_FILE" > /dev/null
+    fi
+
+    echo ""
+    echo "Installed: $(rush --version)"
+    echo "  Binary:  $PUBLISH_DIR/rush"
+    echo "  Update:  dotnet publish -c Release -r osx-arm64"
+    exit 0
+fi
+
+# ── Standard install: copy to /usr/local/lib/rush ────────────────────
 echo "Building release binary..."
 export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"
 export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
