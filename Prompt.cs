@@ -14,7 +14,7 @@ namespace Rush;
 ///     {cursor}                                ← 2-space input prefix, clean for copy-paste
 ///
 /// Continuation prompt: 4 spaces ("    ").
-/// Customization: define a rush_prompt() function in config.rush to replace the info line.
+/// Customization: define a rush_prompt() function in init.rush to replace the info line.
 /// </summary>
 public class Prompt
 {

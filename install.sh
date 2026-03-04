@@ -7,16 +7,11 @@ SHELLS_FILE="/etc/shells"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PUBLISH_DIR="$SCRIPT_DIR/bin/Release/net8.0/osx-arm64/publish"
 
-# Verify published binary exists
-if [ ! -f "$PUBLISH_DIR/rush" ]; then
-    echo "error: published binary not found at $PUBLISH_DIR/rush"
-    echo ""
-    echo "Build first:"
-    echo "  export PATH=\"/opt/homebrew/opt/dotnet@8/bin:\$PATH\""
-    echo "  export DOTNET_ROOT=\"/opt/homebrew/opt/dotnet@8/libexec\""
-    echo "  dotnet publish -c Release -r osx-arm64"
-    exit 1
-fi
+# Build release binary
+echo "Building release binary..."
+export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"
+export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
+dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
 
 VERSION=$("$PUBLISH_DIR/rush" --version 2>/dev/null || echo "unknown")
 echo "Installing $VERSION..."

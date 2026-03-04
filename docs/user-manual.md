@@ -86,8 +86,7 @@ All configuration lives in `~/.config/rush/`:
 | File | Purpose |
 |------|---------|
 | `config.json` | Settings (edit mode, aliases, theme, history size) |
-| `config.rush` | Startup script — transpiled through Rush engine (runs first) |
-| `init.rush` | Startup script — executed line-by-line (runs second) |
+| `init.rush` | Startup script — transpiled through Rush engine |
 | `history` | Persistent command history |
 | `sync.json` | Config sync settings |
 
@@ -113,29 +112,26 @@ Created automatically on first run. All settings with their defaults:
 | `historySize` | `10`–`∞` (default `500`) | Max history entries |
 | `theme` | `"auto"`, `"dark"`, `"light"` | Color theme (`auto` detects terminal) |
 
-### Startup Scripts
+### Startup Script
 
-**`config.rush`** runs first and is fully transpiled through the Rush engine. Use it for defining functions, setting variables, and configuring your prompt:
+**`init.rush`** runs on every shell launch, fully transpiled through the Rush engine. Everything goes here — exports, aliases, functions, and prompt customization:
 
 ```rush
-# ~/.config/rush/config.rush
+# ~/.config/rush/init.rush
+export PATH="/opt/homebrew/bin:$PATH"
+export EDITOR=vim
+
+alias ll='ls -la'
+alias g='git'
+
 def rush_prompt()
-  # Custom prompt — override the default info line
   time = Time.now.ToString("HH:mm")
   dir = pwd
   "#{time} #{dir} > "
 end
 ```
 
-**`init.rush`** runs second, line-by-line. Good for simple exports and aliases:
-
-```rush
-# ~/.config/rush/init.rush
-export EDITOR=vim
-export GOPATH="$HOME/go"
-alias ll='ls -la'
-alias g='git'
-```
+A commented default is created on first run.
 
 ### Reloading
 

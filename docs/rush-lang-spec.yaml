@@ -19,7 +19,7 @@ meta:
   engine: "PowerShell 7 via Microsoft.PowerShell.SDK"
   runtime: ".NET 8"
   file_extension: ".rush"
-  config_file: "~/.config/rush/config.rush"
+  config_file: "~/.config/rush/init.rush"
 
 # ============================================================================
 # CORE PRINCIPLES

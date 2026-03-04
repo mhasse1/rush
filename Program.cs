@@ -69,6 +69,16 @@ Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
 Console.ResetColor();
 
+if (config.ShowTips)
+{
+    var tip = GetStartupTip(config);
+    Console.WriteLine();
+    Console.ForegroundColor = Theme.Current.Muted;
+    Console.Write("Tip: ");
+    Console.ResetColor();
+    Console.WriteLine(tip);
+}
+
 // ── Initialize PowerShell Engine ─────────────────────────────────────
 var hostUI = new RushHostUI();
 var host = new RushHost(hostUI);
@@ -82,11 +92,11 @@ var translator = new CommandTranslator();
 var scriptEngine = new ScriptEngine(translator);
 var lineEditor = new LineEditor();
 var prompt = new Prompt();
-var tabCompleter = new TabCompleter(runspace, translator);
+var tabCompleter = new TabCompleter(runspace, translator, config);
 var highlighter = new SyntaxHighlighter(translator);
 
-// Apply config (sets edit mode, custom aliases)
-config.Apply(lineEditor, translator);
+// Apply config (sets edit mode, custom aliases, behavioral flags)
+var (cfgStopOnError, cfgTrace, cfgPipefail) = config.Apply(lineEditor, translator);
 
 // Load persistent history
 lineEditor.LoadHistory();
@@ -121,17 +131,16 @@ lineEditor.ShowCompletionsHandler = () =>
 }
 
 // ── Run Startup Scripts ─────────────────────────────────────────────
-RunConfigRush(runspace, scriptEngine);
-RunStartupScript(runspace);
+RunStartupScripts(runspace, scriptEngine);
 
 // ── State ────────────────────────────────────────────────────────────
 string? previousDirectory = null;
 var dirStack = new Stack<string>();
 PowerShell? runningPs = null;
 var traps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-bool setE = false;   // set -e: exit on error
-bool setX = false;   // set -x: trace commands
-bool setPipefail = false; // set -o pipefail
+bool setE = cfgStopOnError;   // set -e: exit on error (from config or set -e)
+bool setX = cfgTrace;         // set -x: trace commands (from config or set -x)
+bool setPipefail = cfgPipefail; // set -o pipefail (from config or set -o pipefail)
 bool signalExit = false; // Set by SIGHUP/SIGTERM to trigger graceful exit
 
 // ── Signal Handling ──────────────────────────────────────────────────
@@ -591,33 +600,140 @@ while (true)
             continue;
         }
 
-        if (segment.Equals("set vi", StringComparison.OrdinalIgnoreCase))
+        // ── set (settings viewer/editor) ────────────────────────────
+        if (segment.Equals("set", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("set ", StringComparison.OrdinalIgnoreCase))
         {
-            lineEditor.Mode = EditMode.Vi;
-            Console.WriteLine("Switched to vi mode");
-            lastSegmentFailed = false;
-            continue;
-        }
-        if (segment.Equals("set emacs", StringComparison.OrdinalIgnoreCase))
-        {
-            lineEditor.Mode = EditMode.Emacs;
-            Console.WriteLine("Switched to emacs mode");
-            lastSegmentFailed = false;
-            continue;
-        }
-        if (segment.StartsWith("set ", StringComparison.OrdinalIgnoreCase)
-            && (segment.Contains("-e") || segment.Contains("+e") ||
-                segment.Contains("-x") || segment.Contains("+x") ||
-                segment.Contains("-o ")))
-        {
-            var setArg = segment[4..].Trim();
-            if (setArg == "-e") { setE = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -e (exit on error)"); Console.ResetColor(); }
-            else if (setArg == "+e") { setE = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +e (ignore errors)"); Console.ResetColor(); }
-            else if (setArg == "-x") { setX = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -x (trace on)"); Console.ResetColor(); }
-            else if (setArg == "+x") { setX = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +x (trace off)"); Console.ResetColor(); }
-            else if (setArg == "-o pipefail") { setPipefail = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set -o pipefail"); Console.ResetColor(); }
-            else if (setArg == "+o pipefail") { setPipefail = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  set +o pipefail"); Console.ResetColor(); }
-            lastSegmentFailed = false;
+            var setArg = segment.Length > 3 ? segment[4..].Trim() : "";
+
+            // Backward-compatible shortcuts
+            if (setArg.Equals("vi", StringComparison.OrdinalIgnoreCase))
+            {
+                lineEditor.Mode = EditMode.Vi;
+                config.EditMode = "vi";
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine("  editMode = vi");
+                Console.ResetColor();
+            }
+            else if (setArg.Equals("emacs", StringComparison.OrdinalIgnoreCase))
+            {
+                lineEditor.Mode = EditMode.Emacs;
+                config.EditMode = "emacs";
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine("  editMode = emacs");
+                Console.ResetColor();
+            }
+            else if (setArg == "-e") { setE = true; config.StopOnError = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = true"); Console.ResetColor(); }
+            else if (setArg == "+e") { setE = false; config.StopOnError = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = false"); Console.ResetColor(); }
+            else if (setArg == "-x") { setX = true; config.TraceCommands = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = true"); Console.ResetColor(); }
+            else if (setArg == "+x") { setX = false; config.TraceCommands = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = false"); Console.ResetColor(); }
+            else if (setArg == "-o pipefail") { setPipefail = true; config.PipefailMode = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = true"); Console.ResetColor(); }
+            else if (setArg == "+o pipefail") { setPipefail = false; config.PipefailMode = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = false"); Console.ResetColor(); }
+            else if (string.IsNullOrEmpty(setArg))
+            {
+                // set (no args) — show all settings grouped by category
+                ShowAllSettings(config, setE, setX, setPipefail);
+            }
+            else if (setArg.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
+            {
+                // set --save key value — change and persist
+                var rest = setArg[7..].Trim();
+                var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2)
+                {
+                    if (config.SetValue(parts[0], parts[1]))
+                    {
+                        ApplySettingToRuntime(parts[0], config, ref setE, ref setX, ref setPipefail, lineEditor);
+                        config.Save();
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  {parts[0]} = {parts[1]} (saved)");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        var info = RushConfig.FindSetting(parts[0]);
+                        Console.ForegroundColor = Theme.Current.Error;
+                        if (info == null)
+                            Console.Error.WriteLine($"  unknown setting: {parts[0]}");
+                        else
+                            Console.Error.WriteLine($"  invalid value for {parts[0]}: {parts[1]} (valid: {info.ValidValues})");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
+                }
+                else
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine("  usage: set --save <key> <value>");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            else
+            {
+                // set key value — change for session
+                // set key — show one setting
+                var parts = setArg.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 1)
+                {
+                    // Show one setting
+                    var info = RushConfig.FindSetting(parts[0]);
+                    if (info != null)
+                    {
+                        var val = config.GetValue(info.Key);
+                        var isDefault = val == info.DefaultValue;
+                        Console.ForegroundColor = Theme.Current.Banner;
+                        Console.Write($"  {info.Key}");
+                        Console.ResetColor();
+                        Console.Write(" = ");
+                        Console.ForegroundColor = isDefault ? Theme.Current.Muted : ConsoleColor.White;
+                        Console.Write(val);
+                        Console.ResetColor();
+                        if (isDefault)
+                        {
+                            Console.ForegroundColor = Theme.Current.Muted;
+                            Console.Write(" (default)");
+                            Console.ResetColor();
+                        }
+                        Console.WriteLine();
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  {info.Description}");
+                        Console.WriteLine($"  Valid: {info.ValidValues}");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine($"  unknown setting: {parts[0]}");
+                        Console.Error.WriteLine("  run 'set' to see all settings");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
+                }
+                else
+                {
+                    // Set value for session
+                    if (config.SetValue(parts[0], parts[1]))
+                    {
+                        ApplySettingToRuntime(parts[0], config, ref setE, ref setX, ref setPipefail, lineEditor);
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  {parts[0]} = {parts[1]}");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        var info = RushConfig.FindSetting(parts[0]);
+                        Console.ForegroundColor = Theme.Current.Error;
+                        if (info == null)
+                            Console.Error.WriteLine($"  unknown setting: {parts[0]}");
+                        else
+                            Console.Error.WriteLine($"  invalid value for {parts[0]}: {parts[1]} (valid: {info.ValidValues})");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
+                }
+            }
+            if (!lastSegmentFailed) lastSegmentFailed = false;
             continue;
         }
 
@@ -648,9 +764,12 @@ while (true)
         if (segment.Equals("reload", StringComparison.OrdinalIgnoreCase))
         {
             config = RushConfig.Load();
-            config.Apply(lineEditor, translator);
+            var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
+            setE = reloadE; setX = reloadX; setPipefail = reloadPf;
             Theme.Initialize(config.GetThemeOverride());
-            Console.WriteLine("Config reloaded");
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  config reloaded");
+            Console.ResetColor();
             lastSegmentFailed = false;
             continue;
         }
@@ -1014,6 +1133,15 @@ while (true)
             // Fall through to cd handler below
         }
 
+        // ── path: PATH management ─────────────────────────────────────
+        if (segment.Equals("path", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("path ", StringComparison.OrdinalIgnoreCase))
+        {
+            var pathArgs = segment.Length > 4 ? segment[4..].Trim() : "";
+            lastSegmentFailed = HandlePathCommand(pathArgs, runspace);
+            continue;
+        }
+
         // ── cd (with - support) ─────────────────────────────────────
         if (segment.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) || segment == "cd")
         {
@@ -1077,17 +1205,24 @@ while (true)
             continue;
         }
 
-        // ── Interactive TUI Commands ──────────────────────────────
-        // Programs that need direct terminal access (editors, pagers, etc.)
-        // must bypass PowerShell's pipeline to get a real tty.
-        if (translated == null && IsInteractiveTui(cmdPart) && redirect == null && stdinRedirect == null)
+        // ── Native Command Execution ─────────────────────────────
+        // Native commands (not translated to PowerShell cmdlets) run directly
+        // with inherited stdio, giving them real TTY access. This handles
+        // shells, TUI apps, REPLs, and any program — no allowlist needed.
+        // PowerShell is only used when we need its pipeline/capture features.
+        bool needsPowerShell = translated != null
+            || redirect != null
+            || stdinRedirect != null
+            || CommandTranslator.HasUnquotedPipe(cmdPart);
+
+        if (!needsPowerShell)
         {
             var sw2 = Stopwatch.StartNew();
-            var tuiExitCode = RunInteractive(commandToRun);
-            lastSegmentFailed = tuiExitCode != 0;
-            lastExitCode = tuiExitCode;
+            var nativeExitCode = RunInteractive(commandToRun, translator);
+            lastSegmentFailed = nativeExitCode != 0;
+            lastExitCode = nativeExitCode;
             sw2.Stop();
-            if (sw2.Elapsed.TotalSeconds >= 0.5)
+            if (config.ShowTiming && sw2.Elapsed.TotalSeconds >= 0.5)
             {
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
@@ -1233,7 +1368,7 @@ while (true)
         }
 
         // Show timing for slow commands (>500ms)
-        if (sw.ElapsedMilliseconds > 500)
+        if (config.ShowTiming && sw.ElapsedMilliseconds > 500)
         {
             Console.ForegroundColor = Theme.Current.Muted;
             var elapsed = sw.Elapsed;
@@ -1298,24 +1433,22 @@ sigtermReg?.Dispose();
 // Helper Methods
 // ═══════════════════════════════════════════════════════════════════
 
-// ── Startup Script ──────────────────────────────────────────────────
+// ── Startup Scripts ─────────────────────────────────────────────────
 
 /// <summary>
-/// Execute ~/.config/rush/config.rush through the scripting engine.
-/// This is the portable config file with OS conditionals, aliases, etc.
-/// Runs before init.rush so init.rush can override.
+/// Execute a .rush startup script through the scripting engine (transpiled).
 /// </summary>
-static void RunConfigRush(Runspace runspace, ScriptEngine engine)
+static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string filename)
 {
-    var configPath = Path.Combine(
+    var path = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".config", "rush", "config.rush");
+        ".config", "rush", filename);
 
-    if (!File.Exists(configPath)) return;
+    if (!File.Exists(path)) return;
 
     try
     {
-        var source = File.ReadAllText(configPath);
+        var source = File.ReadAllText(path);
         var psCode = engine.TranspileFile(source);
         if (psCode != null)
         {
@@ -1327,7 +1460,7 @@ static void RunConfigRush(Runspace runspace, ScriptEngine engine)
             {
                 Console.ForegroundColor = Theme.Current.Error;
                 foreach (var err in ps.Streams.Error)
-                    Console.Error.WriteLine($"rush: config.rush: {err}");
+                    Console.Error.WriteLine($"rush: {filename}: {err}");
                 Console.ResetColor();
             }
         }
@@ -1335,46 +1468,20 @@ static void RunConfigRush(Runspace runspace, ScriptEngine engine)
     catch (Exception ex)
     {
         Console.ForegroundColor = Theme.Current.Error;
-        Console.Error.WriteLine($"rush: config.rush: {ex.Message}");
+        Console.Error.WriteLine($"rush: {filename}: {ex.Message}");
         Console.ResetColor();
     }
 }
 
-static void RunStartupScript(Runspace runspace)
+/// <summary>
+/// Run startup scripts: init.rush then secrets.rush (if it exists).
+/// Both are fully transpiled through the Rush engine.
+/// secrets.rush is never synced — safe for API keys and tokens.
+/// </summary>
+static void RunStartupScripts(Runspace runspace, ScriptEngine engine)
 {
-    var scriptPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-        ".config", "rush", "init.rush");
-
-    if (!File.Exists(scriptPath)) return;
-
-    try
-    {
-        var lines = File.ReadAllLines(scriptPath);
-        foreach (var rawLine in lines)
-        {
-            var line = rawLine.Trim();
-            if (string.IsNullOrEmpty(line) || line.StartsWith('#')) continue;
-
-            using var ps = PowerShell.Create();
-            ps.Runspace = runspace;
-            ps.AddScript(line);
-            ps.Invoke();
-            if (ps.HadErrors && ps.Streams.Error.Count > 0)
-            {
-                Console.ForegroundColor = Theme.Current.Error;
-                foreach (var err in ps.Streams.Error)
-                    Console.Error.WriteLine($"rush: init.rush: {err}");
-                Console.ResetColor();
-            }
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.ForegroundColor = Theme.Current.Error;
-        Console.Error.WriteLine($"rush: init.rush: {ex.Message}");
-        Console.ResetColor();
-    }
+    RunStartupRushFile(runspace, engine, "init.rush");
+    RunStartupRushFile(runspace, engine, "secrets.rush");
 }
 
 // ── Script File Execution ──────────────────────────────────────────
@@ -1452,37 +1559,11 @@ static void RunScriptFile(string path, string[] scriptArgs)
 // ── Interactive TUI Commands ─────────────────────────────────────────
 
 /// <summary>
-/// Programs that need direct terminal access (editors, pagers, etc.)
-/// must be launched via Process.Start with inherited stdio, bypassing
-/// PowerShell's pipeline which captures stdout.
-/// </summary>
-static bool IsInteractiveTui(string cmdPart)
-{
-    var tuiCommands = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-    {
-        "vi", "vim", "nvim", "nano", "pico", "emacs", "helix", "hx", "micro", "joe", "ne",
-        "less", "more", "most",
-        "top", "htop", "btop",
-        "man",
-        "sudo",
-        "ssh", "tmux", "screen",
-        "python", "python3", "node", "irb", "lua", "ghci",  // REPLs
-        "fzf", "tig", "lazygit", "nnn", "ranger", "mc"
-    };
-
-    // Extract the command name (first word)
-    var firstSpace = cmdPart.IndexOf(' ');
-    var cmd = firstSpace > 0 ? cmdPart[..firstSpace] : cmdPart;
-    // Strip path (e.g., /usr/bin/vi → vi)
-    cmd = Path.GetFileName(cmd);
-    return tuiCommands.Contains(cmd);
-}
-
-/// <summary>
 /// Run a command directly with inherited stdio (no capture).
-/// Used for interactive/TUI programs that need a real terminal.
+/// Used for all native commands — gives them real TTY access for
+/// interactive programs, shells, TUIs, and regular CLI tools alike.
 /// </summary>
-static int RunInteractive(string command)
+static int RunInteractive(string command, CommandTranslator? translator = null)
 {
     try
     {
@@ -1503,6 +1584,18 @@ static int RunInteractive(string command)
         proc.Dispose();
         return exitCode;
     }
+    catch (System.ComponentModel.Win32Exception)
+    {
+        // Command not found — show error and suggest similar commands
+        var firstSpace = command.IndexOf(' ');
+        var exe = firstSpace > 0 ? command[..firstSpace] : command;
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  command not found: {exe}");
+        Console.ResetColor();
+        if (translator != null)
+            ShowSuggestions(exe, translator);
+        return 127;
+    }
     catch (Exception ex)
     {
         Console.ForegroundColor = Theme.Current.Error;
@@ -1510,6 +1603,391 @@ static int RunInteractive(string command)
         Console.ResetColor();
         return 1;
     }
+}
+
+// ── PATH Management ─────────────────────────────────────────────────
+
+/// <summary>
+/// Sync PATH to both .NET Environment and PowerShell runspace.
+/// </summary>
+static void SetPath(string newPath, Runspace runspace)
+{
+    Environment.SetEnvironmentVariable("PATH", newPath);
+    using var ps = PowerShell.Create();
+    ps.Runspace = runspace;
+    var escaped = newPath.Replace("'", "''");
+    ps.AddScript($"$env:PATH = '{escaped}'");
+    ps.Invoke();
+}
+
+/// <summary>
+/// Expand ~ to home directory in a path string.
+/// </summary>
+static string ExpandTildePath(string path)
+{
+    if (path == "~")
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    if (path.StartsWith("~/"))
+        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path[2..]);
+    return path;
+}
+
+/// <summary>
+/// Save a "path add" line into init.rush's PATH section.
+/// Inserts after the "# ── PATH" header, or creates the section at the top.
+/// </summary>
+static void SavePathToInit(string pathLine)
+{
+    try
+    {
+        var initPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config", "rush", "init.rush");
+
+        if (!File.Exists(initPath))
+        {
+            // No init.rush — create with just the PATH section
+            File.WriteAllText(initPath, $"# ── PATH ─────────────────────────────────────────────────\n{pathLine}\n");
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+            Console.ResetColor();
+            return;
+        }
+
+        var lines = File.ReadAllLines(initPath).ToList();
+
+        // Find the PATH section header
+        var pathSectionIdx = lines.FindIndex(l => l.TrimStart().StartsWith("# ── PATH"));
+
+        if (pathSectionIdx >= 0)
+        {
+            // Find the last "path add" line in this section (or the header itself)
+            var insertIdx = pathSectionIdx + 1;
+            while (insertIdx < lines.Count)
+            {
+                var trimmed = lines[insertIdx].TrimStart();
+                if (trimmed.StartsWith("path add", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("# path add", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("# export PATH", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("export PATH", StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(trimmed) && insertIdx == pathSectionIdx + 1)
+                {
+                    insertIdx++;
+                }
+                else break;
+            }
+            lines.Insert(insertIdx, pathLine);
+        }
+        else
+        {
+            // No PATH section — create one at the top (after any leading comments/shebang)
+            var insertAt = 0;
+            // Skip past initial comment block
+            while (insertAt < lines.Count &&
+                   (lines[insertAt].TrimStart().StartsWith('#') || string.IsNullOrWhiteSpace(lines[insertAt])))
+            {
+                insertAt++;
+                // Stop after the first blank line following comments
+                if (insertAt > 0 && string.IsNullOrWhiteSpace(lines[insertAt - 1]) &&
+                    insertAt < lines.Count && !lines[insertAt].TrimStart().StartsWith('#'))
+                    break;
+            }
+            lines.Insert(insertAt, "");
+            lines.Insert(insertAt, pathLine);
+            lines.Insert(insertAt, "# ── PATH ─────────────────────────────────────────────────");
+        }
+
+        File.WriteAllLines(initPath, lines);
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+        Console.ResetColor();
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  save failed: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
+/// <summary>
+/// Remove a "path add" line from init.rush matching the given directory.
+/// Matches against both expanded and original (tilde) forms.
+/// </summary>
+static void RemovePathFromInit(string expandedDir, string originalDir)
+{
+    try
+    {
+        var initPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config", "rush", "init.rush");
+
+        if (!File.Exists(initPath)) return;
+
+        var lines = File.ReadAllLines(initPath).ToList();
+        var removed = lines.RemoveAll(l =>
+        {
+            var trimmed = l.TrimStart();
+            if (!trimmed.StartsWith("path add ", StringComparison.OrdinalIgnoreCase)) return false;
+            // Extract the dir from the line (strip flags)
+            var lineArgs = trimmed[9..].Trim();
+            if (lineArgs.StartsWith("--front ", StringComparison.OrdinalIgnoreCase))
+                lineArgs = lineArgs[8..].Trim();
+            if (lineArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
+                lineArgs = lineArgs[7..].Trim();
+            lineArgs = lineArgs.Trim().TrimEnd('/');
+            // Match against expanded or original form
+            var lineExpanded = ExpandTildePath(lineArgs).TrimEnd('/');
+            return lineExpanded.Equals(expandedDir, StringComparison.Ordinal) ||
+                   lineArgs.Equals(originalDir.TrimEnd('/'), StringComparison.Ordinal);
+        });
+
+        if (removed > 0)
+        {
+            File.WriteAllLines(initPath, lines);
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  removed from: ~/.config/rush/init.rush");
+            Console.ResetColor();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  save failed: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
+/// <summary>
+/// Built-in PATH management: list, add, remove, edit.
+/// Returns true if the command failed.
+/// </summary>
+static bool HandlePathCommand(string args, Runspace runspace)
+{
+    var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+    var entries = currentPath.Split(':').Where(e => !string.IsNullOrEmpty(e)).ToList();
+
+    // ── path / path check — list entries with existence indicators ──
+    if (string.IsNullOrEmpty(args) || args.Equals("check", StringComparison.OrdinalIgnoreCase))
+    {
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine("  PATH entries:");
+        Console.ResetColor();
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var dir = entries[i];
+            var exists = Directory.Exists(dir);
+            var num = (i + 1).ToString().PadLeft(3);
+
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write($"  {num}  ");
+            Console.ForegroundColor = exists ? Theme.Current.PromptSuccess : Theme.Current.Warning;
+            Console.Write(exists ? "✓" : "✗");
+            Console.Write("  ");
+            Console.ForegroundColor = exists ? ConsoleColor.White : Theme.Current.Muted;
+            Console.WriteLine(dir);
+        }
+        Console.ResetColor();
+        return false;
+    }
+
+    // ── path add [--front] [--save] <dir> ───────────────────────────
+    if (args.StartsWith("add ", StringComparison.OrdinalIgnoreCase) ||
+        args.StartsWith("add\t", StringComparison.OrdinalIgnoreCase))
+    {
+        var addArgs = args[4..].Trim();
+        bool front = false;
+        bool save = false;
+
+        // Parse flags
+        while (addArgs.StartsWith("--"))
+        {
+            if (addArgs.StartsWith("--front", StringComparison.OrdinalIgnoreCase))
+            {
+                front = true;
+                addArgs = addArgs[7..].TrimStart();
+            }
+            else if (addArgs.StartsWith("--save", StringComparison.OrdinalIgnoreCase))
+            {
+                save = true;
+                addArgs = addArgs[6..].TrimStart();
+            }
+            else break;
+        }
+
+        if (string.IsNullOrEmpty(addArgs))
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine("  path add: missing directory argument");
+            Console.ResetColor();
+            return true;
+        }
+
+        // Strip quotes and expand tilde
+        var dir = StripQuotes(addArgs);
+        var expandedDir = ExpandTildePath(dir);
+
+        // Normalize: strip trailing slash
+        expandedDir = expandedDir.TrimEnd('/');
+
+        // Check for duplicates
+        if (entries.Contains(expandedDir))
+        {
+            Console.ForegroundColor = Theme.Current.Warning;
+            Console.WriteLine($"  note: {expandedDir} already in PATH");
+            Console.ResetColor();
+        }
+
+        // Check existence
+        if (!Directory.Exists(expandedDir))
+        {
+            Console.ForegroundColor = Theme.Current.Warning;
+            Console.WriteLine($"  note: {expandedDir} does not exist (adding anyway)");
+            Console.ResetColor();
+        }
+
+        // Add to PATH
+        string newPath;
+        if (front)
+        {
+            newPath = expandedDir + ":" + currentPath;
+        }
+        else
+        {
+            newPath = currentPath + ":" + expandedDir;
+        }
+        SetPath(newPath, runspace);
+
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.Write(front ? "  prepended: " : "  appended:  ");
+        Console.ResetColor();
+        Console.WriteLine(expandedDir);
+
+        // Persist to init.rush if --save
+        if (save)
+        {
+            // Use the original (unexpanded) dir if it had ~ for portability
+            var savedDir = dir.Contains('~') ? dir : expandedDir;
+            var pathLine = front
+                ? $"path add --front {savedDir}"
+                : $"path add {savedDir}";
+            SavePathToInit(pathLine);
+        }
+
+        return false;
+    }
+
+    // ── path rm [--save] <dir> ──────────────────────────────────────
+    if (args.StartsWith("rm ", StringComparison.OrdinalIgnoreCase) ||
+        args.StartsWith("remove ", StringComparison.OrdinalIgnoreCase))
+    {
+        var rmStart = args.IndexOf(' ') + 1;
+        var rmArgs = args[rmStart..].Trim();
+        bool save = false;
+        if (rmArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
+            rmArgs.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+        {
+            save = true;
+            rmArgs = rmArgs[7..].Trim();
+        }
+
+        var dir = StripQuotes(rmArgs);
+        var expandedDir = ExpandTildePath(dir).TrimEnd('/');
+
+        var before = entries.Count;
+        entries.RemoveAll(e => e.TrimEnd('/').Equals(expandedDir, StringComparison.Ordinal));
+
+        if (entries.Count == before)
+        {
+            Console.ForegroundColor = Theme.Current.Warning;
+            Console.Error.WriteLine($"  not found in PATH: {expandedDir}");
+            Console.ResetColor();
+            return true;
+        }
+
+        var newPath = string.Join(":", entries);
+        SetPath(newPath, runspace);
+
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.Write("  removed:   ");
+        Console.ResetColor();
+        Console.WriteLine(expandedDir);
+
+        if (save)
+            RemovePathFromInit(expandedDir, dir);
+
+        return false;
+    }
+
+    // ── path edit — open in $EDITOR ─────────────────────────────────
+    if (args.Equals("edit", StringComparison.OrdinalIgnoreCase))
+    {
+        var editor = Environment.GetEnvironmentVariable("EDITOR") ?? "vi";
+        string? tempFile = null;
+
+        try
+        {
+            tempFile = Path.GetTempFileName();
+            File.WriteAllText(tempFile,
+                "# Edit PATH entries (one per line). Blank lines and #comments are ignored.\n" +
+                string.Join("\n", entries) + "\n");
+
+            // Open editor with inherited stdio
+            var psi = new ProcessStartInfo(editor, tempFile) { UseShellExecute = false };
+            var proc = Process.Start(psi);
+            if (proc == null)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"  path edit: could not start {editor}");
+                Console.ResetColor();
+                return true;
+            }
+            proc.WaitForExit();
+
+            if (proc.ExitCode != 0)
+            {
+                Console.ForegroundColor = Theme.Current.Warning;
+                Console.WriteLine("  path edit: editor exited with error, PATH unchanged");
+                Console.ResetColor();
+                return false;
+            }
+            proc.Dispose();
+
+            // Read back, filter blanks and comments
+            var newEntries = File.ReadAllLines(tempFile)
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith('#'))
+                .ToList();
+
+            var newPath = string.Join(":", newEntries);
+            SetPath(newPath, runspace);
+
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine($"  PATH updated ({newEntries.Count} entries)");
+            Console.ResetColor();
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine($"  path edit: {ex.Message}");
+            Console.ResetColor();
+            return true;
+        }
+        finally
+        {
+            if (tempFile != null) try { File.Delete(tempFile); } catch { }
+        }
+    }
+
+    // ── Unknown subcommand ──────────────────────────────────────────
+    Console.ForegroundColor = Theme.Current.Error;
+    Console.Error.WriteLine($"  path: unknown subcommand '{args.Split(' ')[0]}'");
+    Console.ResetColor();
+    Console.ForegroundColor = Theme.Current.Muted;
+    Console.Error.WriteLine("  usage: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit | check]");
+    Console.ResetColor();
+    return true;
 }
 
 static string FormatDuration(TimeSpan elapsed)
@@ -2490,7 +2968,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -2556,6 +3034,176 @@ static void ShowAliases(CommandTranslator translator)
     }
 }
 
+// ── Startup Tips ────────────────────────────────────────────────────
+
+static string GetStartupTip(RushConfig config)
+{
+    var tips = new[]
+    {
+        // ── Navigation ──
+        "cd -  ← jump back to previous directory",
+        "pushd /tmp && popd  ← directory stack: push, then pop back",
+        "cd ~/proj  ← tilde expands to home directory everywhere",
+
+        // ── History ──
+        "!!  ← repeat the last command",
+        "!$  ← reuse the last argument from previous command",
+        "!42  ← re-run command #42 from history",
+        "Ctrl+R  ← search command history interactively",
+
+        // ── Pipes & Filters ──
+        "ps | where CPU > 10  ← filter objects by property",
+        "ps | select ProcessName, CPU  ← pick specific columns",
+        "ls | count  ← count items (also: sum, avg, min, max)",
+        "ls | first 5  ← slice results (also: last, skip)",
+        "ls | distinct  ← unique values (works on unsorted data)",
+        "ps | .ProcessName  ← dot-notation extracts a single property",
+        "ls | as json  ← format output as JSON (also: csv, table, list)",
+        "cat data.json | from json  ← parse JSON input into objects",
+        "ls | tee files.txt | count  ← save and pass through",
+
+        // ── PATH Management ──
+        "path  ← list all PATH entries with existence check (✓/✗)",
+        "path add ~/bin  ← add directory to PATH for this session",
+        "path add --save --front /opt/bin  ← prepend to PATH and persist",
+        "path edit  ← edit PATH in your $EDITOR (one entry per line)",
+        "path rm /old/dir  ← remove a directory from PATH",
+
+        // ── Settings ──
+        "set  ← show all settings with descriptions and current values",
+        "set --save editMode emacs  ← change a setting and persist it",
+        "set -x  ← trace commands (shows + command before execution)",
+        "set -e  ← stop on first error (like bash strict mode)",
+
+        // ── Vi Mode ──
+        "/pattern  ← search history forward (vi normal mode)",
+        "?pattern  ← search history backward (vi normal mode)",
+        "n/N  ← repeat last search forward/backward",
+
+        // ── Completion ──
+        "Tab  ← complete paths, commands, and flags",
+        "Tab Tab  ← show all available completions",
+        "Right arrow or End  ← accept fish-style autosuggestion",
+
+        // ── Scripting ──
+        "source file.rush  ← run a Rush script in current session",
+        "$(ls | count)  ← command substitution: embed output inline",
+        "export FOO=bar  ← set environment variable",
+        "alias ll='ls -la'  ← define a command shortcut",
+
+        // ── Output ──
+        "ls > files.txt  ← redirect output to file",
+        "ls >> log.txt  ← append output to file",
+        "cmd1 && cmd2  ← run cmd2 only if cmd1 succeeds",
+        "cmd1 || echo 'failed'  ← run on failure only",
+        "sleep 10 &  ← run in background (jobs/fg to manage)",
+
+        // ── Config ──
+        "~/.config/rush/config.json  ← all settings, commented with descriptions",
+        "~/.config/rush/init.rush  ← startup script (PATH, aliases, functions, prompt)",
+        "~/.config/rush/secrets.rush  ← API keys & tokens (never synced)",
+        "reload  ← reload config without restarting",
+        "set --save showTips false  ← disable these startup tips",
+    };
+
+    // Rotate through tips based on day — each day shows a new tip
+    var dayIndex = (int)(DateTime.Now.Ticks / TimeSpan.TicksPerDay) % tips.Length;
+    return tips[dayIndex];
+}
+
+// ── Settings Display & Runtime Apply ────────────────────────────────
+
+static void ShowAllSettings(RushConfig config, bool setE, bool setX, bool setPipefail)
+{
+    Console.WriteLine();
+    string? lastCategory = null;
+
+    foreach (var s in RushConfig.AllSettings)
+    {
+        // Sync runtime flags into config for display
+        var currentVal = s.Key switch
+        {
+            "stopOnError" => setE.ToString().ToLowerInvariant(),
+            "traceCommands" => setX.ToString().ToLowerInvariant(),
+            "pipefailMode" => setPipefail.ToString().ToLowerInvariant(),
+            _ => config.GetValue(s.Key)
+        };
+        var isDefault = currentVal == s.DefaultValue;
+
+        if (s.Category != lastCategory)
+        {
+            if (lastCategory != null) Console.WriteLine();
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine($"  ── {s.Category} ──");
+            Console.ResetColor();
+            lastCategory = s.Category;
+        }
+
+        // Key
+        Console.Write("  ");
+        Console.ForegroundColor = Theme.Current.Banner;
+        Console.Write(s.Key.PadRight(24));
+        Console.ResetColor();
+
+        // Value
+        Console.ForegroundColor = isDefault ? Theme.Current.Muted : ConsoleColor.White;
+        Console.Write(currentVal);
+        Console.ResetColor();
+
+        // Description (short)
+        Console.ForegroundColor = Theme.Current.Muted;
+        // Truncate description to first sentence
+        var desc = s.Description;
+        var periodPos = desc.IndexOf(". ");
+        if (periodPos > 0) desc = desc[..(periodPos + 1)];
+        Console.Write($"  {desc}");
+        Console.ResetColor();
+        Console.WriteLine();
+    }
+
+    // Aliases
+    if (config.Aliases.Count > 0)
+    {
+        Console.WriteLine();
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine("  ── Aliases ──");
+        Console.ResetColor();
+        foreach (var (alias, cmd) in config.Aliases)
+        {
+            Console.Write("  ");
+            Console.ForegroundColor = Theme.Current.Banner;
+            Console.Write(alias.PadRight(24));
+            Console.ResetColor();
+            Console.WriteLine(cmd);
+        }
+    }
+
+    Console.WriteLine();
+    Console.ForegroundColor = Theme.Current.Muted;
+    Console.WriteLine("  set <key> <value>        change for this session");
+    Console.WriteLine("  set --save <key> <value>  change and persist to config.json");
+    Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
+    Console.ResetColor();
+    Console.WriteLine();
+}
+
+static void ApplySettingToRuntime(string key, RushConfig config, ref bool setE, ref bool setX, ref bool setPipefail, LineEditor lineEditor)
+{
+    switch (key.ToLowerInvariant())
+    {
+        case "stoponerror": setE = config.StopOnError; break;
+        case "tracecommands": setX = config.TraceCommands; break;
+        case "pipefailmode": setPipefail = config.PipefailMode; break;
+        case "editmode":
+            lineEditor.Mode = config.EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
+                ? EditMode.Emacs : EditMode.Vi;
+            break;
+        case "historysize":
+            lineEditor.MaxHistory = config.HistorySize;
+            break;
+    }
+}
+
 static void ShowHelp(LineEditor editor, CommandTranslator translator)
 {
     Console.ForegroundColor = Theme.Current.Banner;
@@ -2616,6 +3264,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  $HOME      — environment variable expansion");
     Console.WriteLine("  export     — set env var: export FOO=bar");
     Console.WriteLine("  unset      — remove env var: unset FOO");
+    Console.WriteLine("  path       — manage PATH: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit]");
     Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
     Console.WriteLine("  source     — run rush script: source file.rush");
     Console.WriteLine("  $(cmd)     — command substitution: echo $(ls | count)");
@@ -2628,6 +3277,8 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  \\          — line continuation (trailing backslash)");
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings (no args)");
+    Console.WriteLine("  set        — show all settings (set <key> <value> to change, --save to persist)");
+    Console.WriteLine("  set -e/-x  — stop on error / trace commands (bash-compatible)");
     Console.WriteLine("  sync       — config sync: sync init [github|ssh|path] | push | pull | status");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
@@ -2644,8 +3295,9 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 
     Console.WriteLine();
     Console.ForegroundColor = Theme.Current.Muted;
-    Console.WriteLine($"  Config: {RushConfig.GetConfigPath()}");
+    Console.WriteLine($"  Config:  {RushConfig.GetConfigPath()}");
     Console.WriteLine($"  Startup: ~/.config/rush/init.rush");
+    Console.WriteLine($"  Secrets: ~/.config/rush/secrets.rush (never synced)");
     Console.ResetColor();
 }
 

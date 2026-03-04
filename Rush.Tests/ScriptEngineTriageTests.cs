@@ -252,4 +252,66 @@ public class ScriptEngineTriageTests
     {
         Assert.True(_engine.IsRushSyntax(input));
     }
+
+    // ── TranspileFile: Builtin Translation ──────────────────────────
+
+    [Fact]
+    public void TranspileFile_ExportTranslatesToPowerShell()
+    {
+        var result = _engine.TranspileFile("export FOO=bar");
+        Assert.NotNull(result);
+        Assert.Contains("$env:FOO", result);
+        Assert.Contains("[Environment]::SetEnvironmentVariable", result);
+    }
+
+    [Fact]
+    public void TranspileFile_ExportWithPathRef_ExpandsToEnvVar()
+    {
+        var result = _engine.TranspileFile("export PATH=\"/usr/local/bin:$PATH\"");
+        Assert.NotNull(result);
+        Assert.Contains("$env:PATH", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAdd_TranslatesToPathManipulation()
+    {
+        var result = _engine.TranspileFile("path add /opt/homebrew/bin");
+        Assert.NotNull(result);
+        Assert.Contains("$env:PATH", result);
+        Assert.Contains("/opt/homebrew/bin", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddFront_PrependsToPATH()
+    {
+        var result = _engine.TranspileFile("path add --front /opt/bin");
+        Assert.NotNull(result);
+        // Front: dir comes before $env:PATH
+        Assert.Contains("/opt/bin:$env:PATH", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddAppend_AppendsToPATH()
+    {
+        var result = _engine.TranspileFile("path add /opt/bin");
+        Assert.NotNull(result);
+        // Append: $env:PATH comes before dir
+        Assert.Contains("$env:PATH:/opt/bin", result);
+    }
+
+    [Fact]
+    public void TranspileFile_UnsetTranslatesToRemoveItem()
+    {
+        var result = _engine.TranspileFile("unset FOO");
+        Assert.NotNull(result);
+        Assert.Contains("Remove-Item Env:FOO", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddWithTilde_ExpandsToDollarHOME()
+    {
+        var result = _engine.TranspileFile("path add ~/bin");
+        Assert.NotNull(result);
+        Assert.Contains("$HOME/bin", result);
+    }
 }

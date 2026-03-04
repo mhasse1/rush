@@ -274,7 +274,8 @@ public class ScriptEngine
             || word.Equals("printf", StringComparison.OrdinalIgnoreCase)
             || word.Equals("read", StringComparison.OrdinalIgnoreCase)
             || word.Equals("exec", StringComparison.OrdinalIgnoreCase)
-            || word.Equals("trap", StringComparison.OrdinalIgnoreCase);
+            || word.Equals("trap", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("path", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -419,9 +420,18 @@ public class ScriptEngine
                 }
                 else
                 {
-                    // Shell command — translate through CommandTranslator
-                    var translated = _translator.Translate(trimmed);
-                    sb.AppendLine(translated ?? trimmed);
+                    // Shell builtins — translate to PowerShell equivalents
+                    var builtinPs = TranslateBuiltin(trimmed);
+                    if (builtinPs != null)
+                    {
+                        sb.AppendLine(builtinPs);
+                    }
+                    else
+                    {
+                        // Shell command — translate through CommandTranslator
+                        var translated = _translator.Translate(trimmed);
+                        sb.AppendLine(translated ?? trimmed);
+                    }
                 }
             }
 
@@ -444,6 +454,81 @@ public class ScriptEngine
             var escaped = ex.Message.Replace("'", "''");
             return $"Write-Error 'Rush parse error: {escaped}'";
         }
+    }
+
+    /// <summary>
+    /// Translate shell builtins (export, path add, alias) to PowerShell equivalents
+    /// for use in transpiled scripts (init.rush, source'd files).
+    /// Returns null if not a recognized builtin.
+    /// </summary>
+    private static string? TranslateBuiltin(string line)
+    {
+        // export VAR=value → set both PowerShell and .NET environment
+        if (line.StartsWith("export ", StringComparison.OrdinalIgnoreCase))
+        {
+            var assignment = line[7..].Trim();
+            var eqPos = assignment.IndexOf('=');
+            if (eqPos > 0)
+            {
+                var varName = assignment[..eqPos].Trim();
+                var value = assignment[(eqPos + 1)..].Trim();
+                // Strip quotes
+                if ((value.StartsWith('"') && value.EndsWith('"')) ||
+                    (value.StartsWith('\'') && value.EndsWith('\'')))
+                    value = value[1..^1];
+                // Handle $PATH / $VAR references → PowerShell $env:VAR
+                var psValue = System.Text.RegularExpressions.Regex.Replace(
+                    value, @"\$(\w+)", m => "$env:" + m.Groups[1].Value);
+                var escaped = psValue.Replace("'", "''");
+                return $"$env:{varName} = \"{psValue}\"; [Environment]::SetEnvironmentVariable('{varName}', \"{psValue}\")";
+            }
+        }
+
+        // unset VAR → remove from both PowerShell and .NET environment
+        if (line.StartsWith("unset ", StringComparison.OrdinalIgnoreCase))
+        {
+            var varName = line[6..].Trim();
+            return $"Remove-Item Env:{varName} -ErrorAction SilentlyContinue; [Environment]::SetEnvironmentVariable('{varName}', $null)";
+        }
+
+        // path add [--front] <dir> → manipulate PATH
+        if (line.StartsWith("path add ", StringComparison.OrdinalIgnoreCase))
+        {
+            var args = line[9..].Trim();
+            bool front = false;
+            if (args.StartsWith("--front ", StringComparison.OrdinalIgnoreCase) ||
+                args.StartsWith("--front\t", StringComparison.OrdinalIgnoreCase))
+            {
+                front = true;
+                args = args[8..].Trim();
+            }
+            // Strip --save flag (irrelevant at runtime)
+            if (args.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
+                args.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+                args = args[7..].Trim();
+
+            // Strip quotes
+            if ((args.StartsWith('"') && args.EndsWith('"')) ||
+                (args.StartsWith('\'') && args.EndsWith('\'')))
+                args = args[1..^1];
+
+            // Expand ~ to home dir in PowerShell
+            var psDir = args.Replace("~", "$HOME");
+            if (front)
+                return $"$env:PATH = \"{psDir}:$env:PATH\"; [Environment]::SetEnvironmentVariable('PATH', $env:PATH)";
+            else
+                return $"$env:PATH = \"$env:PATH:{psDir}\"; [Environment]::SetEnvironmentVariable('PATH', $env:PATH)";
+        }
+
+        // alias name='command' → CommandTranslator handled at runtime, skip in scripts
+        if (line.StartsWith("alias ", StringComparison.OrdinalIgnoreCase))
+        {
+            // Aliases are loaded from config.json; in scripts, they're a no-op
+            // but emit a comment so the user knows
+            return "# alias (handled by config.json at startup)";
+        }
+
+        return null;
     }
 
     /// <summary>

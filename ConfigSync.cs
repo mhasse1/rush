@@ -32,7 +32,6 @@ public class ConfigSync
     /// <summary>Files tracked by sync (relative to ConfigDir).</summary>
     internal static readonly string[] SyncFiles = {
         "config.json",
-        "config.rush",
         "init.rush"
     };
 

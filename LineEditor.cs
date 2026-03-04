@@ -34,6 +34,11 @@ public class LineEditor
     private char _lastFindChar;
     private bool _lastFindForward;
 
+    // Vi search (/ and ?)
+    private string _lastSearchQuery = "";
+    private bool _lastSearchForward; // true = / (oldest→newest), false = ? (newest→oldest)
+    private int _lastSearchMatchIndex = -1;
+
     // Vi yank/paste/undo
     private string _yankBuffer = "";
     private readonly Stack<(List<char> buffer, int cursor)> _undoStack = new();
@@ -391,6 +396,22 @@ public class LineEditor
                 }
                 return null;
             }
+
+            // -- Vi search --
+            case '/':
+                HandleViSearch(forward: true);
+                return null;
+            case '?':
+                HandleViSearch(forward: false);
+                return null;
+            case 'n':
+                if (!string.IsNullOrEmpty(_lastSearchQuery))
+                    RepeatViSearch(_lastSearchForward);
+                return null;
+            case 'N':
+                if (!string.IsNullOrEmpty(_lastSearchQuery))
+                    RepeatViSearch(!_lastSearchForward);
+                return null;
 
             default:
                 break;
@@ -924,6 +945,219 @@ public class LineEditor
             }
 
             UpdateSearchDisplay(matchIndex >= 0 ? _history[matchIndex] : null);
+        }
+    }
+
+    // ── Vi Search (/ and ?) ─────────────────────────────────────────────
+
+    private void HandleViSearch(bool forward)
+    {
+        var searchBuffer = new List<char>();
+        int matchIndex = -1;
+
+        // Save current state
+        var savedBuffer = new List<char>(_buffer);
+        var savedCursor = _cursor;
+
+        var prompt = forward ? "(/)'" : "(?)'";
+
+        void UpdateDisplay(string? match)
+        {
+            Console.SetCursorPosition(0, _startTop);
+            int width;
+            try { width = Console.WindowWidth; }
+            catch { width = 120; }
+            Console.Write(new string(' ', width));
+            Console.SetCursorPosition(0, _startTop);
+
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write(prompt);
+            Console.ForegroundColor = Theme.Current.SearchQuery;
+            Console.Write(new string(searchBuffer.ToArray()));
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write("': ");
+            Console.ResetColor();
+
+            if (match != null)
+                Console.Write(match);
+
+            _startLeft = Console.CursorLeft;
+        }
+
+        void DoSearch()
+        {
+            var query = new string(searchBuffer.ToArray());
+            matchIndex = -1;
+
+            if (forward)
+            {
+                // Search from oldest to newest
+                for (int i = 0; i < _history.Count; i++)
+                {
+                    if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchIndex = i;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                // Search from newest to oldest
+                for (int i = _history.Count - 1; i >= 0; i--)
+                {
+                    if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                    {
+                        matchIndex = i;
+                        break;
+                    }
+                }
+            }
+
+            if (matchIndex >= 0)
+            {
+                _buffer.Clear();
+                _buffer.AddRange(_history[matchIndex]);
+                _cursor = _buffer.Count;
+            }
+        }
+
+        UpdateDisplay(null);
+
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+
+            if (key.Key == ConsoleKey.Escape)
+            {
+                // Cancel — restore original
+                _buffer = savedBuffer;
+                _cursor = savedCursor;
+
+                Console.SetCursorPosition(0, _startTop);
+                int width2;
+                try { width2 = Console.WindowWidth; }
+                catch { width2 = 120; }
+                Console.Write(new string(' ', width2));
+                Console.SetCursorPosition(0, _startTop);
+                _startLeft = 0;
+                Redraw();
+                return;
+            }
+
+            if (key.Key == ConsoleKey.Enter)
+            {
+                // Accept current match
+                if (matchIndex >= 0)
+                {
+                    _buffer.Clear();
+                    _buffer.AddRange(_history[matchIndex]);
+                    _cursor = _buffer.Count;
+
+                    // Save search state for n/N
+                    _lastSearchQuery = new string(searchBuffer.ToArray());
+                    _lastSearchForward = forward;
+                    _lastSearchMatchIndex = matchIndex;
+                }
+
+                Console.SetCursorPosition(0, _startTop);
+                int width3;
+                try { width3 = Console.WindowWidth; }
+                catch { width3 = 120; }
+                Console.Write(new string(' ', width3));
+                Console.SetCursorPosition(0, _startTop);
+                _startLeft = 0;
+                Redraw();
+                return;
+            }
+
+            // Cycle to next match with the same key that started the search
+            if ((forward && key.KeyChar == '/') || (!forward && key.KeyChar == '?'))
+            {
+                if (matchIndex >= 0)
+                {
+                    var query = new string(searchBuffer.ToArray());
+                    if (forward)
+                    {
+                        for (int i = matchIndex + 1; i < _history.Count; i++)
+                        {
+                            if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                            {
+                                matchIndex = i;
+                                _buffer.Clear();
+                                _buffer.AddRange(_history[i]);
+                                _cursor = _buffer.Count;
+                                UpdateDisplay(_history[i]);
+                                break;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        for (int i = matchIndex - 1; i >= 0; i--)
+                        {
+                            if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                            {
+                                matchIndex = i;
+                                _buffer.Clear();
+                                _buffer.AddRange(_history[i]);
+                                _cursor = _buffer.Count;
+                                UpdateDisplay(_history[i]);
+                                break;
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (searchBuffer.Count > 0)
+                    searchBuffer.RemoveAt(searchBuffer.Count - 1);
+            }
+            else if (key.KeyChar >= 32)
+            {
+                searchBuffer.Add(key.KeyChar);
+            }
+            else
+            {
+                continue;
+            }
+
+            DoSearch();
+            UpdateDisplay(matchIndex >= 0 ? _history[matchIndex] : null);
+        }
+    }
+
+    private void RepeatViSearch(bool forward)
+    {
+        if (string.IsNullOrEmpty(_lastSearchQuery)) return;
+
+        int startFrom = _lastSearchMatchIndex;
+        if (forward)
+        {
+            for (int i = startFrom + 1; i < _history.Count; i++)
+            {
+                if (_history[i].Contains(_lastSearchQuery, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastSearchMatchIndex = i;
+                    ReplaceBuffer(_history[i]);
+                    return;
+                }
+            }
+        }
+        else
+        {
+            for (int i = startFrom - 1; i >= 0; i--)
+            {
+                if (_history[i].Contains(_lastSearchQuery, StringComparison.OrdinalIgnoreCase))
+                {
+                    _lastSearchMatchIndex = i;
+                    ReplaceBuffer(_history[i]);
+                    return;
+                }
+            }
         }
     }
 

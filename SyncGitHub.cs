@@ -72,7 +72,7 @@ internal static class SyncGitHub
         if (!File.Exists(gitignorePath))
         {
             File.WriteAllText(gitignorePath,
-                "# Sensitive files\napi-keys\nsecrets.*\n*.key\n*.pem\nsync.json\n.sync-manifest\n");
+                "# Sensitive files\nsecrets.rush\nsecrets.*\napi-keys\n*.key\n*.pem\nsync.json\n.sync-manifest\n");
         }
 
         // Try to pull existing content first

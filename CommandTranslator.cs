@@ -460,7 +460,13 @@ public class CommandTranslator
     /// <summary>
     /// Split input on pipe characters, respecting quotes.
     /// </summary>
-    private static string[] SplitOnPipe(string input)
+    /// <summary>
+    /// Check if a command string contains an unquoted pipe character.
+    /// Used to determine whether PowerShell is needed for pipeline execution.
+    /// </summary>
+    public static bool HasUnquotedPipe(string input) => SplitOnPipe(input).Length > 1;
+
+    internal static string[] SplitOnPipe(string input)
     {
         var segments = new List<string>();
         var current = new System.Text.StringBuilder();

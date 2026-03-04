@@ -29,7 +29,8 @@ public class SyntaxHighlighter
         "sum", "avg", "min", "max", // Math aggregations
         "jobs", "fg", "bg", "wait", // Job control
         "pushd", "popd", "dirs", // Directory stack
-        "printf", "read", "exec", "trap" // Shell builtins
+        "printf", "read", "exec", "trap", // Shell builtins
+        "path" // PATH management
     };
 
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)

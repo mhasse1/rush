@@ -12,6 +12,7 @@ public class TabCompleter
 {
     private readonly Runspace _runspace;
     private readonly CommandTranslator _translator;
+    private readonly RushConfig _config;
 
     // Completion cycling state
     private string? _lastCompletionInput;
@@ -23,11 +24,15 @@ public class TabCompleter
     private List<string>? _pathBinaries;
     private string? _cachedPath;
 
-    public TabCompleter(Runspace runspace, CommandTranslator translator)
+    public TabCompleter(Runspace runspace, CommandTranslator translator, RushConfig? config = null)
     {
         _runspace = runspace;
         _translator = translator;
+        _config = config ?? new RushConfig();
     }
+
+    private StringComparison CompareMode =>
+        _config.CompletionIgnoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     /// <summary>
     /// Get the next completion for the current input and cursor position.
@@ -57,6 +62,8 @@ public class TabCompleter
         var beforeToken = input[..tokenStart].TrimEnd();
         bool isFirstToken = !beforeToken.Contains(' ');
         var firstWord = ExtractFirstWord(beforeToken);
+        bool isPathLike = token.Contains('/') || token.Contains(Path.DirectorySeparatorChar)
+            || token.StartsWith("./") || token.StartsWith("../");
 
         if (token.StartsWith('$'))
         {
@@ -67,6 +74,11 @@ public class TabCompleter
         {
             // Flag completion
             CompleteFlags(firstWord, token);
+        }
+        else if (isPathLike)
+        {
+            // Path-like tokens (contain / or start with ./ ../) always get path completion
+            CompletePaths(token);
         }
         else if (isFirstToken)
         {
@@ -162,10 +174,10 @@ public class TabCompleter
     private void CompleteCommands(string prefix)
     {
         // Rush built-in commands
-        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "unalias", "reload", "clear", "pushd", "popd", "dirs", "jobs", "fg", "bg", "wait", "export", "unset", "source", "printf", "read", "exec", "trap" };
+        var builtins = new[] { "exit", "quit", "help", "set", "cd", "history", "alias", "unalias", "reload", "clear", "pushd", "popd", "dirs", "jobs", "fg", "bg", "wait", "export", "unset", "source", "printf", "read", "exec", "trap", "path" };
         foreach (var cmd in builtins)
         {
-            if (cmd.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (cmd.StartsWith(prefix, CompareMode))
                 _completions.Add(cmd);
         }
 
@@ -173,14 +185,14 @@ public class TabCompleter
         var aliases = _translator.GetCommandNames();
         foreach (var alias in aliases)
         {
-            if (alias.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !_completions.Contains(alias))
+            if (alias.StartsWith(prefix, CompareMode) && !_completions.Contains(alias))
                 _completions.Add(alias);
         }
 
         // PATH binaries
         foreach (var bin in GetPathBinaries())
         {
-            if (bin.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !_completions.Contains(bin))
+            if (bin.StartsWith(prefix, CompareMode) && !_completions.Contains(bin))
                 _completions.Add(bin);
         }
 
@@ -249,7 +261,7 @@ public class TabCompleter
             foreach (var d in Directory.GetDirectories(dir))
             {
                 var name = Path.GetFileName(d);
-                if (name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
+                if (name.StartsWith(filePrefix, CompareMode))
                 {
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
@@ -274,7 +286,7 @@ public class TabCompleter
         foreach (var key in Environment.GetEnvironmentVariables().Keys)
         {
             var name = key.ToString()!;
-            if (name.StartsWith(varPrefix, StringComparison.OrdinalIgnoreCase))
+            if (name.StartsWith(varPrefix, CompareMode))
                 _completions.Add("$" + name);
         }
         _completions.Sort(StringComparer.OrdinalIgnoreCase);
@@ -287,7 +299,7 @@ public class TabCompleter
         var flags = _translator.GetFlagsForCommand(command);
         foreach (var flag in flags)
         {
-            if (flag.StartsWith(flagPrefix, StringComparison.OrdinalIgnoreCase))
+            if (flag.StartsWith(flagPrefix, CompareMode))
                 _completions.Add(flag);
         }
         _completions.Sort(StringComparer.OrdinalIgnoreCase);
@@ -328,7 +340,7 @@ public class TabCompleter
             foreach (var d in Directory.GetDirectories(dir))
             {
                 var name = Path.GetFileName(d);
-                if (name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
+                if (name.StartsWith(filePrefix, CompareMode))
                 {
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
@@ -346,7 +358,7 @@ public class TabCompleter
             foreach (var f in Directory.GetFiles(dir))
             {
                 var name = Path.GetFileName(f);
-                if (name.StartsWith(filePrefix, StringComparison.OrdinalIgnoreCase))
+                if (name.StartsWith(filePrefix, CompareMode))
                 {
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
@@ -380,6 +392,12 @@ public class TabCompleter
                 foreach (var match in completions.CompletionMatches)
                 {
                     var text = match.CompletionText;
+                    // PowerShell directory completions lack trailing / — add it
+                    if (match.ResultType == CompletionResultType.ProviderContainer
+                        && !text.EndsWith('/') && !text.EndsWith(Path.DirectorySeparatorChar))
+                    {
+                        text += "/";
+                    }
                     if (!_completions.Contains(text))
                         _completions.Add(text);
                 }
