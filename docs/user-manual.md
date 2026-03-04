@@ -166,7 +166,7 @@ Rush defaults to vi-style line editing.
 | Key | Action |
 |-----|--------|
 | `Esc` | Switch to normal mode |
-| `Tab` | Complete or accept autosuggestion |
+| `Tab` | Complete paths and commands |
 | `Ctrl+C` | Cancel current line |
 | `Ctrl+R` | Reverse history search |
 
@@ -218,13 +218,6 @@ Tab completes based on context:
 - **Otherwise**: files and directories (with `/` suffix for dirs)
 
 Press Tab multiple times to cycle through matches.
-
-### Autosuggestions
-
-Rush shows ghost text (dimmed) as you type, based on command history — similar to Fish shell.
-
-- **Vi mode**: press `Tab` at end of input to accept
-- **Emacs mode**: press `→` (right arrow) or `End` to accept
 
 ### History
 

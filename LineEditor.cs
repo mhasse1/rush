@@ -45,10 +45,6 @@ public class LineEditor
     private char _pendingOperator; // 'd', 'c', 'y', or '\0'
     private int _pendingCount;
 
-    // Fish-style autosuggestion
-    private string? _suggestion;
-    private readonly HashSet<string> _failedCommands = new(StringComparer.OrdinalIgnoreCase);
-
     // History persistence
     private static readonly string HistoryDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -195,11 +191,6 @@ public class LineEditor
                 SetCursorPos();
                 return null;
             case 'l':
-                if (_cursor >= _buffer.Count - 1 && _suggestion != null)
-                {
-                    AcceptSuggestion();
-                    return null;
-                }
                 for (int i = 0; i < count && _cursor < _buffer.Count - 1; i++) _cursor++;
                 SetCursorPos();
                 return null;
@@ -426,7 +417,6 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
-                ClearSuggestionDisplay();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -438,11 +428,6 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.RightArrow:
-                if (_suggestion != null && _cursor >= Math.Max(0, _buffer.Count - 1))
-                {
-                    AcceptSuggestion();
-                    return null;
-                }
                 if (_cursor < _buffer.Count - 1) _cursor++;
                 SetCursorPos();
                 return null;
@@ -648,7 +633,6 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
-                ClearSuggestionDisplay();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -686,11 +670,6 @@ public class LineEditor
                     _cursor = FindWordBoundaryRight(_buffer, _cursor);
                 else if (_cursor < _buffer.Count)
                     _cursor++;
-                else if (_suggestion != null)
-                {
-                    AcceptSuggestion();
-                    return null;
-                }
                 SetCursorPos();
                 return null;
 
@@ -700,11 +679,6 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.End:
-                if (_cursor == _buffer.Count && _suggestion != null)
-                {
-                    AcceptSuggestion();
-                    return null;
-                }
                 _cursor = _buffer.Count;
                 SetCursorPos();
                 return null;
@@ -1187,9 +1161,6 @@ public class LineEditor
 
     private void Redraw()
     {
-        // Update autosuggestion
-        UpdateSuggestion();
-
         Console.SetCursorPosition(_startLeft, _startTop);
         var text = new string(_buffer.ToArray());
 
@@ -1203,17 +1174,9 @@ public class LineEditor
             Console.Write(text);
         }
 
-        // Draw autosuggestion ghost text (fish-style)
         int ghostLen = 0;
-        if (_suggestion != null && _cursor == _buffer.Count)
-        {
-            Console.Write(Theme.Current.AnsiSuggestion);
-            Console.Write(_suggestion);
-            Console.Write(Theme.Current.AnsiReset);
-            ghostLen = _suggestion.Length;
-        }
 
-        // Clear trailing chars (including old ghost text)
+        // Clear trailing chars
         try
         {
             int totalWritten = (_startLeft + _buffer.Count + ghostLen) % Console.WindowWidth;
@@ -1245,55 +1208,6 @@ public class LineEditor
         _buffer.Clear();
         _buffer.AddRange(newContent);
         _cursor = _buffer.Count;
-        Redraw();
-    }
-
-    // ── Autosuggestion ──────────────────────────────────────────────────
-
-    private void UpdateSuggestion()
-    {
-        _suggestion = null;
-        if (_buffer.Count == 0) return;
-        if (_cursor != _buffer.Count) return; // Only suggest when cursor at end
-
-        var currentInput = new string(_buffer.ToArray());
-
-        for (int i = _history.Count - 1; i >= 0; i--)
-        {
-            if (_failedCommands.Contains(_history[i]))
-                continue; // Don't suggest commands that failed this session
-
-            if (_history[i].StartsWith(currentInput, StringComparison.OrdinalIgnoreCase)
-                && _history[i].Length > currentInput.Length)
-            {
-                _suggestion = _history[i][currentInput.Length..];
-                return;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Erase ghost suggestion text from the display so it doesn't
-    /// linger in scrollback when Enter is pressed.
-    /// Cursor is already positioned at end of typed text (after last Redraw).
-    /// ESC[J erases from cursor to end of display, handling wrapped ghosts too.
-    /// </summary>
-    private void ClearSuggestionDisplay()
-    {
-        if (_suggestion == null) return;
-        _suggestion = null;
-        Console.Write("\x1b[J");
-    }
-
-    private void AcceptSuggestion()
-    {
-        if (_suggestion == null) return;
-        _buffer.AddRange(_suggestion);
-        _suggestion = null;
-        if (Mode == EditMode.Vi && _viMode == ViMode.Normal)
-            _cursor = Math.Max(0, _buffer.Count - 1);
-        else
-            _cursor = _buffer.Count;
         Redraw();
     }
 
@@ -1338,13 +1252,6 @@ public class LineEditor
         if (_history.Count > 0)
             _history[^1] = replacement;
     }
-
-    /// <summary>
-    /// Mark a command as failed so it won't appear in autosuggestions.
-    /// The command stays in history (arrow-up still finds it for editing).
-    /// Session-scoped — clears on restart so stale failures don't linger.
-    /// </summary>
-    public void MarkFailed(string command) => _failedCommands.Add(command.Trim());
 
     /// <summary>Clear all history entries and persist the empty state.</summary>
     public void ClearHistory()

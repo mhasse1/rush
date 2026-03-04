@@ -66,7 +66,7 @@ Theme.Initialize(config.GetThemeOverride());
 Console.ForegroundColor = Theme.Current.Banner;
 Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
-Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R | autosuggestions");
+Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R");
 Console.ResetColor();
 
 if (config.ShowTips)
@@ -1401,8 +1401,6 @@ while (true)
     }
 
     prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
-    if (lastSegmentFailed)
-        lineEditor.MarkFailed(input);
     lineEditor.SaveHistory();
 }
 
@@ -3085,8 +3083,6 @@ static string GetStartupTip(RushConfig config)
         // ── Completion ──
         "Tab  ← complete paths, commands, and flags",
         "Tab Tab  ← show all available completions",
-        "Right arrow or End  ← accept fish-style autosuggestion",
-
         // ── Scripting ──
         "source file.rush  ← run a Rush script in current session",
         "$(ls | count)  ← command substitution: embed output inline",
@@ -3242,7 +3238,6 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 
     Console.WriteLine("  Tab        — complete paths and commands");
     Console.WriteLine("  Ctrl+R     — reverse history search");
-    Console.WriteLine("  →/End      — accept autosuggestion (fish-style ghost text)");
     Console.WriteLine("  cd -       — go to previous directory");
     Console.WriteLine("  !!         — repeat last command");
     Console.WriteLine("  !$         — last argument of previous command");

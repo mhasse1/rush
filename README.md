@@ -63,7 +63,6 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 - Vi and Emacs line editing modes
 - Tab completion (paths + commands)
 - Ctrl+R reverse history search
-- Fish-style autosuggestions (ghost text)
 - Persistent history across sessions
 - Real-time syntax highlighting as you type
 - Color-coded `ls` output by file type
@@ -117,7 +116,7 @@ Rush embeds the PowerShell 7 engine (MIT-licensed `Microsoft.PowerShell.SDK`) as
 
 Key components:
 - `CommandTranslator` — maps Unix commands + flags to PowerShell cmdlets
-- `LineEditor` — vi/emacs line editing with history, tab completion, autosuggestions
+- `LineEditor` — vi/emacs line editing with history, tab completion
 - `OutputRenderer` — type-aware output formatting (colorized ls, process tables, generic tables)
 - `SyntaxHighlighter` — real-time ANSI colorization of commands, flags, strings, operators
 - `Prompt` — git-aware prompt rendering with exit code indication
