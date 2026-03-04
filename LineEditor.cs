@@ -194,6 +194,11 @@ public class LineEditor
                 SetCursorPos();
                 return null;
             case 'l':
+                if (_cursor >= _buffer.Count - 1 && _suggestion != null)
+                {
+                    AcceptSuggestion();
+                    return null;
+                }
                 for (int i = 0; i < count && _cursor < _buffer.Count - 1; i++) _cursor++;
                 SetCursorPos();
                 return null;
@@ -782,33 +787,25 @@ public class LineEditor
 
     private void HandleTab()
     {
-        // In vi mode, Tab accepts the autosuggestion when one is visible
-        // and cursor is at end of input. This keeps hands on home row —
-        // the primary ergonomic advantage of vi mode.
-        // In emacs mode, Tab always does completion (use → or End to accept suggestions).
-        if (Mode == EditMode.Vi && _suggestion != null && _cursor == _buffer.Count)
-        {
-            AcceptSuggestion();
-            return;
-        }
-
+        // Tab = filesystem/command completion only. Never accepts suggestions.
+        // Suggestions are accepted via: Right-arrow, End, or `l` at EOL (vi mode).
         if (CompleteHandler == null) return;
 
         var input = new string(_buffer.ToArray());
         var result = CompleteHandler(input, _cursor);
 
-        if (result == null)
+        if (result != null)
         {
-            // No completions — show list if available
-            ShowCompletionsHandler?.Invoke();
+            var (newInput, newCursor) = result.Value;
+            _buffer.Clear();
+            _buffer.AddRange(newInput);
+            _cursor = Math.Min(newCursor, _buffer.Count);
+            Redraw();
             return;
         }
 
-        var (newInput, newCursor) = result.Value;
-        _buffer.Clear();
-        _buffer.AddRange(newInput);
-        _cursor = Math.Min(newCursor, _buffer.Count);
-        Redraw();
+        // No single completion — show list if multiple exist
+        ShowCompletionsHandler?.Invoke();
     }
 
     // ── Reverse Search (Ctrl+R) ──────────────────────────────────────────
