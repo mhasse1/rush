@@ -47,6 +47,7 @@ public class LineEditor
 
     // Fish-style autosuggestion
     private string? _suggestion;
+    private readonly HashSet<string> _failedCommands = new(StringComparer.OrdinalIgnoreCase);
 
     // History persistence
     private static readonly string HistoryDir = Path.Combine(
@@ -1259,6 +1260,9 @@ public class LineEditor
 
         for (int i = _history.Count - 1; i >= 0; i--)
         {
+            if (_failedCommands.Contains(_history[i]))
+                continue; // Don't suggest commands that failed this session
+
             if (_history[i].StartsWith(currentInput, StringComparison.OrdinalIgnoreCase)
                 && _history[i].Length > currentInput.Length)
             {
@@ -1334,6 +1338,13 @@ public class LineEditor
         if (_history.Count > 0)
             _history[^1] = replacement;
     }
+
+    /// <summary>
+    /// Mark a command as failed so it won't appear in autosuggestions.
+    /// The command stays in history (arrow-up still finds it for editing).
+    /// Session-scoped — clears on restart so stale failures don't linger.
+    /// </summary>
+    public void MarkFailed(string command) => _failedCommands.Add(command.Trim());
 
     /// <summary>Clear all history entries and persist the empty state.</summary>
     public void ClearHistory()

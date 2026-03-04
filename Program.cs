@@ -1401,6 +1401,8 @@ while (true)
     }
 
     prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
+    if (lastSegmentFailed)
+        lineEditor.MarkFailed(input);
     lineEditor.SaveHistory();
 }
 

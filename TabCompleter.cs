@@ -60,7 +60,7 @@ public class TabCompleter
 
         // Determine context
         var beforeToken = input[..tokenStart].TrimEnd();
-        bool isFirstToken = !beforeToken.Contains(' ');
+        bool isFirstToken = string.IsNullOrEmpty(beforeToken);
         var firstWord = ExtractFirstWord(beforeToken);
         bool isPathLike = token.Contains('/') || token.Contains(Path.DirectorySeparatorChar)
             || token.StartsWith("./") || token.StartsWith("../");
