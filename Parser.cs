@@ -21,6 +21,17 @@ public class AssignmentNode : RushNode
     public AssignmentNode(string name, RushNode value) { Name = name; Value = value; }
 }
 
+/// <summary>Multiple assignment: a, b, c = 1, 2, 3</summary>
+public class MultipleAssignmentNode : RushNode
+{
+    public List<string> Names { get; }
+    public List<RushNode> Values { get; }
+    public MultipleAssignmentNode(List<string> names, List<RushNode> values)
+    {
+        Names = names; Values = values;
+    }
+}
+
 /// <summary>Compound assignment: name += expr, name -= expr</summary>
 public class CompoundAssignmentNode : RushNode
 {
@@ -291,16 +302,19 @@ public class ShellPassthroughNode : RushNode
     public ShellPassthroughNode(string rawCommand) { RawCommand = rawCommand; }
 }
 
+/// <summary>Attribute definition with optional type annotation: attr name or attr name: String</summary>
+public record AttrDef(string Name, string? TypeName = null);
+
 /// <summary>class Name ... end (with attr declarations, constructor, and methods)</summary>
 public class ClassDefNode : RushNode
 {
     public string Name { get; }
     public string? ParentClassName { get; }
-    public List<string> Attributes { get; }
+    public List<AttrDef> Attributes { get; }
     public FunctionDefNode? Constructor { get; }
     public List<FunctionDefNode> Methods { get; }
     public List<FunctionDefNode> StaticMethods { get; }
-    public ClassDefNode(string name, string? parentClassName, List<string> attributes,
+    public ClassDefNode(string name, string? parentClassName, List<AttrDef> attributes,
         FunctionDefNode? constructor, List<FunctionDefNode> methods,
         List<FunctionDefNode> staticMethods)
     {
@@ -480,6 +494,31 @@ public class Parser
             var op = Advance().Value; // += or -=
             var value = ParseExpression();
             return WrapPostfix(new CompoundAssignmentNode(name, op, value));
+        }
+
+        // Check for multiple assignment: a, b, c = 1, 2, 3
+        if (Current.Type == RushTokenType.Identifier && Peek(1).Type == RushTokenType.Comma)
+        {
+            var saved = _pos;
+            var names = new List<string>();
+            names.Add(Advance().Value);
+            while (Match(RushTokenType.Comma))
+            {
+                if (Current.Type != RushTokenType.Identifier) { names.Clear(); break; }
+                names.Add(Advance().Value);
+            }
+            if (names.Count >= 2 && Current.Type == RushTokenType.Assign
+                && Peek(1).Type != RushTokenType.Assign) // not ==
+            {
+                Advance(); // skip =
+                var values = new List<RushNode>();
+                values.Add(ParseExpression());
+                while (Match(RushTokenType.Comma))
+                    values.Add(ParseExpression());
+                return WrapPostfix(new MultipleAssignmentNode(names, values));
+            }
+            // Not multiple assignment — restore position
+            _pos = saved;
         }
 
         // Check for assignment: identifier = expr
@@ -678,7 +717,7 @@ public class Parser
 
         SkipNewlines();
 
-        var attributes = new List<string>();
+        var attributes = new List<AttrDef>();
         FunctionDefNode? constructor = null;
         var methods = new List<FunctionDefNode>();
         var staticMethods = new List<FunctionDefNode>();
@@ -694,7 +733,12 @@ public class Parser
                 Advance(); // skip 'attr'
                 do
                 {
-                    attributes.Add(Expect(RushTokenType.Identifier).Value);
+                    var attrName = Expect(RushTokenType.Identifier).Value;
+                    string? typeName = null;
+                    // Optional type annotation: attr name: String
+                    if (Match(RushTokenType.Colon))
+                        typeName = Expect(RushTokenType.Identifier).Value;
+                    attributes.Add(new AttrDef(attrName, typeName));
                 } while (Match(RushTokenType.Comma));
             }
             else if (Current.Type == RushTokenType.Def)

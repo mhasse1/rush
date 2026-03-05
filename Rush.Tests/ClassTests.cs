@@ -119,7 +119,7 @@ public class ClassTests
         var node = ParseSingle("class Person\n  attr name, age\nend");
         var cls = Assert.IsType<ClassDefNode>(node);
         Assert.Equal("Person", cls.Name);
-        Assert.Equal(new[] { "name", "age" }, cls.Attributes);
+        Assert.Equal(new[] { "name", "age" }, cls.Attributes.Select(a => a.Name).ToArray());
         Assert.Null(cls.Constructor);
         Assert.Empty(cls.Methods);
     }
@@ -614,6 +614,168 @@ puts c.get_value()";
         var (stdout, stderr, exitCode) = RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("42", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    // ── Typed Attrs: Parser ──────────────────────────────────────────────
+
+    [Fact]
+    public void Parse_TypedAttr()
+    {
+        var code = "class Person\n  attr name: String\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Single(cls.Attributes);
+        Assert.Equal("name", cls.Attributes[0].Name);
+        Assert.Equal("String", cls.Attributes[0].TypeName);
+    }
+
+    [Fact]
+    public void Parse_TypedAttrMultiple()
+    {
+        var code = "class Point\n  attr x: Int, y: Int\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Equal(2, cls.Attributes.Count);
+        Assert.Equal("x", cls.Attributes[0].Name);
+        Assert.Equal("Int", cls.Attributes[0].TypeName);
+        Assert.Equal("y", cls.Attributes[1].Name);
+        Assert.Equal("Int", cls.Attributes[1].TypeName);
+    }
+
+    [Fact]
+    public void Parse_MixedTypedAndUntypedAttrs()
+    {
+        var code = "class Record\n  attr name: String, age, active: Bool\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Equal(3, cls.Attributes.Count);
+        Assert.Equal("String", cls.Attributes[0].TypeName);
+        Assert.Null(cls.Attributes[1].TypeName);
+        Assert.Equal("Bool", cls.Attributes[2].TypeName);
+    }
+
+    // ── Typed Attrs: Transpiler ──────────────────────────────────────────
+
+    [Fact]
+    public void Transpile_TypedAttr()
+    {
+        var ps = Transpile("class Person\n  attr name: String\nend");
+        Assert.Contains("[string]$Name", ps);
+    }
+
+    [Fact]
+    public void Transpile_TypedAttrInt()
+    {
+        var ps = Transpile("class Point\n  attr x: Int, y: Int\nend");
+        Assert.Contains("[int]$X", ps);
+        Assert.Contains("[int]$Y", ps);
+    }
+
+    [Fact]
+    public void Transpile_UntypedAttrStaysObject()
+    {
+        var ps = Transpile("class Box\n  attr label\nend");
+        Assert.Contains("[object]$Label", ps);
+    }
+
+    [Fact]
+    public void Transpile_TypedAttrCustomClass()
+    {
+        var ps = Transpile("class Node\n  attr child: Node\nend");
+        Assert.Contains("[Node]$Child", ps);
+    }
+
+    // ── Typed Attrs: Integration ──────────────────────────────────────────
+
+    [Fact]
+    public void Integration_TypedAttr()
+    {
+        var script = @"
+class Person
+  attr name: String, age: Int
+
+  def initialize(name, age)
+    self.name = name
+    self.age = age
+  end
+
+  def describe
+    return self.name + "" is "" + self.age
+  end
+end
+
+p = Person.new(""Alice"", 30)
+puts p.describe()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("Alice is 30", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    // ── Named Args at .new(): Transpiler ─────────────────────────────────
+
+    [Fact]
+    public void Transpile_NamedArgsAtNew()
+    {
+        // Class must be defined first so transpiler can resolve named args
+        var code = "class Dog\n  attr name, breed\n  def initialize(name, breed)\n    self.name = name\n    self.breed = breed\n  end\nend\nDog.new(breed: \"Lab\", name: \"Rex\")";
+        var ps = Transpile(code);
+        // Named args should be reordered to match constructor params: name, breed
+        Assert.Contains("[Dog]::new(\"Rex\", \"Lab\")", ps);
+    }
+
+    // ── Named Args at .new(): Integration ────────────────────────────────
+
+    [Fact]
+    public void Integration_NamedArgsAtNew()
+    {
+        var script = @"
+class Dog
+  attr name, breed
+
+  def initialize(name, breed)
+    self.name = name
+    self.breed = breed
+  end
+
+  def describe
+    return self.name + "" the "" + self.breed
+  end
+end
+
+d = Dog.new(breed: ""Labrador"", name: ""Rex"")
+puts d.describe()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("Rex the Labrador", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Integration_NamedArgsAtNewWithDefaults()
+    {
+        var script = @"
+class Counter
+  attr value
+
+  def initialize(start: 0)
+    self.value = start
+  end
+
+  def get_value
+    return self.value
+  end
+end
+
+c1 = Counter.new()
+c2 = Counter.new(start: 42)
+puts c1.get_value()
+puts c2.get_value()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Contains("0", stdout);
+        Assert.Contains("42", stdout);
         Assert.Equal(0, exitCode);
     }
 }

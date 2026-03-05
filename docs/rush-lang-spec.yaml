@@ -60,6 +60,10 @@ variables:
       powershell: '$files = Get-ChildItem /tmp'
       note: "Command output captured into variable"
 
+    - rush: 'a, b, c = 1, 2, 3'
+      powershell: '$a = 1; $b = 2; $c = 3'
+      note: "Multiple assignment — each name gets the corresponding value"
+
     - rush: 'today = Time.now'
       powershell: '$today = [DateTime]::Now'
       note: ".NET types accessible via clean syntax"
@@ -612,14 +616,26 @@ classes:
 
   keywords:
     - { keyword: "class", description: "Begins a class definition, closed by 'end'" }
-    - { keyword: "attr", description: "Declare instance attributes (comma-separated)" }
+    - { keyword: "attr", description: "Declare instance attributes (comma-separated, with optional type: attr name: String)" }
     - { keyword: "self", description: "Reference the current instance (transpiles to $this)" }
     - { keyword: "super", description: "Call parent class constructor or method" }
 
+  typed_attributes:
+    status: "implemented"
+    description: |
+      Attributes can have optional type annotations. The type maps to a
+      PowerShell type accelerator (string, int, bool, double) or passes
+      through as a custom class name.
+    syntax: "attr name: String, age: Int, active: Bool"
+    transpiles_to: "[string]$Name\n[int]$Age\n[bool]$Active"
+    note: "Untyped attrs remain [object]. Type names are case-insensitive."
+
   instantiation:
     syntax: "ClassName.new(args)"
+    named_args: "ClassName.new(breed: \"Lab\", name: \"Rex\")"
     transpiles_to: "[ClassName]::new(args)"
-    note: "Class names must start with uppercase. Detected by initial capital letter."
+    named_args_transpiles_to: "[ClassName]::new(\"Rex\", \"Lab\")  # reordered to match constructor params"
+    note: "Named args at .new() are matched to constructor parameter names and reordered to positional."
 
   constructor:
     description: |
@@ -799,9 +815,7 @@ classes:
     - "Inheritance uses < syntax (Ruby-style), not : or extends"
     - "Static methods use def self.method_name() (Ruby-style)"
 
-  deferred:
-    - "Type annotations on attr"
-    - "Named args at .new() call site"
+  deferred: []  # All planned class features are now implemented
 
 # ============================================================================
 # ENUMS

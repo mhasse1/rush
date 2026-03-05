@@ -713,4 +713,78 @@ public class NewFeaturesIntegrationTests
         }
         finally { Directory.Delete(tmpDir, true); }
     }
+
+    // ── Multiple Assignment ──────────────────────────────────────────────
+
+    [Fact]
+    public void MultiAssign_ParseTwoVars()
+    {
+        var lexer = new Lexer("a, b = 1, 2");
+        var parser = new Parser(lexer.Tokenize());
+        var node = parser.Parse().First();
+        var ma = Assert.IsType<MultipleAssignmentNode>(node);
+        Assert.Equal(new[] { "a", "b" }, ma.Names);
+        Assert.Equal(2, ma.Values.Count);
+    }
+
+    [Fact]
+    public void MultiAssign_ParseThreeVars()
+    {
+        var lexer = new Lexer("x, y, z = 10, 20, 30");
+        var parser = new Parser(lexer.Tokenize());
+        var node = parser.Parse().First();
+        var ma = Assert.IsType<MultipleAssignmentNode>(node);
+        Assert.Equal(3, ma.Names.Count);
+        Assert.Equal(3, ma.Values.Count);
+    }
+
+    [Fact]
+    public void MultiAssign_Transpile()
+    {
+        var lexer = new Lexer("a, b, c = 1, 2, 3");
+        var parser = new Parser(lexer.Tokenize());
+        var transpiler = new RushTranspiler(new CommandTranslator());
+        var ps = string.Join("\n", parser.Parse().Select(n => transpiler.TranspileNode(n)));
+        Assert.Contains("$a = 1", ps);
+        Assert.Contains("$b = 2", ps);
+        Assert.Contains("$c = 3", ps);
+    }
+
+    [Fact]
+    public void MultiAssign_Triage()
+    {
+        var engine = new ScriptEngine(new CommandTranslator());
+        Assert.True(engine.IsRushSyntax("a, b = 1, 2"));
+        Assert.True(engine.IsRushSyntax("x, y, z = 10, 20, 30"));
+    }
+
+    [Fact]
+    public void MultiAssign_Integration()
+    {
+        var (stdout, stderr, exitCode) = RunRush("a, b, c = 1, 2, 3\nputs a\nputs b\nputs c");
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("1\n2\n3", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void MultiAssign_WithStrings()
+    {
+        var (stdout, stderr, exitCode) = RunRush("first, last = \"Alice\", \"Smith\"\nputs first + \" \" + last");
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("Alice Smith", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void MultiAssign_FewerValues()
+    {
+        // More names than values — extras get $null
+        var (stdout, stderr, exitCode) = RunRush("a, b, c = 1, 2\nputs a\nputs b\nputs c");
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        // c should be empty/null
+        Assert.Contains("1", stdout);
+        Assert.Contains("2", stdout);
+        Assert.Equal(0, exitCode);
+    }
 }

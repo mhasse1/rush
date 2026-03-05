@@ -14,6 +14,9 @@ public class RushTranspiler
     // Class context for super call transpilation — set during TranspileClassDef
     private string? _currentClassParent;
 
+    // Registry of class definitions for named-arg resolution at .new() call sites
+    private readonly Dictionary<string, ClassDefNode> _classDefinitions = new();
+
     /// <summary>
     /// ANSI color codes for string color methods.
     /// "text".green → ANSI-colored string that works in Write-Output and variables.
@@ -58,6 +61,7 @@ public class RushTranspiler
     public string TranspileNode(RushNode node) => node switch
     {
         AssignmentNode a => TranspileAssignment(a),
+        MultipleAssignmentNode ma => TranspileMultipleAssignment(ma),
         CompoundAssignmentNode ca => TranspileCompoundAssignment(ca),
         IfNode i => TranspileIf(i),
         PostfixIfNode p => TranspilePostfixIf(p),
@@ -80,6 +84,20 @@ public class RushTranspiler
     private string TranspileAssignment(AssignmentNode node)
     {
         return $"${node.Name} = {TranspileExpression(node.Value)}";
+    }
+
+    private string TranspileMultipleAssignment(MultipleAssignmentNode node)
+    {
+        // a, b, c = 1, 2, 3 → $a = 1; $b = 2; $c = 3
+        var parts = new List<string>();
+        for (int i = 0; i < node.Names.Count; i++)
+        {
+            var value = i < node.Values.Count
+                ? TranspileExpression(node.Values[i])
+                : "$null";
+            parts.Add($"${node.Names[i]} = {value}");
+        }
+        return string.Join("; ", parts);
     }
 
     private string TranspileCompoundAssignment(CompoundAssignmentNode node)
@@ -182,6 +200,9 @@ public class RushTranspiler
 
     private string TranspileClassDef(ClassDefNode node)
     {
+        // Register class definition for named-arg resolution at .new() call sites
+        _classDefinitions[node.Name] = node;
+
         // Set class context for super call transpilation
         var prevParent = _currentClassParent;
         _currentClassParent = node.ParentClassName;
@@ -194,9 +215,12 @@ public class RushTranspiler
         else
             sb.AppendLine($"class {node.Name} {{");
 
-        // Emit property declarations from attr
+        // Emit property declarations from attr (with optional type annotations)
         foreach (var attr in node.Attributes)
-            sb.AppendLine($"  [object]${CapitalizeProperty(attr)}");
+        {
+            var psType = attr.TypeName != null ? MapRushType(attr.TypeName) : "object";
+            sb.AppendLine($"  [{psType}]${CapitalizeProperty(attr.Name)}");
+        }
 
         // Emit constructor (initialize → ClassName constructor)
         // PowerShell constructors don't support default parameter values like functions do.
@@ -591,9 +615,7 @@ public class RushTranspiler
         {
             var method = node.Method.Equals("new", StringComparison.OrdinalIgnoreCase)
                 ? "new" : CapitalizeProperty(node.Method);
-            var args = string.Join(", ",
-                node.Args.Where(a => a is not NamedArgNode)
-                .Select(TranspileExpression));
+            var args = ResolveClassCallArgs(cn.Name, node.Method, node.Args);
             return $"[{cn.Name}]::{method}({args})";
         }
 
@@ -1421,6 +1443,67 @@ public class RushTranspiler
     /// Handles: snake_case → PascalCase, lowercase → Capitalized, UPPERCASE → unchanged.
     /// PowerShell is case-insensitive for property names, but PascalCase is conventional.
     /// </summary>
+    /// <summary>
+    /// Resolve arguments for class method calls, handling named args by matching
+    /// them to constructor parameter positions. For .new() calls with named args,
+    /// looks up the class definition and reorders args to match constructor params.
+    /// </summary>
+    private string ResolveClassCallArgs(string className, string method, List<RushNode> args)
+    {
+        var hasNamedArgs = args.Any(a => a is NamedArgNode);
+
+        // No named args — simple positional pass-through
+        if (!hasNamedArgs)
+            return string.Join(", ", args.Select(TranspileExpression));
+
+        // Named args on .new() — look up constructor params and reorder
+        if (method.Equals("new", StringComparison.OrdinalIgnoreCase)
+            && _classDefinitions.TryGetValue(className, out var classDef)
+            && classDef.Constructor != null)
+        {
+            var ctorParams = classDef.Constructor.Params;
+            var positionalArgs = args.Where(a => a is not NamedArgNode).ToList();
+            var namedArgs = args.OfType<NamedArgNode>().ToDictionary(a => a.Name, a => a.Value);
+
+            var result = new List<string>();
+            for (int i = 0; i < ctorParams.Count; i++)
+            {
+                if (i < positionalArgs.Count)
+                {
+                    // Positional arg fills this slot
+                    result.Add(TranspileExpression(positionalArgs[i]));
+                }
+                else if (namedArgs.TryGetValue(ctorParams[i].Name, out var namedVal))
+                {
+                    // Named arg matched to this parameter
+                    result.Add(TranspileExpression(namedVal));
+                }
+                else if (ctorParams[i].DefaultValue != null)
+                {
+                    // Use the default value
+                    result.Add(TranspileExpression(ctorParams[i].DefaultValue!));
+                }
+                // else: missing arg — PS7 will report the error
+            }
+            return string.Join(", ", result);
+        }
+
+        // Fallback: strip named args (non-.new() calls or class not found)
+        return string.Join(", ", args.Where(a => a is not NamedArgNode).Select(TranspileExpression));
+    }
+
+    /// <summary>Map Rush type names to PowerShell type accelerators.</summary>
+    private static string MapRushType(string rushType) => rushType.ToLower() switch
+    {
+        "string" => "string",
+        "int" or "integer" => "int",
+        "float" or "double" => "double",
+        "bool" or "boolean" => "bool",
+        "array" => "object[]",
+        "hash" or "hashtable" => "hashtable",
+        _ => rushType // PascalCase class name passes through as-is
+    };
+
     private static string CapitalizeProperty(string name)
     {
         // Predicate methods: strip trailing ? for .NET mapping

@@ -384,6 +384,13 @@ score *= 2
 ratio /= 100
 ```
 
+Multiple assignment:
+
+```rush
+a, b, c = 1, 2, 3
+first, last = "Alice", "Smith"
+```
+
 ### Strings
 
 **Double-quoted** — with `#{expr}` interpolation:
@@ -692,9 +699,11 @@ puts g.greet()               # → "Hello, World"
 **Key concepts:**
 
 - **`attr`** declares instance attributes (comma-separated for multiple)
+- **`attr name: String`** — optional type annotation (`String`, `Int`, `Bool`, `Float`, or custom class)
 - **`self.prop`** accesses instance properties (required — no bare name shortcuts)
 - **`def initialize(...)`** defines the constructor
 - **`ClassName.new(args)`** creates a new instance
+- **`ClassName.new(name: value)`** — named args are reordered to match constructor params
 - Methods without `return` are void; methods with `return` produce values
 
 **Constructor defaults:**
@@ -726,25 +735,20 @@ d.increment()
 puts d.get_value()            # → 11
 ```
 
-**Multiple instances:**
+**Typed attributes and named args:**
 
 ```rush
-class Box
-  attr label
+class Person
+  attr name: String, age: Int
 
-  def initialize(label)
-    self.label = label
-  end
-
-  def get_label
-    return self.label
+  def initialize(name, age)
+    self.name = name
+    self.age = age
   end
 end
 
-a = Box.new("alpha")
-b = Box.new("beta")
-puts a.get_label()            # → "alpha"
-puts b.get_label()            # → "beta"
+p = Person.new(age: 30, name: "Alice")  # named args, any order
+puts p.name                              # → "Alice"
 ```
 
 **Inheritance:**

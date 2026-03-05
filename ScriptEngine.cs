@@ -126,7 +126,10 @@ public class ScriptEngine
         if (IsBuiltinFunction(firstWord))
             return true;
 
-        // Rule 2: Assignment — IDENTIFIER = EXPR or IDENTIFIER += EXPR
+        // Rule 2: Assignment — IDENTIFIER = EXPR, IDENTIFIER += EXPR,
+        //         or multiple: a, b, c = 1, 2, 3
+        if (IsMultipleAssignment(trimmed))
+            return true;
         if (IsAssignment(trimmed, firstWord))
             return true;
 
@@ -163,6 +166,36 @@ public class ScriptEngine
     /// takes "= something" as its first arguments. This is safe even when WORD
     /// matches a known command name (e.g., count = 0, sort = "name").
     /// </summary>
+    /// <summary>
+    /// Check if input is a multiple assignment: a, b, c = 1, 2, 3
+    /// </summary>
+    private static bool IsMultipleAssignment(string input)
+    {
+        // Must have both , and = with comma before =
+        var commaPos = input.IndexOf(',');
+        var eqPos = input.IndexOf('=');
+        if (commaPos < 0 || eqPos < 0 || commaPos >= eqPos) return false;
+
+        // The = must not be part of ==, !=, >=, <=
+        if (eqPos > 0 && input[eqPos - 1] is '!' or '<' or '>') return false;
+        if (eqPos + 1 < input.Length && input[eqPos + 1] == '=') return false;
+
+        // Everything before = must be comma-separated identifiers
+        var leftSide = input[..eqPos].TrimEnd();
+        var parts = leftSide.Split(',');
+        if (parts.Length < 2) return false;
+
+        foreach (var part in parts)
+        {
+            var name = part.Trim();
+            if (name.Length == 0) return false;
+            if (!char.IsLetter(name[0]) && name[0] != '_') return false;
+            if (name.Any(c => !char.IsLetterOrDigit(c) && c != '_')) return false;
+        }
+
+        return true;
+    }
+
     private bool IsAssignment(string input, string firstWord)
     {
         // Must have = somewhere after the first word
