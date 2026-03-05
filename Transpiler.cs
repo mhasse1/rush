@@ -66,6 +66,8 @@ public class RushTranspiler
         CaseNode c => TranspileCase(c),
         LoopControlNode lc => TranspileLoopControl(lc),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
+        ClassDefNode cls => TranspileClassDef(cls),
+        PropertyAssignmentNode pa => TranspilePropertyAssignment(pa),
         _ => TranspileExpression(node)
     };
 
@@ -174,6 +176,144 @@ public class RushTranspiler
         return sb.ToString();
     }
 
+    private string TranspileClassDef(ClassDefNode node)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"class {node.Name} {{");
+
+        // Emit property declarations from attr
+        foreach (var attr in node.Attributes)
+            sb.AppendLine($"  [object]${CapitalizeProperty(attr)}");
+
+        // Emit constructor (initialize → ClassName constructor)
+        // PowerShell constructors don't support default parameter values like functions do.
+        // When defaults exist, we generate constructor overloads + a hidden _Init method.
+        if (node.Constructor != null)
+        {
+            var ctor = node.Constructor;
+            var hasDefaults = ctor.Params.Any(p => p.DefaultValue != null);
+
+            if (hasDefaults)
+            {
+                // Hidden _Init method holds the actual constructor body
+                var allParams = ctor.Params.Select(p => $"[object]${CapitalizeProperty(p.Name)}").ToList();
+                sb.AppendLine();
+                sb.AppendLine($"  hidden _Init({string.Join(", ", allParams)}) {{");
+                sb.Append(TranspileBody(ctor.Body, "    "));
+                sb.AppendLine("  }");
+
+                // Generate constructor overloads for each valid argument count.
+                // Walk params from the end: each param with a default adds an overload
+                // that supplies defaults for the trailing params.
+                var paramCount = ctor.Params.Count;
+
+                // Find the first param index that has a default value
+                int firstDefault = ctor.Params.FindIndex(p => p.DefaultValue != null);
+
+                // Generate overloads from firstDefault args down to the minimum required
+                for (int argCount = firstDefault; argCount <= paramCount; argCount++)
+                {
+                    // Verify all params from argCount onwards have defaults
+                    bool valid = true;
+                    for (int k = argCount; k < paramCount; k++)
+                    {
+                        if (ctor.Params[k].DefaultValue == null) { valid = false; break; }
+                    }
+                    if (!valid) continue;
+
+                    var overloadParams = ctor.Params.Take(argCount)
+                        .Select(p => $"[object]${CapitalizeProperty(p.Name)}").ToList();
+                    var callArgs = new List<string>();
+                    for (int k = 0; k < paramCount; k++)
+                    {
+                        if (k < argCount)
+                            callArgs.Add($"${CapitalizeProperty(ctor.Params[k].Name)}");
+                        else
+                            callArgs.Add(TranspileExpression(ctor.Params[k].DefaultValue!));
+                    }
+
+                    sb.AppendLine();
+                    sb.AppendLine($"  {node.Name}({string.Join(", ", overloadParams)}) {{");
+                    sb.AppendLine($"    $this._Init({string.Join(", ", callArgs)})");
+                    sb.AppendLine("  }");
+                }
+            }
+            else
+            {
+                // No defaults — single constructor, no overloads needed
+                var paramList = string.Join(", ",
+                    ctor.Params.Select(p => $"[object]${CapitalizeProperty(p.Name)}"));
+
+                sb.AppendLine();
+                sb.AppendLine($"  {node.Name}({paramList}) {{");
+                sb.Append(TranspileBody(ctor.Body, "    "));
+                sb.AppendLine("  }");
+            }
+        }
+
+        // Emit instance methods
+        foreach (var method in node.Methods)
+        {
+            var paramList = string.Join(", ",
+                method.Params.Select(p =>
+                {
+                    var ps = $"[object]${CapitalizeProperty(p.Name)}";
+                    if (p.DefaultValue != null)
+                        ps += $" = {TranspileExpression(p.DefaultValue)}";
+                    return ps;
+                }));
+
+            // Use [void] for methods that never return a value, [object] otherwise.
+            // PowerShell requires all code paths to return a value for non-void methods.
+            var returnType = HasReturnValue(method.Body) ? "[object]" : "[void]";
+
+            sb.AppendLine();
+            sb.AppendLine($"  {returnType} {CapitalizeProperty(method.Name)}({paramList}) {{");
+            sb.Append(TranspileBody(method.Body, "    "));
+            sb.AppendLine("  }");
+        }
+
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Check if a method body contains any return statement with a value.
+    /// Used to decide between [void] and [object] return types in PS class methods.
+    /// </summary>
+    private static bool HasReturnValue(List<RushNode> body)
+    {
+        foreach (var node in body)
+        {
+            if (node is ReturnNode ret && ret.Value != null)
+                return true;
+            // Check nested bodies (if/else, loops, etc.)
+            if (node is IfNode ifNode)
+            {
+                if (HasReturnValue(ifNode.Body)) return true;
+                foreach (var elsif in ifNode.Elsifs)
+                    if (HasReturnValue(elsif.Body)) return true;
+                if (ifNode.ElseBody != null && HasReturnValue(ifNode.ElseBody)) return true;
+            }
+            if (node is ForNode forNode && HasReturnValue(forNode.Body)) return true;
+            if (node is WhileNode whileNode && HasReturnValue(whileNode.Body)) return true;
+            if (node is TryNode tryNode)
+            {
+                if (HasReturnValue(tryNode.Body)) return true;
+                if (tryNode.RescueBody != null && HasReturnValue(tryNode.RescueBody)) return true;
+            }
+        }
+        return false;
+    }
+
+    private string TranspilePropertyAssignment(PropertyAssignmentNode node)
+    {
+        var receiver = TranspileExpression(node.Receiver);
+        var prop = CapitalizeProperty(node.Property);
+        var value = TranspileExpression(node.Value);
+        return $"{receiver}.{prop} = {value}";
+    }
+
     private string TranspileReturn(ReturnNode node)
     {
         if (node.Value != null)
@@ -278,6 +418,9 @@ public class RushTranspiler
         // Special variable $? → last exit status
         if (node.Name == "$?")
             return "$LASTEXITCODE";
+        // self → $this (inside class methods)
+        if (node.Name == "self")
+            return "$this";
         return $"${node.Name}";
     }
 
@@ -345,6 +488,17 @@ public class RushTranspiler
     /// </summary>
     private string TranspileMethodCall(MethodCallNode node)
     {
+        // ── Class instantiation: ClassName.new(args) → [ClassName]::new(args) ──
+        if (node.Method.Equals("new", StringComparison.OrdinalIgnoreCase)
+            && node.Receiver is VariableRefNode className
+            && className.Name.Length > 0 && char.IsUpper(className.Name[0]))
+        {
+            var args = string.Join(", ",
+                node.Args.Where(a => a is not NamedArgNode)
+                .Select(TranspileExpression));
+            return $"[{className.Name}]::new({args})";
+        }
+
         // ── Stdlib: File.method() ──────────────────────────────────────
         if (IsStdlibReceiver(node.Receiver, "File"))
             return TranspileFileMethod(node);

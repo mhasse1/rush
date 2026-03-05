@@ -571,28 +571,156 @@ error_handling:
     }
 
 # ============================================================================
-# CLASSES (future — design TBD)
+# CLASSES
 # ============================================================================
 classes:
-  status: "planned"
+  status: "implemented"
   description: |
     Ruby-style class definitions that transpile to PowerShell classes.
-    Design not yet finalized.
+    Supports attributes (attr), constructors (initialize), instance methods,
+    and self for property access. Instantiation uses ClassName.new().
 
-  sketch: |
-    class Server
-      attr :name, :host, :port
+  syntax: |
+    class ClassName
+      attr prop1, prop2
 
-      def initialize(name, host, port = 22)
-        @name = name
-        @host = host
-        @port = port
+      def initialize(param1, param2: default)
+        self.prop1 = param1
+        self.prop2 = param2
       end
 
-      def connect
-        ssh "#{@host}" -p @port
+      def method_name(args)
+        return self.prop1 + self.prop2
       end
     end
+
+  transpiles_to: |
+    class ClassName {
+      [object]$Prop1
+      [object]$Prop2
+
+      ClassName([object]$Param1, [object]$Param2) {
+        $this.Prop1 = $Param1
+        $this.Prop2 = $Param2
+      }
+
+      [object] MethodName([object]$Args) {
+        return $this.Prop1 + $this.Prop2
+      }
+    }
+
+  keywords:
+    - { keyword: "class", description: "Begins a class definition, closed by 'end'" }
+    - { keyword: "attr", description: "Declare instance attributes (comma-separated)" }
+    - { keyword: "self", description: "Reference the current instance (transpiles to $this)" }
+
+  instantiation:
+    syntax: "ClassName.new(args)"
+    transpiles_to: "[ClassName]::new(args)"
+    note: "Class names must start with uppercase. Detected by initial capital letter."
+
+  constructor:
+    description: |
+      A method named 'initialize' becomes the constructor.
+      Supports default parameters (named args with : syntax).
+      Default parameters generate constructor overloads in PowerShell
+      since PS constructors don't support default values natively.
+    syntax: |
+      def initialize(name, age: 0)
+        self.name = name
+        self.age = age
+      end
+    transpiles_to: |
+      # With defaults: generates hidden _Init + overloads
+      hidden _Init([object]$Name, [object]$Age) {
+        $this.Name = $Name
+        $this.Age = $Age
+      }
+      ClassName([object]$Name) {       # 1-arg overload
+        $this._Init($Name, 0)
+      }
+      ClassName([object]$Name, [object]$Age) {  # 2-arg overload
+        $this._Init($Name, $Age)
+      }
+
+  methods:
+    description: |
+      Instance methods defined with def/end. Methods with a return statement
+      get [object] return type; methods without return get [void].
+      Method names are PascalCased in transpiled output.
+    syntax: |
+      def greet
+        return "Hello, " + self.name
+      end
+    transpiles_to: |
+      [object] Greet() {
+        return "Hello, " + $this.Name
+      }
+
+  property_access:
+    description: |
+      Property access uses explicit self.prop syntax. Bare variable names
+      are NOT auto-resolved to properties — keeps transpilation stateless.
+    examples:
+      - { rush: "self.name", transpiles_to: "$this.Name" }
+      - { rush: "self.name = value", transpiles_to: "$this.Name = $value" }
+
+  examples:
+    - description: "Data class with constructor and methods"
+      rush: |
+        class Greeter
+          attr name
+
+          def initialize(name)
+            self.name = name
+          end
+
+          def greet
+            return "Hello, " + self.name
+          end
+        end
+
+        g = Greeter.new("World")
+        puts g.greet()
+      output: "Hello, World"
+
+    - description: "Class with default constructor parameters"
+      rush: |
+        class Counter
+          attr value
+
+          def initialize(start: 0)
+            self.value = start
+          end
+
+          def increment
+            self.value = self.value + 1
+          end
+
+          def get_value
+            return self.value
+          end
+        end
+
+        c = Counter.new(10)
+        c.increment()
+        c.increment()
+        puts c.get_value()
+      output: "12"
+
+  rules:
+    - "self.prop is required — no bare name resolution to $this.Prop"
+    - "attr is untyped — maps to [object]$Name in PowerShell"
+    - ".new() is the only instantiation syntax — detected by uppercase first char"
+    - "Methods without return get [void]; methods with return get [object]"
+    - "Constructor defaults generate PS constructor overloads (PS doesn't support constructor defaults)"
+
+  deferred:
+    - "Inheritance: class Dog < Animal"
+    - "Static methods/properties"
+    - "Type annotations on attr"
+    - "Enums"
+    - "Named args at .new() call site"
 
 # ============================================================================
 # SHELL INTEGRATION
@@ -608,8 +736,10 @@ shell_integration:
       ScriptEngine decides if a line is Rush syntax or a shell command:
       1. Starts with Rush keyword (if, def, for, while, class, begin) → Rush
       2. Contains `=` after first token → Rush assignment
-      3. Method call on object (foo.bar) → Rush
-      4. Everything else → shell command (goes through CommandTranslator)
+      3. Method call with known Rush method name (foo.each, foo.select) → Rush
+      4. Method call on variable: identifier.method() pattern → Rush
+      5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
+      6. Everything else → shell command (goes through CommandTranslator)
 
   command_substitution:
     syntax: "name = $(whoami)"
@@ -911,6 +1041,18 @@ common_mistakes:
   - wrong: 'require "json"'
     right: "# No require/import needed — stdlib is always available"
     reason: "Rush stdlib (File, Dir, Time) is built-in, no imports"
+
+  - wrong: '@name = value'
+    right: 'self.name = value'
+    reason: "Rush uses self.prop, not @prop (Ruby instance variables)"
+
+  - wrong: 'class Dog < Animal'
+    right: '# Inheritance not yet supported'
+    reason: "v1 classes are data classes only — no inheritance yet"
+
+  - wrong: 'Dog.new(name: "Rex")'
+    right: 'Dog.new("Rex")'
+    reason: "Named args at .new() call site not yet supported — use positional args"
 
 # ============================================================================
 # UNIX → RUSH TRANSLATION GUIDE (for LLMs)

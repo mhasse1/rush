@@ -16,7 +16,7 @@ public class ScriptEngine
     private static readonly HashSet<string> BlockStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
-        "begin", "match"
+        "begin", "match", "class"
     };
 
     /// <summary>
@@ -31,7 +31,8 @@ public class ScriptEngine
         "try", "rescue", "ensure", "begin",
         "do", "and", "or", "not",
         "true", "false", "nil",
-        "next", "continue", "break"
+        "next", "continue", "break",
+        "class", "attr", "self"
     };
 
     /// <summary>
@@ -69,7 +70,9 @@ public class ScriptEngine
         // Type conversion
         "to_i", "to_f", "to_s",
         // Color methods
-        "red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"
+        "red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray",
+        // Class instantiation
+        "new"
     };
 
     public ScriptEngine(CommandTranslator translator)
@@ -139,6 +142,12 @@ public class ScriptEngine
         if (ContainsStdlibCall(trimmed))
             return true;
 
+        // Rule 10: Method call on variable — identifier.method() pattern
+        // e.g., c.increment(), person.greet(), obj.get_value()
+        // Safe: no shell command uses variable.method() syntax
+        if (IsMethodCallOnVariable(trimmed))
+            return true;
+
         return false;
     }
 
@@ -180,26 +189,55 @@ public class ScriptEngine
 
     /// <summary>
     /// Check if input contains a Rush method call (e.g., .each { or .select {)
+    /// Only matches when the receiver is in expression position (start of line,
+    /// or after =, (, [, comma) — NOT when it's a shell argument like `cat report.sort`.
     /// </summary>
     private static bool ContainsRushMethodCall(string input)
     {
         int dotPos = input.IndexOf('.');
         while (dotPos >= 0 && dotPos < input.Length - 1)
         {
-            // Extract the method name after the dot
-            int nameStart = dotPos + 1;
-            int nameEnd = nameStart;
-            while (nameEnd < input.Length && (char.IsLetterOrDigit(input[nameEnd]) || input[nameEnd] == '_' || input[nameEnd] == '?'))
-                nameEnd++;
-
-            if (nameEnd > nameStart)
+            // The char before the dot must be a valid identifier char
+            if (dotPos > 0 && (char.IsLetterOrDigit(input[dotPos - 1]) || input[dotPos - 1] == '_'))
             {
-                var methodName = input[nameStart..nameEnd];
-                if (RushMethods.Contains(methodName))
-                    return true;
+                // Walk back to find the start of the receiver token
+                int recStart = dotPos - 1;
+                while (recStart > 0 && (char.IsLetterOrDigit(input[recStart - 1]) || input[recStart - 1] == '_'))
+                    recStart--;
+
+                // Receiver must be at start of input, or preceded by an expression
+                // context char (=, (, [, comma). This prevents matching shell
+                // arguments like `cat report.sort` where report is after a space
+                // following a command word.
+                bool validPosition = recStart == 0;
+                if (!validPosition && recStart > 0)
+                {
+                    // Skip whitespace backwards to find the context char
+                    int ctx = recStart - 1;
+                    while (ctx >= 0 && input[ctx] == ' ') ctx--;
+                    if (ctx >= 0)
+                        validPosition = input[ctx] is '=' or '(' or '[' or ',';
+                }
+
+                if (validPosition)
+                {
+                    // Extract the method name after the dot
+                    int nameStart = dotPos + 1;
+                    int nameEnd = nameStart;
+                    while (nameEnd < input.Length && (char.IsLetterOrDigit(input[nameEnd]) || input[nameEnd] == '_' || input[nameEnd] == '?'))
+                        nameEnd++;
+
+                    if (nameEnd > nameStart)
+                    {
+                        var methodName = input[nameStart..nameEnd];
+                        if (RushMethods.Contains(methodName))
+                            return true;
+                    }
+                }
             }
 
-            dotPos = input.IndexOf('.', nameEnd);
+            // Advance to next dot
+            dotPos = input.IndexOf('.', dotPos + 1);
         }
         return false;
     }
@@ -218,6 +256,40 @@ public class ScriptEngine
                 return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Check if input looks like a method call on a variable: identifier.method(...)
+    /// e.g., c.increment(), person.greet(), obj.get_value()
+    /// The receiver must start with a lowercase letter or underscore (not a path like ./script
+    /// or a command flag). This is unambiguous — no shell command uses this syntax.
+    /// </summary>
+    private static bool IsMethodCallOnVariable(string input)
+    {
+        // Must start with a lowercase letter or underscore (variable name)
+        if (input.Length == 0 || !(char.IsLower(input[0]) || input[0] == '_'))
+            return false;
+
+        // Find the dot
+        int dotPos = input.IndexOf('.');
+        if (dotPos <= 0 || dotPos >= input.Length - 1) return false;
+
+        // Receiver must be a simple identifier (letters, digits, underscores only)
+        for (int i = 0; i < dotPos; i++)
+        {
+            char ch = input[i];
+            if (!char.IsLetterOrDigit(ch) && ch != '_') return false;
+        }
+
+        // After dot, must have an identifier followed by '('
+        int nameEnd = dotPos + 1;
+        while (nameEnd < input.Length && (char.IsLetterOrDigit(input[nameEnd]) || input[nameEnd] == '_'))
+            nameEnd++;
+
+        if (nameEnd == dotPos + 1) return false; // no method name
+        if (nameEnd >= input.Length || input[nameEnd] != '(') return false;
+
+        return true;
     }
 
     /// <summary>
@@ -306,6 +378,7 @@ public class ScriptEngine
                     case RushTokenType.Begin:
                     case RushTokenType.Case:
                     case RushTokenType.Do:
+                    case RushTokenType.Class:
                         depth++;
                         break;
                     case RushTokenType.End:

@@ -42,7 +42,8 @@ public class SyntaxHighlighter
         "try", "rescue", "ensure", "begin",
         "do", "and", "or", "not",
         "true", "false", "nil",
-        "next", "continue", "break"
+        "next", "continue", "break",
+        "class", "attr", "self"
     };
 
     public SyntaxHighlighter(CommandTranslator translator)

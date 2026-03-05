@@ -184,6 +184,44 @@ public class ScriptEngineTriageTests
         Assert.True(_engine.IsRushSyntax(input));
     }
 
+    // ── Dot-Containing Shell Commands (NOT Rush) ──────────────────────
+
+    [Theory]
+    [InlineData("./script.sh")]              // path with dot-slash
+    [InlineData("node.js")]                  // dotted command name (no parens)
+    [InlineData("docker.compose")]           // dotted subcommand
+    [InlineData("config.json")]              // standalone filename
+    [InlineData("cat report.sort")]          // file extension collides with RushMethods
+    [InlineData("ls data.join")]             // file extension collides with RushMethods
+    [InlineData("grep foo input.lines")]     // file extension collides with RushMethods
+    [InlineData("open archive.split")]       // file extension collides with RushMethods
+    public void DotContainingShellCommands_AreNotRushSyntax(string input)
+    {
+        Assert.False(_engine.IsRushSyntax(input));
+    }
+
+    // ── Method Calls in Expression Position (ARE Rush) ──────────────
+
+    [Theory]
+    [InlineData("names.sort")]               // variable.rushMethod — first token
+    [InlineData("data.join(\",\")")]          // variable.rushMethod with args
+    [InlineData("x = items.reverse")]        // after assignment
+    public void MethodCallsInExpressionPosition_AreRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
+    // ── Method Calls on Variables (class instances) ──────────────────
+
+    [Theory]
+    [InlineData("c.increment()")]
+    [InlineData("person.greet()")]
+    [InlineData("counter.get_value()")]
+    public void MethodCallOnVariable_IsRushSyntax(string input)
+    {
+        Assert.True(_engine.IsRushSyntax(input));
+    }
+
     // ── IsIncomplete (block depth) ───────────────────────────────────
 
     [Theory]

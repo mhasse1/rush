@@ -15,6 +15,7 @@ public enum RushTokenType
     Try, Rescue, Ensure,
     Do, And, Or, Not, True, False, Nil,
     Next, Continue, Break, Begin,
+    Class, Attr, Self,
 
     // Operators
     Assign,         // =
@@ -110,6 +111,9 @@ public class Lexer
         ["continue"] = RushTokenType.Continue,
         ["break"] = RushTokenType.Break,
         ["begin"] = RushTokenType.Begin,
+        ["class"] = RushTokenType.Class,
+        ["attr"] = RushTokenType.Attr,
+        ["self"] = RushTokenType.Self,
     };
 
     private readonly string _source;

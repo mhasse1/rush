@@ -243,7 +243,7 @@ if count > 10
 end                  # ← block closes
 ```
 
-This works for `if`, `unless`, `for`, `while`, `until`, `loop`, `def`, `begin`, `try`, `case`, `match`.
+This works for `if`, `unless`, `for`, `while`, `until`, `loop`, `def`, `begin`, `try`, `case`, `match`, `class`.
 
 ### Syntax Highlighting
 
@@ -666,6 +666,85 @@ def validate(input)
 end
 
 result = double(21)         # → 42
+```
+
+### Classes
+
+Define classes with `class`/`end`, attributes with `attr`, and constructors with `def initialize`:
+
+```rush
+class Greeter
+  attr name
+
+  def initialize(name)
+    self.name = name
+  end
+
+  def greet
+    return "Hello, " + self.name
+  end
+end
+
+g = Greeter.new("World")
+puts g.greet()               # → "Hello, World"
+```
+
+**Key concepts:**
+
+- **`attr`** declares instance attributes (comma-separated for multiple)
+- **`self.prop`** accesses instance properties (required — no bare name shortcuts)
+- **`def initialize(...)`** defines the constructor
+- **`ClassName.new(args)`** creates a new instance
+- Methods without `return` are void; methods with `return` produce values
+
+**Constructor defaults:**
+
+```rush
+class Counter
+  attr value
+
+  def initialize(start: 0)
+    self.value = start
+  end
+
+  def increment
+    self.value = self.value + 1
+  end
+
+  def get_value
+    return self.value
+  end
+end
+
+c = Counter.new()             # Uses default start: 0
+c.increment()
+c.increment()
+puts c.get_value()            # → 2
+
+d = Counter.new(10)           # Explicit start value
+d.increment()
+puts d.get_value()            # → 11
+```
+
+**Multiple instances:**
+
+```rush
+class Box
+  attr label
+
+  def initialize(label)
+    self.label = label
+  end
+
+  def get_label
+    return self.label
+  end
+end
+
+a = Box.new("alpha")
+b = Box.new("beta")
+puts a.get_label()            # → "alpha"
+puts b.get_label()            # → "beta"
 ```
 
 ### Blocks & Iteration

@@ -282,6 +282,33 @@ public class ShellPassthroughNode : RushNode
     public ShellPassthroughNode(string rawCommand) { RawCommand = rawCommand; }
 }
 
+/// <summary>class Name ... end (with attr declarations, constructor, and methods)</summary>
+public class ClassDefNode : RushNode
+{
+    public string Name { get; }
+    public List<string> Attributes { get; }
+    public FunctionDefNode? Constructor { get; }
+    public List<FunctionDefNode> Methods { get; }
+    public ClassDefNode(string name, List<string> attributes,
+        FunctionDefNode? constructor, List<FunctionDefNode> methods)
+    {
+        Name = name; Attributes = attributes;
+        Constructor = constructor; Methods = methods;
+    }
+}
+
+/// <summary>Property assignment: receiver.property = expr (e.g., self.name = value)</summary>
+public class PropertyAssignmentNode : RushNode
+{
+    public RushNode Receiver { get; }
+    public string Property { get; }
+    public RushNode Value { get; }
+    public PropertyAssignmentNode(RushNode receiver, string property, RushNode value)
+    {
+        Receiver = receiver; Property = property; Value = value;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Parser
 // ═══════════════════════════════════════════════════════════════════════
@@ -383,6 +410,7 @@ public class Parser
             RushTokenType.Until => ParseUntil(),
             RushTokenType.Loop => ParseLoop(),
             RushTokenType.Def => ParseFunctionDef(),
+            RushTokenType.Class => ParseClassDef(),
             RushTokenType.Return => ParseReturn(),
             RushTokenType.Try => ParseTry(),
             RushTokenType.Begin => ParseTry(),        // begin is identical to try
@@ -433,6 +461,15 @@ public class Parser
         }
 
         var expr = ParseExpression();
+
+        // Check for property assignment: expr.property = value (e.g., self.name = value)
+        if (expr is PropertyAccessNode prop && Current.Type == RushTokenType.Assign
+            && Peek(1).Type != RushTokenType.Assign) // not ==
+        {
+            Advance(); // skip =
+            var value = ParseExpression();
+            return WrapPostfix(new PropertyAssignmentNode(prop.Receiver, prop.Property, value));
+        }
 
         // Check for postfix if/unless
         return WrapPostfix(expr);
@@ -592,6 +629,51 @@ public class Parser
         var body = ParseBody(RushTokenType.End);
         Expect(RushTokenType.End);
         return new FunctionDefNode(name, parameters, body);
+    }
+
+    private ClassDefNode ParseClassDef()
+    {
+        Advance(); // skip 'class'
+        var name = Expect(RushTokenType.Identifier).Value;
+        SkipNewlines();
+
+        var attributes = new List<string>();
+        FunctionDefNode? constructor = null;
+        var methods = new List<FunctionDefNode>();
+
+        while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+        {
+            SkipNewlines();
+            if (Current.Type == RushTokenType.End || Current.Type == RushTokenType.EOF)
+                break;
+
+            if (Current.Type == RushTokenType.Attr)
+            {
+                Advance(); // skip 'attr'
+                do
+                {
+                    attributes.Add(Expect(RushTokenType.Identifier).Value);
+                } while (Match(RushTokenType.Comma));
+            }
+            else if (Current.Type == RushTokenType.Def)
+            {
+                var method = ParseFunctionDef();
+                if (method.Name.Equals("initialize", StringComparison.OrdinalIgnoreCase))
+                    constructor = method;
+                else
+                    methods.Add(method);
+            }
+            else
+            {
+                throw new RushParseException(
+                    $"Unexpected {Current.Type} in class body at position {Current.Position}. " +
+                    "Expected 'attr', 'def', or 'end'.");
+            }
+            SkipNewlines();
+        }
+
+        Expect(RushTokenType.End);
+        return new ClassDefNode(name, attributes, constructor, methods);
     }
 
     private ReturnNode ParseReturn()
@@ -1037,6 +1119,10 @@ public class Parser
 
             case RushTokenType.Symbol:
                 return new SymbolNode(Advance().Value);
+
+            case RushTokenType.Self:
+                Advance();
+                return new VariableRefNode("self");
 
             case RushTokenType.Identifier:
                 return ParseIdentifierExpr();
