@@ -85,9 +85,10 @@ public class FunctionDefNode : RushNode
     public string Name { get; }
     public List<ParamDef> Params { get; }
     public List<RushNode> Body { get; }
-    public FunctionDefNode(string name, List<ParamDef> parameters, List<RushNode> body)
+    public bool IsStatic { get; }
+    public FunctionDefNode(string name, List<ParamDef> parameters, List<RushNode> body, bool isStatic = false)
     {
-        Name = name; Params = parameters; Body = body;
+        Name = name; Params = parameters; Body = body; IsStatic = isStatic;
     }
 }
 
@@ -294,14 +295,39 @@ public class ShellPassthroughNode : RushNode
 public class ClassDefNode : RushNode
 {
     public string Name { get; }
+    public string? ParentClassName { get; }
     public List<string> Attributes { get; }
     public FunctionDefNode? Constructor { get; }
     public List<FunctionDefNode> Methods { get; }
-    public ClassDefNode(string name, List<string> attributes,
-        FunctionDefNode? constructor, List<FunctionDefNode> methods)
+    public List<FunctionDefNode> StaticMethods { get; }
+    public ClassDefNode(string name, string? parentClassName, List<string> attributes,
+        FunctionDefNode? constructor, List<FunctionDefNode> methods,
+        List<FunctionDefNode> staticMethods)
     {
-        Name = name; Attributes = attributes;
-        Constructor = constructor; Methods = methods;
+        Name = name; ParentClassName = parentClassName; Attributes = attributes;
+        Constructor = constructor; Methods = methods; StaticMethods = staticMethods;
+    }
+}
+
+/// <summary>super(args) or super.method(args) — calls parent class constructor or method.</summary>
+public class SuperCallNode : RushNode
+{
+    public List<RushNode> Args { get; }
+    public string? MethodName { get; } // null = constructor super(args)
+    public SuperCallNode(List<RushNode> args, string? methodName = null)
+    {
+        Args = args; MethodName = methodName;
+    }
+}
+
+/// <summary>Enum definition: enum Name ... end</summary>
+public class EnumDefNode : RushNode
+{
+    public string Name { get; }
+    public List<(string Name, RushNode? Value)> Members { get; }
+    public EnumDefNode(string name, List<(string Name, RushNode? Value)> members)
+    {
+        Name = name; Members = members;
     }
 }
 
@@ -419,6 +445,7 @@ public class Parser
             RushTokenType.Loop => ParseLoop(),
             RushTokenType.Def => ParseFunctionDef(),
             RushTokenType.Class => ParseClassDef(),
+            RushTokenType.Enum => ParseEnumDef(),
             RushTokenType.Return => ParseReturn(),
             RushTokenType.Try => ParseTry(),
             RushTokenType.Begin => ParseTry(),        // begin is identical to try
@@ -643,11 +670,18 @@ public class Parser
     {
         Advance(); // skip 'class'
         var name = Expect(RushTokenType.Identifier).Value;
+
+        // Inheritance: class Dog < Animal
+        string? parentName = null;
+        if (Match(RushTokenType.LessThan))
+            parentName = Expect(RushTokenType.Identifier).Value;
+
         SkipNewlines();
 
         var attributes = new List<string>();
         FunctionDefNode? constructor = null;
         var methods = new List<FunctionDefNode>();
+        var staticMethods = new List<FunctionDefNode>();
 
         while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
         {
@@ -665,8 +699,53 @@ public class Parser
             }
             else if (Current.Type == RushTokenType.Def)
             {
-                var method = ParseFunctionDef();
-                if (method.Name.Equals("initialize", StringComparison.OrdinalIgnoreCase))
+                Advance(); // skip 'def'
+
+                // Static method: def self.method_name(...)
+                bool isStatic = false;
+                if (Current.Type == RushTokenType.Self
+                    && Peek(1).Type == RushTokenType.Dot)
+                {
+                    isStatic = true;
+                    Advance(); // skip 'self'
+                    Advance(); // skip '.'
+                }
+
+                // Parse method name, params, body (same as ParseFunctionDef but def is already consumed)
+                var methodName = Expect(RushTokenType.Identifier).Value;
+                var parameters = new List<ParamDef>();
+                if (Match(RushTokenType.LParen))
+                {
+                    if (!Check(RushTokenType.RParen))
+                    {
+                        do
+                        {
+                            var paramName = Expect(RushTokenType.Identifier).Value;
+                            RushNode? defaultVal = null;
+                            bool isNamed = false;
+                            if (Match(RushTokenType.Colon))
+                            {
+                                isNamed = true;
+                                defaultVal = ParseExpression();
+                            }
+                            else if (Match(RushTokenType.Assign))
+                            {
+                                defaultVal = ParseExpression();
+                            }
+                            parameters.Add(new ParamDef(paramName, defaultVal, isNamed));
+                        } while (Match(RushTokenType.Comma));
+                    }
+                    Expect(RushTokenType.RParen);
+                }
+
+                SkipNewlines();
+                var body = ParseBody(RushTokenType.End);
+                Expect(RushTokenType.End);
+                var method = new FunctionDefNode(methodName, parameters, body, isStatic);
+
+                if (isStatic)
+                    staticMethods.Add(method);
+                else if (methodName.Equals("initialize", StringComparison.OrdinalIgnoreCase))
                     constructor = method;
                 else
                     methods.Add(method);
@@ -681,7 +760,32 @@ public class Parser
         }
 
         Expect(RushTokenType.End);
-        return new ClassDefNode(name, attributes, constructor, methods);
+        return new ClassDefNode(name, parentName, attributes, constructor, methods, staticMethods);
+    }
+
+    private EnumDefNode ParseEnumDef()
+    {
+        Advance(); // skip 'enum'
+        var name = Expect(RushTokenType.Identifier).Value;
+        SkipNewlines();
+
+        var members = new List<(string Name, RushNode? Value)>();
+        while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+        {
+            SkipNewlines();
+            if (Current.Type == RushTokenType.End || Current.Type == RushTokenType.EOF)
+                break;
+
+            var memberName = Expect(RushTokenType.Identifier).Value;
+            RushNode? value = null;
+            if (Match(RushTokenType.Assign))
+                value = ParseExpression();
+            members.Add((memberName, value));
+            SkipNewlines();
+        }
+
+        Expect(RushTokenType.End);
+        return new EnumDefNode(name, members);
     }
 
     private ReturnNode ParseReturn()
@@ -1132,6 +1236,9 @@ public class Parser
                 Advance();
                 return new VariableRefNode("self");
 
+            case RushTokenType.Super:
+                return ParseSuperExpr();
+
             case RushTokenType.Identifier:
                 return ParseIdentifierExpr();
 
@@ -1164,6 +1271,45 @@ public class Parser
             default:
                 throw new RushParseException($"Unexpected token {Current.Type} ('{Current.Value}') at position {Current.Position}");
         }
+    }
+
+    /// <summary>
+    /// Parse super expressions: super(args) or super.method(args)
+    /// </summary>
+    private RushNode ParseSuperExpr()
+    {
+        Advance(); // skip 'super'
+
+        // super.method(args) — parent method call
+        if (Match(RushTokenType.Dot))
+        {
+            var methodName = Expect(RushTokenType.Identifier).Value;
+            var args = new List<RushNode>();
+            if (Match(RushTokenType.LParen))
+            {
+                if (!Check(RushTokenType.RParen))
+                {
+                    do { args.Add(ParseExpression()); } while (Match(RushTokenType.Comma));
+                }
+                Expect(RushTokenType.RParen);
+            }
+            return new SuperCallNode(args, methodName);
+        }
+
+        // super(args) — constructor super call
+        if (Match(RushTokenType.LParen))
+        {
+            var args = new List<RushNode>();
+            if (!Check(RushTokenType.RParen))
+            {
+                do { args.Add(ParseExpression()); } while (Match(RushTokenType.Comma));
+            }
+            Expect(RushTokenType.RParen);
+            return new SuperCallNode(args);
+        }
+
+        // Bare super — same-name parent method call with no args
+        return new SuperCallNode(new List<RushNode>());
     }
 
     /// <summary>

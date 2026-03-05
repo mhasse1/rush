@@ -16,7 +16,7 @@ public class ScriptEngine
     private static readonly HashSet<string> BlockStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
-        "begin", "match", "class"
+        "begin", "match", "class", "enum"
     };
 
     /// <summary>
@@ -32,7 +32,7 @@ public class ScriptEngine
         "do", "and", "or", "not",
         "true", "false", "nil",
         "next", "continue", "break",
-        "class", "attr", "self"
+        "class", "attr", "self", "super", "enum"
     };
 
     /// <summary>
@@ -146,6 +146,11 @@ public class ScriptEngine
         // e.g., c.increment(), person.greet(), obj.get_value()
         // Safe: no shell command uses variable.method() syntax
         if (IsMethodCallOnVariable(trimmed))
+            return true;
+
+        // Rule 11: Static method/property on uppercase receiver — ClassName.method() or ClassName.prop
+        // e.g., Math.add(2, 3), Color.red — no shell command starts with UppercaseWord.identifier
+        if (IsClassMemberAccess(trimmed))
             return true;
 
         return false;
@@ -293,6 +298,43 @@ public class ScriptEngine
     }
 
     /// <summary>
+    /// Check if input starts with an uppercase identifier followed by .member — indicating
+    /// a class static method call (Math.add()) or enum/class property access (Color.red).
+    /// This is unambiguous: no shell command starts with UppercaseWord.identifier.
+    /// </summary>
+    private static bool IsClassMemberAccess(string input)
+    {
+        if (input.Length == 0 || !char.IsUpper(input[0]))
+            return false;
+
+        int dotPos = input.IndexOf('.');
+        if (dotPos <= 0 || dotPos >= input.Length - 1) return false;
+
+        // Receiver must be a simple identifier (letters, digits, underscores only)
+        for (int i = 0; i < dotPos; i++)
+        {
+            char ch = input[i];
+            if (!char.IsLetterOrDigit(ch) && ch != '_') return false;
+        }
+
+        // After dot, must have a letter (method/property name start)
+        if (!char.IsLetter(input[dotPos + 1]) && input[dotPos + 1] != '_')
+            return false;
+
+        // Exclude known stdlib receivers — they're already handled by ContainsStdlibCall
+        var receiver = input[..dotPos];
+        if (StdlibReceivers.Contains(receiver))
+            return false;
+
+        // Exclude ALL_CAPS names (ARGV, PATH) — these are variables, not class names
+        // Class names are PascalCase and contain at least one lowercase letter
+        if (!receiver.Any(char.IsLower))
+            return false;
+
+        return true;
+    }
+
+    /// <summary>
     /// Check if input looks like a compound assignment: bare_word += expr or bare_word -= expr
     /// </summary>
     private bool IsCompoundAssignment(string input, string firstWord)
@@ -379,6 +421,7 @@ public class ScriptEngine
                     case RushTokenType.Case:
                     case RushTokenType.Do:
                     case RushTokenType.Class:
+                    case RushTokenType.Enum:
                         depth++;
                         break;
                     case RushTokenType.End:

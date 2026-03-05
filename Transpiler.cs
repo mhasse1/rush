@@ -11,6 +11,9 @@ public class RushTranspiler
 {
     private readonly CommandTranslator _translator;
 
+    // Class context for super call transpilation — set during TranspileClassDef
+    private string? _currentClassParent;
+
     /// <summary>
     /// ANSI color codes for string color methods.
     /// "text".green → ANSI-colored string that works in Write-Output and variables.
@@ -67,6 +70,7 @@ public class RushTranspiler
         LoopControlNode lc => TranspileLoopControl(lc),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         ClassDefNode cls => TranspileClassDef(cls),
+        EnumDefNode en => TranspileEnumDef(en),
         PropertyAssignmentNode pa => TranspilePropertyAssignment(pa),
         _ => TranspileExpression(node)
     };
@@ -178,8 +182,17 @@ public class RushTranspiler
 
     private string TranspileClassDef(ClassDefNode node)
     {
+        // Set class context for super call transpilation
+        var prevParent = _currentClassParent;
+        _currentClassParent = node.ParentClassName;
+
         var sb = new StringBuilder();
-        sb.AppendLine($"class {node.Name} {{");
+
+        // Class declaration with optional inheritance
+        if (node.ParentClassName != null)
+            sb.AppendLine($"class {node.Name} : {node.ParentClassName} {{");
+        else
+            sb.AppendLine($"class {node.Name} {{");
 
         // Emit property declarations from attr
         foreach (var attr in node.Attributes)
@@ -193,27 +206,33 @@ public class RushTranspiler
             var ctor = node.Constructor;
             var hasDefaults = ctor.Params.Any(p => p.DefaultValue != null);
 
+            // Extract super(args) call from constructor body for : base(args) syntax
+            var superCall = ExtractSuperCall(ctor.Body);
+            var baseClause = "";
+            if (superCall != null)
+            {
+                var baseArgs = string.Join(", ", superCall.Args.Select(TranspileExpression));
+                baseClause = $" : base({baseArgs})";
+            }
+
+            // Body without the super call
+            var bodyWithoutSuper = ctor.Body.Where(n => n is not SuperCallNode).ToList();
+
             if (hasDefaults)
             {
-                // Hidden _Init method holds the actual constructor body
+                // Hidden _Init method holds the actual constructor body (excluding super)
                 var allParams = ctor.Params.Select(p => $"[object]${CapitalizeProperty(p.Name)}").ToList();
                 sb.AppendLine();
                 sb.AppendLine($"  hidden _Init({string.Join(", ", allParams)}) {{");
-                sb.Append(TranspileBody(ctor.Body, "    "));
+                sb.Append(TranspileBody(bodyWithoutSuper, "    "));
                 sb.AppendLine("  }");
 
-                // Generate constructor overloads for each valid argument count.
-                // Walk params from the end: each param with a default adds an overload
-                // that supplies defaults for the trailing params.
+                // Generate constructor overloads
                 var paramCount = ctor.Params.Count;
-
-                // Find the first param index that has a default value
                 int firstDefault = ctor.Params.FindIndex(p => p.DefaultValue != null);
 
-                // Generate overloads from firstDefault args down to the minimum required
                 for (int argCount = firstDefault; argCount <= paramCount; argCount++)
                 {
-                    // Verify all params from argCount onwards have defaults
                     bool valid = true;
                     for (int k = argCount; k < paramCount; k++)
                     {
@@ -233,20 +252,20 @@ public class RushTranspiler
                     }
 
                     sb.AppendLine();
-                    sb.AppendLine($"  {node.Name}({string.Join(", ", overloadParams)}) {{");
+                    sb.AppendLine($"  {node.Name}({string.Join(", ", overloadParams)}){baseClause} {{");
                     sb.AppendLine($"    $this._Init({string.Join(", ", callArgs)})");
                     sb.AppendLine("  }");
                 }
             }
             else
             {
-                // No defaults — single constructor, no overloads needed
+                // No defaults — single constructor
                 var paramList = string.Join(", ",
                     ctor.Params.Select(p => $"[object]${CapitalizeProperty(p.Name)}"));
 
                 sb.AppendLine();
-                sb.AppendLine($"  {node.Name}({paramList}) {{");
-                sb.Append(TranspileBody(ctor.Body, "    "));
+                sb.AppendLine($"  {node.Name}({paramList}){baseClause} {{");
+                sb.Append(TranspileBody(bodyWithoutSuper, "    "));
                 sb.AppendLine("  }");
             }
         }
@@ -254,25 +273,78 @@ public class RushTranspiler
         // Emit instance methods
         foreach (var method in node.Methods)
         {
-            var paramList = string.Join(", ",
-                method.Params.Select(p =>
-                {
-                    var ps = $"[object]${CapitalizeProperty(p.Name)}";
-                    if (p.DefaultValue != null)
-                        ps += $" = {TranspileExpression(p.DefaultValue)}";
-                    return ps;
-                }));
-
-            // Use [void] for methods that never return a value, [object] otherwise.
-            // PowerShell requires all code paths to return a value for non-void methods.
-            var returnType = HasReturnValue(method.Body) ? "[object]" : "[void]";
-
-            sb.AppendLine();
-            sb.AppendLine($"  {returnType} {CapitalizeProperty(method.Name)}({paramList}) {{");
-            sb.Append(TranspileBody(method.Body, "    "));
-            sb.AppendLine("  }");
+            EmitMethod(sb, method, isStatic: false);
         }
 
+        // Emit static methods
+        foreach (var method in node.StaticMethods)
+        {
+            EmitMethod(sb, method, isStatic: true);
+        }
+
+        sb.Append('}');
+        _currentClassParent = prevParent;
+        return sb.ToString();
+    }
+
+    /// <summary>Emit a single method (instance or static) into a class body.</summary>
+    private void EmitMethod(StringBuilder sb, FunctionDefNode method, bool isStatic)
+    {
+        var paramList = string.Join(", ",
+            method.Params.Select(p =>
+            {
+                var ps = $"[object]${CapitalizeProperty(p.Name)}";
+                if (p.DefaultValue != null)
+                    ps += $" = {TranspileExpression(p.DefaultValue)}";
+                return ps;
+            }));
+
+        var returnType = HasReturnValue(method.Body) ? "[object]" : "[void]";
+        var staticKeyword = isStatic ? "static " : "";
+
+        sb.AppendLine();
+        sb.AppendLine($"  {staticKeyword}{returnType} {CapitalizeProperty(method.Name)}({paramList}) {{");
+        sb.Append(TranspileBody(method.Body, "    "));
+        sb.AppendLine("  }");
+    }
+
+    /// <summary>Extract the first SuperCallNode from a constructor body (for : base() syntax).</summary>
+    private static SuperCallNode? ExtractSuperCall(List<RushNode> body)
+    {
+        return body.OfType<SuperCallNode>().FirstOrDefault(s => s.MethodName == null);
+    }
+
+    /// <summary>Transpile super.method(args) → ([ParentClass]$this).Method(args)</summary>
+    private string TranspileSuperCall(SuperCallNode node)
+    {
+        if (_currentClassParent == null)
+            return "<# super outside class hierarchy #>";
+
+        var args = string.Join(", ", node.Args.Select(TranspileExpression));
+
+        if (node.MethodName != null)
+        {
+            // super.method(args) → ([Parent]$this).Method(args)
+            return $"([{_currentClassParent}]$this).{CapitalizeProperty(node.MethodName)}({args})";
+        }
+
+        // Bare super(args) in a method context (not constructor — constructor handled by extraction)
+        return $"([{_currentClassParent}]$this)";
+    }
+
+    /// <summary>Transpile an enum definition to PowerShell.</summary>
+    private string TranspileEnumDef(EnumDefNode node)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"enum {node.Name} {{");
+        foreach (var (name, value) in node.Members)
+        {
+            var capitalizedName = CapitalizeProperty(name);
+            if (value != null)
+                sb.AppendLine($"  {capitalizedName} = {TranspileExpression(value)}");
+            else
+                sb.AppendLine($"  {capitalizedName}");
+        }
         sb.Append('}');
         return sb.ToString();
     }
@@ -410,6 +482,7 @@ public class RushTranspiler
         CompoundAssignmentNode ca => TranspileCompoundAssignment(ca),
         LoopControlNode lc => TranspileLoopControl(lc),
         RegexLiteralNode rx => TranspileRegex(rx),
+        SuperCallNode sc => TranspileSuperCall(sc),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         _ => $"<# unsupported: {node.GetType().Name} #>"
     };
@@ -497,17 +570,6 @@ public class RushTranspiler
     /// </summary>
     private string TranspileMethodCall(MethodCallNode node)
     {
-        // ── Class instantiation: ClassName.new(args) → [ClassName]::new(args) ──
-        if (node.Method.Equals("new", StringComparison.OrdinalIgnoreCase)
-            && node.Receiver is VariableRefNode className
-            && className.Name.Length > 0 && char.IsUpper(className.Name[0]))
-        {
-            var args = string.Join(", ",
-                node.Args.Where(a => a is not NamedArgNode)
-                .Select(TranspileExpression));
-            return $"[{className.Name}]::new({args})";
-        }
-
         // ── Stdlib: File.method() ──────────────────────────────────────
         if (IsStdlibReceiver(node.Receiver, "File"))
             return TranspileFileMethod(node);
@@ -519,6 +581,21 @@ public class RushTranspiler
         // ── Stdlib: Time.method() ─────────────────────────────────────
         if (IsStdlibReceiver(node.Receiver, "Time"))
             return TranspileTimeMethod(node);
+
+        // ── Class method calls: ClassName.new(args) or ClassName.method(args) ──
+        // PascalCase receiver that's not a stdlib → [ClassName]::Method(args)
+        // Excludes ALL_CAPS names (ARGV, PATH) which are variables, not classes
+        if (node.Receiver is VariableRefNode cn
+            && cn.Name.Length > 0 && char.IsUpper(cn.Name[0])
+            && cn.Name.Any(char.IsLower))
+        {
+            var method = node.Method.Equals("new", StringComparison.OrdinalIgnoreCase)
+                ? "new" : CapitalizeProperty(node.Method);
+            var args = string.Join(", ",
+                node.Args.Where(a => a is not NamedArgNode)
+                .Select(TranspileExpression));
+            return $"[{cn.Name}]::{method}({args})";
+        }
 
         // ── env["KEY"] or env[index] ───────────────────────────────────
         if (IsStdlibReceiver(node.Receiver, "env") && node.Method == "[]")
@@ -712,6 +789,15 @@ public class RushTranspiler
         if (node.Receiver is VariableRefNode dr && dr.Name.Equals("Dir", StringComparison.OrdinalIgnoreCase))
             return $"[System.IO.Directory]::{CapitalizeProperty(prop)}";
 
+        // ── User class static property / enum value: ClassName.prop → [ClassName]::Prop ──
+        // PascalCase only — excludes ALL_CAPS names (ARGV, PATH) which are variables
+        if (node.Receiver is VariableRefNode ur
+            && ur.Name.Length > 0 && char.IsUpper(ur.Name[0])
+            && ur.Name.Any(char.IsLower))
+        {
+            return $"[{ur.Name}]::{CapitalizeProperty(prop)}";
+        }
+
         var receiver = TranspileExpression(node.Receiver);
 
         // ── Duration methods (zero-arg form): 24.hours, 30.minutes ────
@@ -810,7 +896,9 @@ public class RushTranspiler
         var arg = args[0];
 
         // puts "text".green → Write-Host "text" -ForegroundColor Green
-        if (arg is PropertyAccessNode pa && AnsiColors.ContainsKey(pa.Property))
+        // Skip color detection when receiver is an uppercase class/enum name (Color.red ≠ color method)
+        if (arg is PropertyAccessNode pa && AnsiColors.ContainsKey(pa.Property)
+            && !(pa.Receiver is VariableRefNode pvr && pvr.Name.Length > 0 && char.IsUpper(pvr.Name[0])))
         {
             var inner = TranspileExpression(pa.Receiver);
             var color = char.ToUpper(pa.Property[0]) + pa.Property[1..];

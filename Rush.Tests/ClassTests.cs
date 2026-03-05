@@ -330,4 +330,290 @@ puts b.get_label()";
         Assert.Contains("beta", stdout);
         Assert.Equal(0, exitCode);
     }
+
+    // ── Inheritance: Lexer ───────────────────────────────────────────────
+
+    [Fact]
+    public void Lexer_SuperKeyword()
+    {
+        var tokens = new Lexer("super").Tokenize();
+        Assert.Equal(RushTokenType.Super, tokens[0].Type);
+    }
+
+    // ── Inheritance: Parser ─────────────────────────────────────────────
+
+    [Fact]
+    public void Parse_ClassWithInheritance()
+    {
+        var code = "class Dog < Animal\n  attr breed\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Equal("Dog", cls.Name);
+        Assert.Equal("Animal", cls.ParentClassName);
+        Assert.Single(cls.Attributes);
+    }
+
+    [Fact]
+    public void Parse_ClassWithoutInheritance_ParentIsNull()
+    {
+        var code = "class Person\n  attr name\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Null(cls.ParentClassName);
+    }
+
+    [Fact]
+    public void Parse_SuperCallInConstructor()
+    {
+        var code = "class Dog < Animal\n  def initialize(name)\n    super(name)\n  end\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.NotNull(cls.Constructor);
+        var superNode = cls.Constructor!.Body.OfType<SuperCallNode>().FirstOrDefault();
+        Assert.NotNull(superNode);
+        Assert.Null(superNode!.MethodName); // constructor super
+        Assert.Single(superNode.Args);
+    }
+
+    [Fact]
+    public void Parse_SuperMethodCall()
+    {
+        var code = "class Dog < Animal\n  def speak\n    super.speak\n  end\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        var method = cls.Methods.First();
+        var superNode = method.Body.OfType<SuperCallNode>().FirstOrDefault();
+        Assert.NotNull(superNode);
+        Assert.Equal("speak", superNode!.MethodName);
+    }
+
+    // ── Inheritance: Transpiler ──────────────────────────────────────────
+
+    [Fact]
+    public void Transpile_ClassInheritance()
+    {
+        var ps = Transpile("class Dog < Animal\n  attr breed\nend");
+        Assert.Contains("class Dog : Animal {", ps);
+    }
+
+    [Fact]
+    public void Transpile_ConstructorWithSuper()
+    {
+        var code = "class Dog < Animal\n  attr breed\n  def initialize(name, breed)\n    super(name)\n    self.breed = breed\n  end\nend";
+        var ps = Transpile(code);
+        Assert.Contains(": base($name)", ps);
+        Assert.Contains("$this.Breed = $breed", ps);
+        // super(name) should NOT appear in the body — extracted to : base()
+        Assert.DoesNotContain("([Animal]$this)", ps);
+    }
+
+    [Fact]
+    public void Transpile_SuperMethodCall()
+    {
+        var code = "class Dog < Animal\n  def speak\n    super.speak\n  end\nend";
+        var ps = Transpile(code);
+        Assert.Contains("([Animal]$this).Speak()", ps);
+    }
+
+    // ── Inheritance: Triage ─────────────────────────────────────────────
+
+    [Fact]
+    public void Triage_ClassWithInheritance_IsRushSyntax()
+    {
+        Assert.True(_engine.IsRushSyntax("class Dog < Animal"));
+    }
+
+    // ── Inheritance: Integration ─────────────────────────────────────────
+
+    [Fact]
+    public void Integration_InheritanceBasic()
+    {
+        var script = @"
+class Animal
+  attr name
+  def initialize(name)
+    self.name = name
+  end
+  def speak
+    return ""...""
+  end
+end
+
+class Dog < Animal
+  def initialize(name)
+    super(name)
+  end
+  def speak
+    return self.name + "" says Woof!""
+  end
+end
+
+d = Dog.new(""Rex"")
+puts d.speak()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("Rex says Woof!", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Integration_InheritanceWithSuper()
+    {
+        var script = @"
+class Animal
+  attr name
+  def initialize(name)
+    self.name = name
+  end
+end
+
+class Dog < Animal
+  attr breed
+  def initialize(name, breed)
+    super(name)
+    self.breed = breed
+  end
+  def describe
+    return self.name + "" the "" + self.breed
+  end
+end
+
+d = Dog.new(""Rex"", ""Labrador"")
+puts d.describe()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("Rex the Labrador", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Integration_SuperMethodCall()
+    {
+        var script = @"
+class Base
+  def value
+    return 10
+  end
+end
+
+class Child < Base
+  def value
+    return super.value() + 5
+  end
+end
+
+c = Child.new()
+puts c.value()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("15", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    // ── Static Methods: Parser ──────────────────────────────────────────
+
+    [Fact]
+    public void Parse_StaticMethod()
+    {
+        var code = "class MathHelper\n  def self.add(a, b)\n    return a + b\n  end\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Empty(cls.Methods);
+        Assert.Single(cls.StaticMethods);
+        Assert.Equal("add", cls.StaticMethods[0].Name);
+        Assert.True(cls.StaticMethods[0].IsStatic);
+    }
+
+    [Fact]
+    public void Parse_MixedInstanceAndStaticMethods()
+    {
+        var code = "class Util\n  def instance_method\n    return 1\n  end\n  def self.class_method\n    return 2\n  end\nend";
+        var cls = Assert.IsType<ClassDefNode>(ParseSingle(code));
+        Assert.Single(cls.Methods);
+        Assert.Single(cls.StaticMethods);
+        Assert.Equal("instance_method", cls.Methods[0].Name);
+        Assert.Equal("class_method", cls.StaticMethods[0].Name);
+    }
+
+    // ── Static Methods: Transpiler ──────────────────────────────────────
+
+    [Fact]
+    public void Transpile_StaticMethod()
+    {
+        var code = "class MathHelper\n  def self.add(a, b)\n    return a + b\n  end\nend";
+        var ps = Transpile(code);
+        Assert.Contains("static [object] Add(", ps);
+    }
+
+    [Fact]
+    public void Transpile_StaticMethodCall()
+    {
+        var ps = Transpile("MathHelper.add(2, 3)");
+        Assert.Contains("[MathHelper]::Add(2, 3)", ps);
+    }
+
+    [Fact]
+    public void Transpile_StaticPropertyAccess()
+    {
+        var ps = Transpile("Color.red");
+        Assert.Contains("[Color]::Red", ps);
+    }
+
+    // ── Static Methods: Triage ──────────────────────────────────────────
+
+    [Fact]
+    public void Triage_StaticMethodCall_IsRushSyntax()
+    {
+        Assert.True(_engine.IsRushSyntax("MathHelper.add(2, 3)"));
+    }
+
+    [Fact]
+    public void Triage_ClassPropertyAccess_IsRushSyntax()
+    {
+        Assert.True(_engine.IsRushSyntax("Color.red"));
+    }
+
+    // ── Static Methods: Integration ─────────────────────────────────────
+
+    [Fact]
+    public void Integration_StaticMethod()
+    {
+        var script = @"
+class MathHelper
+  def self.add(a, b)
+    return a + b
+  end
+end
+
+puts MathHelper.add(2, 3)";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("5", stdout);
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Integration_StaticAndInstanceMethods()
+    {
+        var script = @"
+class Counter
+  attr value
+  def initialize(start: 0)
+    self.value = start
+  end
+  def self.create_at(n)
+    return Counter.new(n)
+  end
+  def get_value
+    return self.value
+  end
+end
+
+c = Counter.create_at(42)
+puts c.get_value()";
+
+        var (stdout, stderr, exitCode) = RunRush(script);
+        Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
+        Assert.Equal("42", stdout);
+        Assert.Equal(0, exitCode);
+    }
 }
