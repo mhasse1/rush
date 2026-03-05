@@ -151,6 +151,14 @@ public class LiteralNode : RushNode
     public LiteralNode(string value, RushTokenType type) { Value = value; Type = type; }
 }
 
+/// <summary>A regex literal: /pattern/flags</summary>
+public class RegexLiteralNode : RushNode
+{
+    public string Pattern { get; }
+    public string Flags { get; }
+    public RegexLiteralNode(string pattern, string flags) { Pattern = pattern; Flags = flags; }
+}
+
 /// <summary>Binary operation: left op right</summary>
 public class BinaryOpNode : RushNode
 {
@@ -1145,6 +1153,13 @@ public class Parser
             case RushTokenType.DollarQuestion:
                 Advance();
                 return new VariableRefNode("$?");
+
+            case RushTokenType.Regex:
+            {
+                var tok = Advance();
+                var parts = tok.Value.Split('\0');
+                return new RegexLiteralNode(parts[0], parts.Length > 1 ? parts[1] : "");
+            }
 
             default:
                 throw new RushParseException($"Unexpected token {Current.Type} ('{Current.Value}') at position {Current.Position}");

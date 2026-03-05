@@ -6,7 +6,7 @@ namespace Rush;
 public enum RushTokenType
 {
     // Literals
-    Integer, Float, StringLiteral, Symbol,
+    Integer, Float, StringLiteral, Symbol, Regex,
 
     // Identifiers and keywords
     Identifier,
@@ -118,6 +118,7 @@ public class Lexer
 
     private readonly string _source;
     private int _pos;
+    private RushTokenType? _lastTokenType;
 
     public Lexer(string source)
     {
@@ -135,7 +136,10 @@ public class Lexer
         {
             var token = NextToken();
             if (token != null)
+            {
                 tokens.Add(token);
+                _lastTokenType = token.Type;
+            }
         }
         tokens.Add(new RushToken(RushTokenType.EOF, "", _pos));
         return tokens;
@@ -264,6 +268,10 @@ public class Lexer
                     return new RushToken(RushTokenType.SafeNav, "&.", start);
             }
         }
+
+        // Regex literal: /pattern/flags — disambiguated from division
+        if (ch == '/' && SlashIsRegex())
+            return ReadRegexLiteral();
 
         // Single-character operators
         _pos++;
@@ -394,6 +402,87 @@ public class Lexer
             return new RushToken(keywordType, value, start);
 
         return new RushToken(RushTokenType.Identifier, value, start);
+    }
+
+    /// <summary>
+    /// Determine if a '/' should be lexed as a regex literal or division operator.
+    /// Regex: after operators, delimiters, keywords (expression start contexts).
+    /// Division: after values and closing delimiters (where an operator is expected).
+    /// </summary>
+    private bool SlashIsRegex()
+    {
+        if (_lastTokenType == null) return true; // start of input
+
+        return _lastTokenType switch
+        {
+            // After operators → regex (operand expected)
+            RushTokenType.Assign or RushTokenType.Equals or RushTokenType.NotEquals
+            or RushTokenType.LessThan or RushTokenType.GreaterThan
+            or RushTokenType.LessEqual or RushTokenType.GreaterEqual
+            or RushTokenType.MatchOp or RushTokenType.NotMatch or RushTokenType.Match
+            or RushTokenType.Plus or RushTokenType.Minus or RushTokenType.Star
+            or RushTokenType.Slash or RushTokenType.Percent
+            or RushTokenType.AmpAmp or RushTokenType.PipePipe or RushTokenType.Pipe
+            or RushTokenType.PlusAssign or RushTokenType.MinusAssign
+                => true,
+            // After opening delimiters, comma, semicolon, newline → regex
+            RushTokenType.LParen or RushTokenType.LBracket or RushTokenType.LBrace
+            or RushTokenType.Comma or RushTokenType.Semicolon or RushTokenType.Newline
+                => true,
+            // After keywords → regex
+            RushTokenType.If or RushTokenType.Elsif or RushTokenType.Unless
+            or RushTokenType.While or RushTokenType.Until or RushTokenType.When
+            or RushTokenType.Return or RushTokenType.And or RushTokenType.Or
+            or RushTokenType.Not or RushTokenType.In
+                => true,
+            // After values/closing delimiters → division
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Read a regex literal: /pattern/flags
+    /// Value is stored as "pattern\0flags" when flags are present, or just "pattern" without.
+    /// </summary>
+    private RushToken ReadRegexLiteral()
+    {
+        var start = _pos;
+        _pos++; // skip opening /
+        var pattern = new System.Text.StringBuilder();
+
+        while (_pos < _source.Length && _source[_pos] != '/' && _source[_pos] != '\n')
+        {
+            if (_source[_pos] == '\\' && _pos + 1 < _source.Length)
+            {
+                // Escaped character (including \/) — keep both chars
+                pattern.Append(_source[_pos]);
+                pattern.Append(_source[_pos + 1]);
+                _pos += 2;
+            }
+            else
+            {
+                pattern.Append(_source[_pos]);
+                _pos++;
+            }
+        }
+
+        if (_pos < _source.Length && _source[_pos] == '/')
+            _pos++; // skip closing /
+
+        // Read flags (i, m, x) immediately after closing /
+        var flags = new System.Text.StringBuilder();
+        while (_pos < _source.Length && _source[_pos] is 'i' or 'm' or 'x')
+        {
+            flags.Append(_source[_pos]);
+            _pos++;
+        }
+
+        // Pack pattern + flags with NUL separator
+        var value = flags.Length > 0
+            ? $"{pattern}\0{flags}"
+            : pattern.ToString();
+
+        return new RushToken(RushTokenType.Regex, value, start);
     }
 
     /// <summary>

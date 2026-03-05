@@ -107,7 +107,7 @@ public class LexerTests
     [InlineData("+", RushTokenType.Plus)]
     [InlineData("-", RushTokenType.Minus)]
     [InlineData("*", RushTokenType.Star)]
-    [InlineData("/", RushTokenType.Slash)]
+    // Note: "/" is context-dependent (regex vs division) — see RegexTests.cs
     [InlineData("%", RushTokenType.Percent)]
     [InlineData(".", RushTokenType.Dot)]
     [InlineData("..", RushTokenType.DotDot)]

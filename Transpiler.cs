@@ -409,6 +409,7 @@ public class RushTranspiler
         AssignmentNode a => TranspileAssignment(a),
         CompoundAssignmentNode ca => TranspileCompoundAssignment(ca),
         LoopControlNode lc => TranspileLoopControl(lc),
+        RegexLiteralNode rx => TranspileRegex(rx),
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         _ => $"<# unsupported: {node.GetType().Name} #>"
     };
@@ -438,8 +439,16 @@ public class RushTranspiler
     private string TranspileBinary(BinaryOpNode node)
     {
         var left = TranspileExpression(node.Left);
-        var right = TranspileExpression(node.Right);
         var op = TranslateOperator(node.Op);
+
+        // For match operators with regex literals, emit pattern as string (not [regex] cast)
+        if (node.Op is "=~" or "!~" or "~" && node.Right is RegexLiteralNode rx)
+        {
+            var pattern = TranspileRegexAsPattern(rx);
+            return $"({left} {op} {pattern})";
+        }
+
+        var right = TranspileExpression(node.Right);
         return $"({left} {op} {right})";
     }
 
@@ -1061,29 +1070,74 @@ public class RushTranspiler
     private string TranspileSub(string receiver, List<RushNode> args)
     {
         if (args.Count < 2) return receiver;
-        // .sub replaces first match only
-        var pattern = TranspileExpression(args[0]);
+        // .sub replaces first match only — needs [regex] object for .Replace(str, rep, count)
+        var pattern = args[0] is RegexLiteralNode rx
+            ? $"[regex]{TranspileRegexAsPattern(rx)}"
+            : $"[regex]{TranspileExpression(args[0])}";
         var replacement = TranspileExpression(args[1]);
-        return $"([regex]{pattern}).Replace({receiver}, {replacement}, 1)";
+        return $"({pattern}).Replace({receiver}, {replacement}, 1)";
     }
 
     private string TranspileGsub(string receiver, List<RushNode> args)
     {
         if (args.Count < 2) return receiver;
         // .gsub replaces all matches — PowerShell -replace is global by default
-        return $"({receiver} -replace {TranspileExpression(args[0])}, {TranspileExpression(args[1])})";
+        var pattern = args[0] is RegexLiteralNode rx
+            ? TranspileRegexAsPattern(rx)
+            : TranspileExpression(args[0]);
+        return $"({receiver} -replace {pattern}, {TranspileExpression(args[1])})";
     }
 
     private string TranspileScan(string receiver, List<RushNode> args)
     {
         if (args.Count == 0) return receiver;
-        return $"[regex]::Matches({receiver}, {TranspileExpression(args[0])}).Value";
+        var pattern = args[0] is RegexLiteralNode rx
+            ? TranspileRegexAsPattern(rx)
+            : TranspileExpression(args[0]);
+        return $"[regex]::Matches({receiver}, {pattern}).Value";
     }
 
     private string TranspileMatch(string receiver, List<RushNode> args)
     {
         if (args.Count == 0) return receiver;
-        return $"[regex]::Match({receiver}, {TranspileExpression(args[0])})";
+        var pattern = args[0] is RegexLiteralNode rx
+            ? TranspileRegexAsPattern(rx)
+            : TranspileExpression(args[0]);
+        return $"[regex]::Match({receiver}, {pattern})";
+    }
+
+    // ── Regex Literal Transpilation ─────────────────────────────────────
+
+    /// <summary>
+    /// Transpile a regex literal as a [regex] cast expression.
+    /// Used when the regex appears as a standalone expression or value.
+    /// /^test/ → [regex]'^test'    /error/i → [regex]'(?i)error'
+    /// </summary>
+    private static string TranspileRegex(RegexLiteralNode node)
+    {
+        var pattern = EscapePsSingleQuote(node.Pattern);
+        if (string.IsNullOrEmpty(node.Flags))
+            return $"[regex]'{pattern}'";
+        return $"[regex]'(?{node.Flags}){pattern}'";
+    }
+
+    /// <summary>
+    /// Transpile a regex literal as a bare string pattern.
+    /// Used with -match/-notmatch operators and [regex]:: static methods.
+    /// /^test/ → '^test'    /error/i → '(?i)error'
+    /// </summary>
+    private static string TranspileRegexAsPattern(RegexLiteralNode node)
+    {
+        var pattern = EscapePsSingleQuote(node.Pattern);
+        if (string.IsNullOrEmpty(node.Flags))
+            return $"'{pattern}'";
+        return $"'(?{node.Flags}){pattern}'";
+    }
+
+    /// <summary>Escape single quotes for PowerShell single-quoted strings (' → '').</summary>
+    private static string EscapePsSingleQuote(string s)
+    {
+        return s.Replace("'", "''");
     }
 
     // ── Numeric Methods ─────────────────────────────────────────────────

@@ -91,6 +91,11 @@ public class SyntaxHighlighter
                     expectCommand = false;
                     break;
 
+                case TokenType.Regex:
+                    sb.Append(Magenta).Append(token.Text).Append(Reset);
+                    expectCommand = false;
+                    break;
+
                 case TokenType.Flag:
                     sb.Append(Yellow).Append(token.Text).Append(Reset);
                     break;
@@ -128,7 +133,7 @@ public class SyntaxHighlighter
 
     // ── Tokenizer ─────────────────────────────────────────────────────────
 
-    internal enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace, Keyword }
+    internal enum TokenType { Word, Flag, String, Pipe, Operator, Bang, Whitespace, Keyword, Regex }
     internal record Token(TokenType Type, string Text);
 
     internal static List<Token> Tokenize(string input)
@@ -251,6 +256,24 @@ public class SyntaxHighlighter
                 continue;
             }
 
+            // Regex literal: /pattern/flags
+            if (ch == '/' && IsRegexContext(tokens))
+            {
+                int start = i;
+                i++; // skip opening /
+                while (i < input.Length && input[i] != '/' && input[i] != '\n')
+                {
+                    if (input[i] == '\\' && i + 1 < input.Length)
+                        i += 2; // skip escaped char
+                    else
+                        i++;
+                }
+                if (i < input.Length && input[i] == '/') i++; // skip closing /
+                while (i < input.Length && input[i] is 'i' or 'm' or 'x') i++; // flags
+                tokens.Add(new Token(TokenType.Regex, input[start..i]));
+                continue;
+            }
+
             // Word, flag, or keyword
             {
                 int start = i;
@@ -280,5 +303,20 @@ public class SyntaxHighlighter
         if (ch == '&' && i + 1 < input.Length && input[i + 1] == '&') return true;
         if (ch == '!' && i + 1 < input.Length && input[i + 1] is '!' or '$') return true;
         return false;
+    }
+
+    /// <summary>
+    /// Determine if '/' should be treated as a regex literal start in the highlighter.
+    /// After operators, keywords, pipe → regex. After words → division.
+    /// </summary>
+    private static bool IsRegexContext(List<Token> tokens)
+    {
+        for (int i = tokens.Count - 1; i >= 0; i--)
+        {
+            if (tokens[i].Type == TokenType.Whitespace) continue;
+            return tokens[i].Type is TokenType.Operator or TokenType.Keyword
+                or TokenType.Pipe or TokenType.Bang;
+        }
+        return true; // start of line → regex context
     }
 }

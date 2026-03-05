@@ -270,6 +270,9 @@ while (true)
                 else
                 {
                     prompt.SetLastCommandFailed(false);
+
+                    // Track variable assignments for type-aware dot-completion (V2)
+                    TrackVariableAssignment(input, tabCompleter);
                 }
 
                 if (results.Count > 0)
@@ -2231,6 +2234,45 @@ static string ExpandTilde(string input)
 /// Handle multiline input: trailing backslash, unclosed quotes, unclosed brackets.
 /// Reads additional lines until the input is complete.
 /// </summary>
+/// <summary>
+/// Detect simple variable assignments in Rush input and track them
+/// for type-aware dot-completion (V2 static inference).
+/// </summary>
+static void TrackVariableAssignment(string input, TabCompleter tabCompleter)
+{
+    try
+    {
+        var trimmed = input.Trim();
+
+        // Skip multi-line blocks, control flow, etc.
+        if (trimmed.Contains('\n')) return;
+
+        var eqPos = trimmed.IndexOf('=');
+        if (eqPos <= 0) return;
+
+        // Exclude ==, !=, <=, >=, =~, +=, -=, *=, /=
+        if (eqPos + 1 < trimmed.Length && trimmed[eqPos + 1] is '=' or '~') return;
+        if (trimmed[eqPos - 1] is '!' or '<' or '>' or '+' or '-' or '*' or '/') return;
+
+        var varName = trimmed[..eqPos].Trim();
+        var rhs = trimmed[(eqPos + 1)..].Trim();
+
+        // Validate identifier: letters, digits, underscores only
+        if (string.IsNullOrEmpty(varName)) return;
+        if (!char.IsLetter(varName[0]) && varName[0] != '_') return;
+        foreach (var ch in varName)
+        {
+            if (!char.IsLetterOrDigit(ch) && ch != '_') return;
+        }
+
+        tabCompleter.TrackAssignment(varName, rhs);
+    }
+    catch
+    {
+        // Assignment tracking is best-effort — never fail the REPL
+    }
+}
+
 static string ReadContinuationLines(string input)
 {
     var sb = new System.Text.StringBuilder(input);

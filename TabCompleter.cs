@@ -1,12 +1,13 @@
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
+using System.Reflection;
 
 namespace Rush;
 
 /// <summary>
 /// Tab completion engine for Rush.
 /// Handles file/directory paths, command names, PATH binaries,
-/// environment variables, flags, and PowerShell completions.
+/// environment variables, flags, dot-completion (type-aware), and PowerShell completions.
 /// </summary>
 public class TabCompleter
 {
@@ -23,6 +24,45 @@ public class TabCompleter
     // PATH binary cache
     private List<string>? _pathBinaries;
     private string? _cachedPath;
+
+    // V2: Static type inference — tracks variable → inferred type from assignments
+    private readonly Dictionary<string, Type?> _symbolTable = new(StringComparer.OrdinalIgnoreCase);
+
+    // Rush method lists for dot-completion (type-aware)
+    private static readonly string[] RushCollectionMethods =
+    {
+        "each", "select", "reject", "map", "flat_map",
+        "sort_by", "sort", "first", "last", "count",
+        "any?", "all?", "group_by", "uniq", "reverse",
+        "join", "include?", "skip", "skip_while",
+        "push", "compact", "flatten", "print", "puts"
+    };
+
+    private static readonly string[] RushStringMethods =
+    {
+        "strip", "lstrip", "rstrip", "upcase", "downcase",
+        "split", "split_whitespace", "lines", "trim_end",
+        "start_with?", "end_with?", "empty?", "nil?",
+        "ljust", "rjust", "replace", "sub", "gsub", "scan", "match",
+        "to_i", "to_f", "to_s", "include?",
+        "red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray",
+        "print", "puts"
+    };
+
+    private static readonly string[] RushNumericMethods =
+    {
+        "round", "abs", "times", "to_currency", "to_filesize", "to_percent",
+        "hours", "minutes", "seconds", "days",
+        "to_i", "to_f", "to_s",
+        "print", "puts"
+    };
+
+    // Object base methods to exclude from .NET reflection results
+    private static readonly HashSet<string> ExcludedMethods = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "GetType", "ToString", "Equals", "GetHashCode", "MemberwiseClone", "Finalize",
+        "ReferenceEquals", "get_Length", "get_Count" // Property accessors shown as properties instead
+    };
 
     public TabCompleter(Runspace runspace, CommandTranslator translator, RushConfig? config = null)
     {
@@ -65,7 +105,16 @@ public class TabCompleter
         bool isPathLike = token.Contains('/') || token.Contains(Path.DirectorySeparatorChar)
             || token.StartsWith("./") || token.StartsWith("../");
 
-        if (token.StartsWith('$'))
+        // Dot-completion: variable.method or receiver.property
+        var dotPos = token.LastIndexOf('.');
+        if (dotPos > 0 && !isPathLike && !token.StartsWith('-'))
+        {
+            var receiver = token[..dotPos];
+            var memberPrefix = token[(dotPos + 1)..];
+            _completionStart = tokenStart + dotPos + 1; // Point after the dot
+            CompleteDotMembers(receiver, memberPrefix);
+        }
+        else if (token.StartsWith('$'))
         {
             // $VAR completion
             CompleteEnvironmentVariables(token);
@@ -158,8 +207,11 @@ public class TabCompleter
         var afterTokenEnd = FindTokenEnd(originalInput, _completionStart);
         var after = originalInput[afterTokenEnd..];
 
-        // Add trailing space if it's a complete match (not a directory)
-        var suffix = completion.EndsWith('/') || completion.EndsWith(Path.DirectorySeparatorChar) ? "" : " ";
+        // Add trailing space if it's a complete match (not a directory or dot-completion)
+        bool isDotCompletion = _completionStart > 0
+            && _completionStart <= originalInput.Length
+            && originalInput[_completionStart - 1] == '.';
+        var suffix = (completion.EndsWith('/') || completion.EndsWith(Path.DirectorySeparatorChar) || isDotCompletion) ? "" : " ";
         if (!string.IsNullOrEmpty(after)) suffix = ""; // Don't add space if there's already text after
 
         var newInput = before + completion + suffix + after;
@@ -423,6 +475,220 @@ public class TabCompleter
         {
             return Directory.GetCurrentDirectory();
         }
+    }
+
+    // ── Dot Completion (Type-Aware) ────────────────────────────────────
+
+    /// <summary>
+    /// Complete methods and properties after a dot: variable.prefix → suggestions.
+    /// Uses runtime introspection (V1) with static inference fallback (V2).
+    /// </summary>
+    private void CompleteDotMembers(string receiver, string prefix)
+    {
+        Type? type = null;
+
+        // V1: Runtime introspection — query the PowerShell runspace for the variable's actual type
+        type = GetRuntimeType(receiver);
+
+        // V2: Static inference fallback — check the symbol table for unexecuted variables
+        if (type == null && _symbolTable.TryGetValue(receiver, out var inferredType))
+            type = inferredType;
+
+        // Add Rush methods appropriate to the type
+        AddRushMethods(type, prefix);
+
+        // Add .NET members from reflection if we have a type
+        if (type != null)
+            AddDotNetMembers(type, prefix);
+
+        // Deduplicate and sort: Rush methods first, then .NET members
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var deduped = new List<string>();
+        foreach (var c in _completions)
+        {
+            if (seen.Add(c))
+                deduped.Add(c);
+        }
+        _completions = deduped;
+    }
+
+    /// <summary>
+    /// Get the .NET type of a variable from the PowerShell runspace at runtime.
+    /// Handles simple variables (name) and chained expressions (obj.prop).
+    /// </summary>
+    private Type? GetRuntimeType(string receiver)
+    {
+        try
+        {
+            // Simple variable name: query SessionStateProxy directly (fast, no execution)
+            if (IsSimpleIdentifier(receiver))
+            {
+                var value = _runspace.SessionStateProxy.GetVariable(receiver);
+                if (value != null)
+                {
+                    // Unwrap PSObject if needed
+                    if (value is PSObject pso)
+                        return pso.BaseObject?.GetType();
+                    return value.GetType();
+                }
+                return null;
+            }
+
+            // Chained expression (e.g., files.first): evaluate in the runspace
+            using var ps = PowerShell.Create();
+            ps.Runspace = _runspace;
+            ps.AddScript($"${receiver}");
+            var results = ps.Invoke();
+            if (results.Count > 0 && results[0] != null)
+            {
+                var obj = results[0].BaseObject ?? results[0];
+                return obj.GetType();
+            }
+        }
+        catch { } // Runspace errors are non-fatal for completion
+        return null;
+    }
+
+    /// <summary>
+    /// Add Rush-specific methods based on the inferred or runtime type.
+    /// When type is unknown, adds all Rush methods as candidates.
+    /// </summary>
+    private void AddRushMethods(Type? type, string prefix)
+    {
+        string[] methods;
+
+        if (type == null)
+        {
+            // Unknown type — offer all Rush methods
+            methods = RushCollectionMethods
+                .Concat(RushStringMethods)
+                .Concat(RushNumericMethods)
+                .Distinct().ToArray();
+        }
+        else if (type == typeof(string))
+        {
+            methods = RushStringMethods;
+        }
+        else if (IsNumericType(type))
+        {
+            methods = RushNumericMethods;
+        }
+        else if (IsCollectionType(type))
+        {
+            methods = RushCollectionMethods;
+        }
+        else
+        {
+            // Known .NET type but not a standard category — offer common methods
+            methods = RushCollectionMethods
+                .Concat(RushStringMethods)
+                .Concat(RushNumericMethods)
+                .Distinct().ToArray();
+        }
+
+        foreach (var m in methods)
+        {
+            if (m.StartsWith(prefix, CompareMode) && !_completions.Contains(m, StringComparer.OrdinalIgnoreCase))
+                _completions.Add(m);
+        }
+    }
+
+    /// <summary>
+    /// Add .NET properties and methods from reflection on the given type.
+    /// </summary>
+    private void AddDotNetMembers(Type type, string prefix)
+    {
+        // Properties
+        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (prop.Name.StartsWith(prefix, CompareMode)
+                && !_completions.Contains(prop.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                _completions.Add(prop.Name);
+            }
+        }
+
+        // Methods (excluding property accessors and Object base methods)
+        foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (method.IsSpecialName) continue; // Skip get_/set_ accessors
+            if (ExcludedMethods.Contains(method.Name)) continue;
+            if (!method.Name.StartsWith(prefix, CompareMode)) continue;
+            if (_completions.Contains(method.Name, StringComparer.OrdinalIgnoreCase)) continue;
+
+            // Add parens hint for methods that require arguments
+            var requiredParams = method.GetParameters().Count(p => !p.IsOptional);
+            _completions.Add(requiredParams > 0 ? $"{method.Name}()" : method.Name);
+        }
+    }
+
+    /// <summary>
+    /// V2: Track variable assignments for static type inference.
+    /// Called from the REPL loop after each assignment is executed.
+    /// </summary>
+    public void TrackAssignment(string varName, string rushRhs)
+    {
+        var rhs = rushRhs.Trim();
+        Type? inferredType = null;
+
+        if ((rhs.StartsWith('"') && rhs.EndsWith('"')) || (rhs.StartsWith('\'') && rhs.EndsWith('\'')))
+            inferredType = typeof(string);
+        else if (rhs == "true" || rhs == "false")
+            inferredType = typeof(bool);
+        else if (rhs == "nil")
+            inferredType = null;
+        else if (rhs.StartsWith('[') && rhs.EndsWith(']'))
+            inferredType = typeof(object[]);
+        else if (rhs.StartsWith('{') && rhs.EndsWith('}'))
+            inferredType = typeof(System.Collections.Hashtable);
+        else if (long.TryParse(rhs, out _))
+            inferredType = typeof(long);
+        else if (double.TryParse(rhs, out _))
+            inferredType = typeof(double);
+        // Stdlib patterns
+        else if (rhs.StartsWith("File.read_lines", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("file.read_lines", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(string[]);
+        else if (rhs.StartsWith("File.read", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("file.read", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(string);
+        else if (rhs.StartsWith("Dir.files", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("dir.files", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(System.IO.FileInfo[]);
+        else if (rhs.StartsWith("Dir.dirs", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("dir.dirs", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(System.IO.DirectoryInfo[]);
+        else if (rhs.StartsWith("Time.now", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("time.now", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("Time.utc_now", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("Time.today", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(DateTime);
+
+        _symbolTable[varName] = inferredType;
+    }
+
+    private static bool IsSimpleIdentifier(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return false;
+        if (!char.IsLetter(s[0]) && s[0] != '_') return false;
+        for (int i = 1; i < s.Length; i++)
+        {
+            if (!char.IsLetterOrDigit(s[i]) && s[i] != '_') return false;
+        }
+        return true;
+    }
+
+    private static bool IsNumericType(Type type)
+    {
+        return type == typeof(int) || type == typeof(long) || type == typeof(double)
+            || type == typeof(float) || type == typeof(decimal)
+            || type == typeof(short) || type == typeof(byte);
+    }
+
+    private static bool IsCollectionType(Type type)
+    {
+        if (type.IsArray) return true;
+        return typeof(System.Collections.IEnumerable).IsAssignableFrom(type) && type != typeof(string);
     }
 
     // ── Token Extraction ────────────────────────────────────────────────
