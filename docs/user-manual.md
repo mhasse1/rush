@@ -243,7 +243,7 @@ if count > 10
 end                  # ← block closes
 ```
 
-This works for `if`, `unless`, `for`, `while`, `until`, `loop`, `def`, `begin`, `try`, `case`, `match`, `class`.
+This works for `if`, `unless`, `for`, `while`, `until`, `loop`, `def`, `begin`, `try`, `case`, `match`, `class`, `enum`.
 
 ### Syntax Highlighting
 
@@ -746,6 +746,123 @@ b = Box.new("beta")
 puts a.get_label()            # → "alpha"
 puts b.get_label()            # → "beta"
 ```
+
+**Inheritance:**
+
+Use `<` to inherit from a parent class. Call `super(args)` in the constructor to pass arguments to the parent, and `super.method()` to call a parent method from an override:
+
+```rush
+class Animal
+  attr name
+
+  def initialize(name)
+    self.name = name
+  end
+
+  def speak
+    puts "..."
+  end
+end
+
+class Dog < Animal
+  attr breed
+
+  def initialize(name, breed)
+    super(name)
+    self.breed = breed
+  end
+
+  def speak
+    super.speak()
+    puts "Woof!"
+  end
+end
+
+d = Dog.new("Rex", "Lab")
+puts d.name                   # → "Rex"
+d.speak()                     # → "..." then "Woof!"
+```
+
+Inheritance rules:
+- The parent class must be defined before the child class in the same script
+- `super(args)` in a constructor passes arguments to the parent constructor
+- `super.method()` calls the parent's version of a method
+- Child classes inherit all attributes and methods from the parent
+
+**Static methods:**
+
+Define class-level methods with `def self.method_name`. Call them with `ClassName.method()` — no instance needed:
+
+```rush
+class MathHelper
+  def self.add(a, b)
+    return a + b
+  end
+
+  def self.pi
+    return 3.14159
+  end
+end
+
+puts MathHelper.add(2, 3)     # → 5
+puts MathHelper.pi()          # → 3.14159
+```
+
+A class can have both instance methods and static methods:
+
+```rush
+class Counter
+  attr value
+
+  def initialize(start: 0)
+    self.value = start
+  end
+
+  def increment
+    self.value = self.value + 1
+  end
+
+  def self.create_pair
+    return [Counter.new(0), Counter.new(100)]
+  end
+end
+
+pair = Counter.create_pair()
+```
+
+### Enums
+
+Define enumerations with `enum`/`end`. Members are listed one per line, optionally with explicit integer values:
+
+```rush
+enum Color
+  red
+  green
+  blue
+end
+
+enum Priority
+  low = 1
+  medium = 5
+  high = 10
+end
+```
+
+Access members with `EnumName.member`:
+
+```rush
+favorite = Color.blue
+puts favorite                 # → "Blue"
+
+if favorite == Color.blue
+  puts "good choice"
+end
+```
+
+Enum rules:
+- Member names are lowercased in Rush but PascalCased in output
+- Members without explicit values are auto-numbered (starting from 0)
+- Enums support assignment and comparison (`==`, `!=`)
 
 ### Blocks & Iteration
 

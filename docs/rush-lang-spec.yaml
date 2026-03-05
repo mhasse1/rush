@@ -578,7 +578,8 @@ classes:
   description: |
     Ruby-style class definitions that transpile to PowerShell classes.
     Supports attributes (attr), constructors (initialize), instance methods,
-    and self for property access. Instantiation uses ClassName.new().
+    static methods, inheritance, and self for property access.
+    Instantiation uses ClassName.new().
 
   syntax: |
     class ClassName
@@ -613,6 +614,7 @@ classes:
     - { keyword: "class", description: "Begins a class definition, closed by 'end'" }
     - { keyword: "attr", description: "Declare instance attributes (comma-separated)" }
     - { keyword: "self", description: "Reference the current instance (transpiles to $this)" }
+    - { keyword: "super", description: "Call parent class constructor or method" }
 
   instantiation:
     syntax: "ClassName.new(args)"
@@ -708,19 +710,173 @@ classes:
         puts c.get_value()
       output: "12"
 
+  inheritance:
+    status: "implemented"
+    description: |
+      Single inheritance using < syntax. Child classes inherit all attributes
+      and methods from the parent. Use super() in constructors and super.method()
+      to call parent implementations.
+    syntax: |
+      class Animal
+        attr name
+        def initialize(name)
+          self.name = name
+        end
+        def speak
+          return "..."
+        end
+      end
+
+      class Dog < Animal
+        attr breed
+        def initialize(name, breed)
+          super(name)
+          self.breed = breed
+        end
+        def speak
+          return self.name + " says Woof!"
+        end
+      end
+    transpiles_to: |
+      class Animal {
+        [object]$Name
+        Animal([object]$Name) { $this.Name = $Name }
+        [object] Speak() { return "..." }
+      }
+      class Dog : Animal {
+        [object]$Breed
+        Dog([object]$Name, [object]$Breed) : base($Name) {
+          $this.Breed = $Breed
+        }
+        [object] Speak() { return $this.Name + " says Woof!" }
+      }
+    super_calls:
+      - form: "super(args)"
+        description: "Call parent constructor — extracted to : base(args) in PS"
+        note: "Must be in a child class constructor (def initialize)"
+      - form: "super.method(args)"
+        description: "Call parent method — transpiles to ([Parent]$this).Method(args)"
+        note: "Used to extend parent behavior in method overrides"
+    rules:
+      - "Base class must be defined before derived class in the same script"
+      - "super(args) in constructor → : base(args) in PowerShell"
+      - "super.method() in methods → ([ParentClass]$this).Method()"
+      - "When parent has a parameterized constructor, child must define its own with super()"
+
+  static_methods:
+    status: "implemented"
+    description: |
+      Static methods belong to the class, not instances. Defined with
+      def self.method_name() inside a class body. Called via ClassName.method().
+    syntax: |
+      class MathHelper
+        def self.add(a, b)
+          return a + b
+        end
+      end
+
+      result = MathHelper.add(2, 3)
+    transpiles_to: |
+      class MathHelper {
+        static [object] Add([object]$A, [object]$B) {
+          return ($A + $B)
+        }
+      }
+      $result = [MathHelper]::Add(2, 3)
+    rules:
+      - "def self.name() defines a static method — the self. prefix is required"
+      - "ClassName.method(args) calls a static method → [ClassName]::Method(args)"
+      - "ClassName.property accesses a static property → [ClassName]::Property"
+      - "Instance and static methods can coexist in the same class"
+      - "PascalCase receiver (not ALL_CAPS) triggers class method dispatch"
+
   rules:
     - "self.prop is required — no bare name resolution to $this.Prop"
     - "attr is untyped — maps to [object]$Name in PowerShell"
     - ".new() is the only instantiation syntax — detected by uppercase first char"
     - "Methods without return get [void]; methods with return get [object]"
     - "Constructor defaults generate PS constructor overloads (PS doesn't support constructor defaults)"
+    - "Inheritance uses < syntax (Ruby-style), not : or extends"
+    - "Static methods use def self.method_name() (Ruby-style)"
 
   deferred:
-    - "Inheritance: class Dog < Animal"
-    - "Static methods/properties"
     - "Type annotations on attr"
-    - "Enums"
     - "Named args at .new() call site"
+
+# ============================================================================
+# ENUMS
+# ============================================================================
+enums:
+  status: "implemented"
+  description: |
+    Enum definitions using enum/end blocks. Members are listed one per line
+    with optional explicit integer values. Access via EnumName.member syntax.
+    Transpiles to PowerShell 7 native enums.
+
+  syntax: |
+    enum Color
+      red
+      green
+      blue
+    end
+
+    enum Status
+      pending = 0
+      active = 1
+      inactive = 2
+    end
+
+  transpiles_to: |
+    enum Color {
+      Red
+      Green
+      Blue
+    }
+
+    enum Status {
+      Pending = 0
+      Active = 1
+      Inactive = 2
+    }
+
+  access:
+    syntax: "Color.red"
+    transpiles_to: "[Color]::Red"
+    note: "Uses same uppercase receiver generalization as static methods"
+
+  examples:
+    - description: "Define and use an enum"
+      rush: |
+        enum Color
+          red
+          green
+          blue
+        end
+
+        favorite = Color.blue
+        puts favorite
+      output: "Blue"
+
+    - description: "Enum comparison"
+      rush: |
+        enum Status
+          pending = 0
+          active = 1
+          inactive = 2
+        end
+
+        s = Status.active
+        if s == Status.active
+          puts "is active"
+        end
+      output: "is active"
+
+  rules:
+    - "Enum name must start with uppercase (PascalCase)"
+    - "Members are lowercase in Rush, PascalCased in transpiled output"
+    - "Optional = N for explicit integer values"
+    - "Access via EnumName.member — same as static property access"
+    - "Enum must be defined before use in the same script"
 
 # ============================================================================
 # SHELL INTEGRATION
@@ -734,12 +890,14 @@ shell_integration:
   line_triage:
     description: |
       ScriptEngine decides if a line is Rush syntax or a shell command:
-      1. Starts with Rush keyword (if, def, for, while, class, begin) → Rush
+      1. Starts with Rush keyword (if, def, for, while, class, enum, begin) → Rush
       2. Contains `=` after first token → Rush assignment
       3. Method call with known Rush method name (foo.each, foo.select) → Rush
       4. Method call on variable: identifier.method() pattern → Rush
       5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
-      6. Everything else → shell command (goes through CommandTranslator)
+      6. PascalCase receiver: ClassName.method() or EnumName.prop → Rush
+      7. Everything else → shell command (goes through CommandTranslator)
+    note: "ALL_CAPS names (ARGV, PATH) are not treated as class receivers"
 
   command_substitution:
     syntax: "name = $(whoami)"
@@ -1046,13 +1204,17 @@ common_mistakes:
     right: 'self.name = value'
     reason: "Rush uses self.prop, not @prop (Ruby instance variables)"
 
-  - wrong: 'class Dog < Animal'
-    right: '# Inheritance not yet supported'
-    reason: "v1 classes are data classes only — no inheritance yet"
-
   - wrong: 'Dog.new(name: "Rex")'
     right: 'Dog.new("Rex")'
     reason: "Named args at .new() call site not yet supported — use positional args"
+
+  - wrong: 'static def add(a, b)'
+    right: 'def self.add(a, b)'
+    reason: "Static methods use Ruby-style def self.name(), not a static keyword"
+
+  - wrong: 'enum Color { red, green, blue }'
+    right: "enum Color\\n  red\\n  green\\n  blue\\nend"
+    reason: "Enums use block syntax with end, one member per line — not braces or commas"
 
 # ============================================================================
 # UNIX → RUSH TRANSLATION GUIDE (for LLMs)
