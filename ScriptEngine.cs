@@ -493,7 +493,10 @@ public class ScriptEngine
         {
             // Return error as a PowerShell Write-Error so it renders through the normal error path
             var escaped = ex.Message.Replace("'", "''");
-            return $"Write-Error 'Rush syntax error: {escaped}'";
+            var hint = "";
+            if (ex.Message.Contains("Pipe") && input.Contains("ai"))
+                hint = " Tip: to send code to ai, save it to a file first: ai \"question\" < file.rush";
+            return $"Write-Error 'Rush syntax error: {escaped}{hint}'";
         }
     }
 

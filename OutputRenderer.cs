@@ -358,13 +358,16 @@ public static class OutputRenderer
     private static bool IsSimpleValue(PSObject obj)
     {
         var baseObj = obj.BaseObject;
+        if (baseObj is null) return false;
         return baseObj is string or int or long or double or float or bool or decimal
             or DateTime or Guid;
     }
 
     private static bool IsPathInfo(PSObject obj)
     {
-        return obj.BaseObject.GetType().FullName == "System.Management.Automation.PathInfo";
+        var baseObj = obj.BaseObject;
+        if (baseObj is null) return false;
+        return baseObj.GetType().FullName == "System.Management.Automation.PathInfo";
     }
 
     private static bool IsMixedFileSystemItems(IReadOnlyList<PSObject> results)
