@@ -261,6 +261,21 @@ while (true)
             var continuation = lineEditor.ReadLine();
             if (continuation == null) break;
             input += "\n" + continuation;
+
+            // Auto-outdent: if the line was `end`, rewrite at the correct depth
+            var trimmed = continuation.Trim();
+            if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+            {
+                var newDepth = scriptEngine.GetBlockDepth(input);
+                if (newDepth < 0) newDepth = 0;
+                var correctIndent = new string(' ', newDepth * 2);
+                // Move cursor up, clear line, rewrite with correct indent
+                Console.Write("\x1b[A\x1b[2K");
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.Write(correctIndent);
+                Console.ResetColor();
+                Console.WriteLine("end");
+            }
         }
 
         var psCode = scriptEngine.TranspileLine(input);
