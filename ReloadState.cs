@@ -207,14 +207,35 @@ public static class ReloadState
             Environment.SetEnvironmentVariable(key, value);
         }
 
-        // Restore PowerShell variables
+        // Restore PowerShell variables (unwrap JsonElement → native types)
         foreach (var (name, value) in state.Variables)
         {
             try
             {
-                runspace.SessionStateProxy.SetVariable(name, value);
+                runspace.SessionStateProxy.SetVariable(name, UnwrapJsonElement(value));
             }
             catch { }
         }
+    }
+
+    /// <summary>
+    /// Convert JsonElement values back to native .NET types after deserialization.
+    /// System.Text.Json deserializes object? as JsonElement — we need to unwrap
+    /// so PowerShell gets string/int/double/bool instead of JsonElement.
+    /// </summary>
+    private static object? UnwrapJsonElement(object? value)
+    {
+        if (value is not JsonElement je) return value;
+
+        return je.ValueKind switch
+        {
+            JsonValueKind.String => je.GetString(),
+            JsonValueKind.Number => je.TryGetInt64(out var l) ? (l is >= int.MinValue and <= int.MaxValue ? (int)l : l)
+                                 : je.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => je.ToString()
+        };
     }
 }
