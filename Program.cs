@@ -279,7 +279,8 @@ while (true)
             Console.Write(indent);
             Console.ResetColor();
             var continuation = lineEditor.ReadLine();
-            if (continuation == null) break;
+            if (continuation == null) break;           // Ctrl+D
+            if (continuation == "") { input = ""; break; }  // Ctrl+C — cancel block
 
             // Edit in $EDITOR — hand off entire accumulated block
             if (continuation == "\x16")
