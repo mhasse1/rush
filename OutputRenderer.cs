@@ -102,6 +102,12 @@ public static class OutputRenderer
         // ls-style output: type indicator, permissions-ish, size, date, name
         foreach (var item in results)
         {
+            if (item?.BaseObject == null)
+            {
+                Console.WriteLine(item?.ToString() ?? "");
+                continue;
+            }
+
             var baseObj = item.BaseObject;
             var name = GetPropStr(item, "Name");
             var lastWrite = GetPropStr(item, "LastWriteTime");
@@ -382,7 +388,7 @@ public static class OutputRenderer
 
     private static bool IsMixedFileSystemItems(IReadOnlyList<PSObject> results)
     {
-        return results.Any(r => r.BaseObject is System.IO.DirectoryInfo or System.IO.FileInfo);
+        return results.Any(r => r?.BaseObject is System.IO.DirectoryInfo or System.IO.FileInfo);
     }
 
     private static string? GetBaseTypeName(PSObject obj)
