@@ -22,15 +22,135 @@ meta:
   config_file: "~/.config/rush/init.rush"
 
 # ============================================================================
-# CORE PRINCIPLES
+# MENTAL MODEL — read this first
 # ============================================================================
-# 1. Shell commands are first-class — `ls -la /tmp` just works
-# 2. Scripting constructs transpile to PowerShell — full .NET access
-# 3. No sigils for variables — `name = "mark"` not `$name = "mark"`
-# 4. Pipeline operator `|` works for both shell commands and objects
-# 5. String interpolation uses #{expr} (Ruby-style)
-# 6. Blocks use Ruby-style end keywords, not braces for control flow
-# 7. Braces { } are for lambdas/blocks only
+mental_model:
+  one_line: "Bash's process model + Ruby's syntax, transpiling to PowerShell 7"
+  rules:
+    - "Shell commands pass through verbatim — `ls -la` just works"
+    - "No sigils — `name = x` not `$name = x`"
+    - "Interpolation is #{expr} not ${expr}"
+    - "Blocks use `end`, not braces — braces are for lambdas only"
+    - "Every .NET type and PowerShell cmdlet is available automatically"
+    - "When in doubt, it works like Ruby — except pipelines work on objects"
+
+# ============================================================================
+# COMMON MISTAKES (for LLM code generation accuracy)
+# ============================================================================
+# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Ruby, NOT Bash.
+# It borrows ideas from all three but has its own syntax rules.
+
+common_mistakes:
+  - wrong: '$name = "Mark"'
+    right: 'name = "Mark"'  # no $ prefix in Rush
+
+  - wrong: 'foreach ($x in $list) { ... }'
+    right: 'for x in list ... end'  # Ruby-style for/in/end
+
+  - wrong: 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }'
+    right: 'Dir.files(".").select { |f| f.Length > 1mb }'  # use Rush stdlib
+
+  - wrong: '[System.IO.File]::ReadAllText("path")'
+    right: 'File.read("path")'  # use Rush stdlib
+
+  - wrong: 'puts("hello")'
+    right: 'puts "hello"'  # puts/warn/print are keywords, no parens
+
+  - wrong: 'if (x > 5) { puts x }'
+    right: 'if x > 5; puts x; end'  # if/end blocks, not braces
+
+  - wrong: 'data = JSON.parse(File.read("data.json"))'
+    right: 'data = File.read_json("data.json")'  # one-step JSON loading
+
+  - wrong: 'require "json"'
+    right: "# No require/import needed — stdlib is always available"
+
+  - wrong: '@name = value'
+    right: 'self.name = value'  # self.prop, not @prop
+
+  - wrong: 'Dog.new(name: "Rex")'
+    right: 'Dog.new("Rex")'
+    reason: "Named args at .new() call site not yet supported — use positional args"
+
+  - wrong: 'static def add(a, b)'
+    right: 'def self.add(a, b)'  # Ruby-style def self.name()
+
+  - wrong: 'enum Color { red, green, blue }'
+    right: "enum Color\\n  red\\n  green\\n  blue\\nend"
+    reason: "Enums use block syntax with end, one member per line — not braces or commas"
+
+# ============================================================================
+# UNIX → RUSH TRANSLATION GUIDE (for LLMs)
+# ============================================================================
+# Common Unix shell idioms and their Rush equivalents.
+# Use these patterns when translating user intent into Rush code.
+
+unix_translations:
+  - unix: 'cat config.json | jq ".name"'
+    rush: 'data = File.read_json("config.json"); puts data.name'
+    note: "JSON parsing is built into File stdlib"
+
+  - unix: 'find . -name "*.log" -delete'
+    rush: 'Dir.files(".", recursive: true).select { |f| f.Name =~ /\.log$/ }.each { |f| File.delete(f.FullName) }'
+    note: "Method chaining replaces find + xargs"
+
+  - unix: 'wc -l file.txt'
+    rush: 'puts File.read_lines("file.txt").count'
+    note: "read_lines returns array, .count gives line count"
+
+  - unix: 'cat data.csv | head -5'
+    rush: 'File.read_lines("data.csv").first(5).each { |l| puts l }'
+    note: "Method chaining replaces head"
+
+  - unix: 'du -sh * | sort -rh | head -5'
+    rush: 'Dir.files(".").sort_by { |f| f.Length }.reverse.first(5).each { |f| puts "#{f.Name} #{f.Length.to_filesize}" }'
+    note: "Object pipeline — no string parsing needed"
+
+  - unix: 'grep -r "TODO" src/'
+    rush: 'grep -r "TODO" src/'
+    note: "Shell commands just work — no translation needed"
+
+  - unix: 'test -f config.json && echo "exists"'
+    rush: 'puts "exists" if File.exist?("config.json")'
+    note: "Postfix if + predicate method = readable"
+
+  - unix: 'mkdir -p /tmp/myapp/logs'
+    rush: 'Dir.mkdir("/tmp/myapp/logs")'
+    note: "Dir.mkdir creates parent dirs automatically (-Force)"
+
+# ============================================================================
+# SHELL INTEGRATION
+# ============================================================================
+shell_integration:
+  description: |
+    Rush is a shell first, scripting language second. Shell commands
+    are always available and take precedence unless the line matches
+    a Rush construct (if/def/for/class/begin/etc.).
+
+  line_triage:
+    description: |
+      ScriptEngine decides if a line is Rush syntax or a shell command:
+      1. Starts with Rush keyword (if, def, for, while, class, enum, begin) → Rush
+      2. Contains `=` after first token → Rush assignment
+      3. Method call with known Rush method name (foo.each, foo.select) → Rush
+      4. Method call on variable: identifier.method() pattern → Rush
+      5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
+      6. PascalCase receiver: ClassName.method() or EnumName.prop → Rush
+      7. Everything else → shell command (goes through CommandTranslator)
+    note: "ALL_CAPS names (ARGV, PATH) are not treated as class receivers"
+
+  command_substitution:
+    syntax: "name = $(whoami)"
+    transpiles_to: "$name = (whoami)"
+    note: "Capture shell command output into variable"
+
+  exit_codes:
+    syntax: |
+      ls /nonexistent
+      if $?.failed?
+        puts "command failed with code #{$?.code}"
+      end
+    note: "$? gives access to the last command's exit status. Predicate methods: .ok?, .failed?"
 
 # ============================================================================
 # VARIABLES & ASSIGNMENT
@@ -110,127 +230,6 @@ strings:
       "@
 
 # ============================================================================
-# REGULAR EXPRESSIONS
-# ============================================================================
-regex:
-  description: |
-    Clean, unambiguous regex support. /pattern/ literals, =~ for match,
-    string methods for substitution. No obscure operators to memorize.
-
-  literals:
-    syntax: "/pattern/flags"
-    flags: ["i (case-insensitive)", "m (multiline)", "x (extended/verbose)"]
-    transpiles_to: "[regex]'pattern'"
-    examples:
-      - { rush: '/^test/', powershell: "[regex]'^test'" }
-      - { rush: '/error|warn/i', powershell: "[regex]'(?i)error|warn'" }
-
-  match:
-    operators:
-      - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
-      - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
-    examples:
-      - { rush: 'name =~ /^test/', powershell: '$name -match "^test"' }
-      - { rush: 'name !~ /admin/', powershell: '$name -notmatch "admin"' }
-
-  string_methods:
-    description: "Substitution via methods — no sed s/// syntax"
-    methods:
-      - name: ".sub(pattern, replacement)"
-        description: "Replace first match"
-        example: { rush: 'line.sub(/^#\s*/, "")', powershell: '$line -replace "^#\s*", "" | Select-Object -First 1' }
-      - name: ".gsub(pattern, replacement)"
-        description: "Replace all matches"
-        example: { rush: 'text.gsub(/\t/, "  ")', powershell: '$text -replace "\t", "  "' }
-      - name: ".scan(pattern)"
-        description: "Return all matches as array"
-        example: { rush: 'path.scan(/[^\/]+/)', powershell: '[regex]::Matches($path, "[^/]+").Value' }
-      - name: ".match(pattern)"
-        description: "Return match object with captures"
-        example: { rush: 'line.match(/^(\w+)=(.*)$/)', note: "Access groups: m[1], m[2]" }
-
-  design_principles:
-    - "/pattern/ for literals — universally understood"
-    - "=~ for match, !~ for not match — Ruby/Perl convention, unambiguous"
-    - ".sub / .gsub / .scan for substitution — method syntax, not s/// syntax"
-    - "No obscure operators to memorize"
-
-# ============================================================================
-# STRING METHODS (color + formatting)
-# ============================================================================
-string_methods:
-  color:
-    description: |
-      Colored output via string methods. Colors are SO common in shell scripts
-      they should be ergonomic. Transpiles to Write-Host with -ForegroundColor.
-    methods: ["red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"]
-    syntax: '"text".color_name'
-    examples:
-      - { rush: 'puts "OK".green', transpiles_to: 'Write-Host "OK" -ForegroundColor Green' }
-      - { rush: 'puts "FAIL".red', transpiles_to: 'Write-Host "FAIL" -ForegroundColor Red' }
-      - { rush: 'puts "#{count} errors".red', note: "Interpolation + color" }
-    note: "Also works in chaining: price.round(2).to_currency.green"
-
-  formatting:
-    methods:
-      - { name: ".upcase", description: "Uppercase" }
-      - { name: ".downcase", description: "Lowercase" }
-      - { name: ".strip", description: "Remove leading/trailing whitespace" }
-      - { name: ".lstrip / .rstrip", description: "Remove leading/trailing only" }
-      - { name: ".trim_end(chars)", description: "Remove trailing specific chars (e.g. trim_end('%'))" }
-      - { name: ".ljust(n) / .rjust(n)", description: "Pad to n characters" }
-      - { name: ".split(sep)", description: "Split into array by separator (string or regex)" }
-      - { name: ".split_whitespace", description: "Split by any whitespace (like awk default)" }
-      - { name: ".lines", description: "Split by newline into array" }
-      - { name: ".skip(n)", description: "Skip first n elements (works on arrays and line collections)" }
-      - { name: ".to_i / .to_f", description: "Convert to integer/float" }
-      - { name: ".to_s", description: "Convert to string" }
-
-# ============================================================================
-# NUMERIC METHODS
-# ============================================================================
-numeric_methods:
-  description: |
-    Method chaining on numbers for formatting. Extends the "text".green
-    philosophy: ergonomic methods on everything, daisy-chainable.
-
-  methods:
-    - name: ".round(n)"
-      description: "Round to n decimal places"
-      examples:
-        - { rush: "3.1415.round(2)", result: "3.14" }
-        - { rush: "elapsed.round(1)", result: "e.g. 3.2" }
-    - name: ".to_i / .to_f"
-      description: "Convert between integer and float"
-    - name: ".abs"
-      description: "Absolute value"
-    - name: ".to_currency(pad: 0)"
-      description: "Format as currency string"
-      examples:
-        - { rush: "14.25.to_currency", result: '"$14.25"' }
-        - { rush: "4.25.to_currency(pad: 10)", result: '"     $4.25"', note: "Right-aligned in field" }
-      note: "Returns a string — chainable with .green etc."
-    - name: ".to_filesize"
-      description: "Human-readable file size"
-      examples:
-        - { rush: "1048576.to_filesize", result: '"1.0 MB"' }
-        - { rush: "(bytes / 1kb).to_filesize", result: '"e.g. 4.2 GB"' }
-    - name: ".to_percent(decimals: 1)"
-      description: "Format as percentage"
-      examples:
-        - { rush: "0.8734.to_percent", result: '"87.3%"' }
-    - name: ".times { |i| }"
-      description: "Iterate N times (0-indexed)"
-      transpiles_to: "0..(N-1) | ForEach-Object { }"
-
-  chaining:
-    description: "Numeric and string methods chain freely"
-    examples:
-      - { rush: 'price.round(2).to_currency.green', note: '"$14.25" printed in green' }
-      - { rush: 'elapsed.round(1).to_s + " seconds"', note: '"3.2 seconds"' }
-      - { rush: '(bytes / 1mb).round(1).to_s.rjust(8) + " MB"', note: '"    14.2 MB"' }
-
-# ============================================================================
 # CONTROL FLOW
 # ============================================================================
 control_flow:
@@ -301,7 +300,7 @@ control_flow:
       - { rush: "&&",  powershell: "-and" }
       - { rush: "||",  powershell: "-or" }
       - { rush: "!",   powershell: "-not" }
-    note: "Regex operators =~ and !~ documented in the regex section above"
+    note: "Regex operators =~ and !~ documented in the regex section below"
 
   safe_navigation:
     syntax: "obj&.method"
@@ -546,34 +545,148 @@ pipelines:
       note: "Mixed — shell commands translated by CommandTranslator"
 
 # ============================================================================
-# ERROR HANDLING
+# REGULAR EXPRESSIONS
 # ============================================================================
-error_handling:
+regex:
   description: |
-    Ruby-style begin/rescue/ensure/end for exception handling.
+    Clean, unambiguous regex support. /pattern/ literals, =~ for match,
+    string methods for substitution. No obscure operators to memorize.
 
-  syntax: |
-    begin
-      risky_operation()
-    rescue IOError => e
-      puts "IO failed: #{e.message}"
-    rescue => e
-      puts "something failed: #{e.message}"
-    ensure
-      cleanup()
-    end
-  transpiles_to: |
-    try {
-      risky_operation
-    } catch [System.IO.IOException] {
-      $e = $_
-      Write-Output "IO failed: $($e.Message)"
-    } catch {
-      $e = $_
-      Write-Output "something failed: $($e.Message)"
-    } finally {
-      cleanup
-    }
+  literals:
+    syntax: "/pattern/flags"
+    flags: ["i (case-insensitive)", "m (multiline)", "x (extended/verbose)"]
+    transpiles_to: "[regex]'pattern'"
+    examples:
+      - { rush: '/^test/', powershell: "[regex]'^test'" }
+      - { rush: '/error|warn/i', powershell: "[regex]'(?i)error|warn'" }
+
+  match:
+    operators:
+      - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
+      - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
+    examples:
+      - { rush: 'name =~ /^test/', powershell: '$name -match "^test"' }
+      - { rush: 'name !~ /admin/', powershell: '$name -notmatch "admin"' }
+
+  string_methods:
+    description: "Substitution via methods — no sed s/// syntax"
+    methods:
+      - name: ".sub(pattern, replacement)"
+        description: "Replace first match"
+        example: { rush: 'line.sub(/^#\s*/, "")', powershell: '$line -replace "^#\s*", "" | Select-Object -First 1' }
+      - name: ".gsub(pattern, replacement)"
+        description: "Replace all matches"
+        example: { rush: 'text.gsub(/\t/, "  ")', powershell: '$text -replace "\t", "  "' }
+      - name: ".scan(pattern)"
+        description: "Return all matches as array"
+        example: { rush: 'path.scan(/[^\/]+/)', powershell: '[regex]::Matches($path, "[^/]+").Value' }
+      - name: ".match(pattern)"
+        description: "Return match object with captures"
+        example: { rush: 'line.match(/^(\w+)=(.*)$/)', note: "Access groups: m[1], m[2]" }
+
+  design_principles:
+    - "/pattern/ for literals — universally understood"
+    - "=~ for match, !~ for not match — Ruby/Perl convention, unambiguous"
+    - ".sub / .gsub / .scan for substitution — method syntax, not s/// syntax"
+    - "No obscure operators to memorize"
+
+# ============================================================================
+# STRING METHODS (color + formatting)
+# ============================================================================
+string_methods:
+  color:
+    description: |
+      Colored output via string methods. Colors are SO common in shell scripts
+      they should be ergonomic. Transpiles to Write-Host with -ForegroundColor.
+    methods: ["red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"]
+    syntax: '"text".color_name'
+    examples:
+      - { rush: 'puts "OK".green', transpiles_to: 'Write-Host "OK" -ForegroundColor Green' }
+      - { rush: 'puts "FAIL".red', transpiles_to: 'Write-Host "FAIL" -ForegroundColor Red' }
+      - { rush: 'puts "#{count} errors".red', note: "Interpolation + color" }
+    note: "Also works in chaining: price.round(2).to_currency.green"
+
+  formatting:
+    methods:
+      - { name: ".upcase", description: "Uppercase" }
+      - { name: ".downcase", description: "Lowercase" }
+      - { name: ".strip", description: "Remove leading/trailing whitespace" }
+      - { name: ".lstrip / .rstrip", description: "Remove leading/trailing only" }
+      - { name: ".trim_end(chars)", description: "Remove trailing specific chars (e.g. trim_end('%'))" }
+      - { name: ".ljust(n) / .rjust(n)", description: "Pad to n characters" }
+      - { name: ".split(sep)", description: "Split into array by separator (string or regex)" }
+      - { name: ".split_whitespace", description: "Split by any whitespace (like awk default)" }
+      - { name: ".lines", description: "Split by newline into array" }
+      - { name: ".skip(n)", description: "Skip first n elements (works on arrays and line collections)" }
+      - { name: ".to_i / .to_f", description: "Convert to integer/float" }
+      - { name: ".to_s", description: "Convert to string" }
+
+# ============================================================================
+# NUMERIC METHODS
+# ============================================================================
+numeric_methods:
+  description: |
+    Method chaining on numbers for formatting. Extends the "text".green
+    philosophy: ergonomic methods on everything, daisy-chainable.
+
+  methods:
+    - name: ".round(n)"
+      description: "Round to n decimal places"
+      examples:
+        - { rush: "3.1415.round(2)", result: "3.14" }
+        - { rush: "elapsed.round(1)", result: "e.g. 3.2" }
+    - name: ".to_i / .to_f"
+      description: "Convert between integer and float"
+    - name: ".abs"
+      description: "Absolute value"
+    - name: ".to_currency(pad: 0)"
+      description: "Format as currency string"
+      examples:
+        - { rush: "14.25.to_currency", result: '"$14.25"' }
+        - { rush: "4.25.to_currency(pad: 10)", result: '"     $4.25"', note: "Right-aligned in field" }
+      note: "Returns a string — chainable with .green etc."
+    - name: ".to_filesize"
+      description: "Human-readable file size"
+      examples:
+        - { rush: "1048576.to_filesize", result: '"1.0 MB"' }
+        - { rush: "(bytes / 1kb).to_filesize", result: '"e.g. 4.2 GB"' }
+    - name: ".to_percent(decimals: 1)"
+      description: "Format as percentage"
+      examples:
+        - { rush: "0.8734.to_percent", result: '"87.3%"' }
+    - name: ".times { |i| }"
+      description: "Iterate N times (0-indexed)"
+      transpiles_to: "0..(N-1) | ForEach-Object { }"
+
+  chaining:
+    description: "Numeric and string methods chain freely"
+    examples:
+      - { rush: 'price.round(2).to_currency.green', note: '"$14.25" printed in green' }
+      - { rush: 'elapsed.round(1).to_s + " seconds"', note: '"3.2 seconds"' }
+      - { rush: '(bytes / 1mb).round(1).to_s.rjust(8) + " MB"', note: '"    14.2 MB"' }
+
+# ============================================================================
+# HASH LITERALS
+# ============================================================================
+hash_literals:
+  description: |
+    Hash (dictionary) literals use Ruby-style { key: value } syntax.
+    Transpile to PowerShell hashtables @{ Key = Value }.
+  syntax: "{ key1: value1, key2: value2 }"
+  transpiles_to: "@{ key1 = value1; key2 = value2 }"
+  examples:
+    - rush: '{ name: "DNS", port: 53 }'
+      powershell: '@{ name = "DNS"; port = 53 }'
+    - rush: |
+        ports = [
+          { port: 53,  name: "DNS" },
+          { port: 88,  name: "Kerberos" },
+        ]
+      note: "Array of hashes — very common pattern"
+  iteration:
+    syntax: 'hash.each { |k, v| puts "#{k}=#{v}" }'
+    transpiles_to: '$hash.GetEnumerator() | ForEach-Object { ... }'
+    note: "Block receives key and value parameters"
 
 # ============================================================================
 # CLASSES
@@ -894,38 +1007,95 @@ enums:
     - "Enum must be defined before use in the same script"
 
 # ============================================================================
-# SHELL INTEGRATION
+# ERROR HANDLING
 # ============================================================================
-shell_integration:
+error_handling:
   description: |
-    Rush is a shell first, scripting language second. Shell commands
-    are always available and take precedence unless the line matches
-    a Rush construct (if/def/for/class/begin/etc.).
+    Ruby-style begin/rescue/ensure/end for exception handling.
 
-  line_triage:
+  syntax: |
+    begin
+      risky_operation()
+    rescue IOError => e
+      puts "IO failed: #{e.message}"
+    rescue => e
+      puts "something failed: #{e.message}"
+    ensure
+      cleanup()
+    end
+  transpiles_to: |
+    try {
+      risky_operation
+    } catch [System.IO.IOException] {
+      $e = $_
+      Write-Output "IO failed: $($e.Message)"
+    } catch {
+      $e = $_
+      Write-Output "something failed: $($e.Message)"
+    } finally {
+      cleanup
+    }
+
+# ============================================================================
+# STANDARD LIBRARY OBJECTS
+# ============================================================================
+stdlib:
+  File:
+    description: "File operations — clean OO interface over .NET System.IO"
+    status: "implemented"
+    methods:
+      - { name: "File.read(path)", description: "Read entire file as string", transpiles_to: "Get-Content path -Raw" }
+      - { name: "File.read_lines(path)", description: "Read file as array of lines", transpiles_to: "@(Get-Content path)" }
+      - { name: "File.read_json(path)", description: "Read and parse JSON file → object/hash", transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)" }
+      - { name: "File.read_csv(path)", description: "Read and parse CSV file → array of objects", transpiles_to: "@(Import-Csv path)" }
+      - { name: "File.write(path, content)", description: "Write string to file (overwrites)", transpiles_to: "Set-Content -Path path -Value content" }
+      - { name: "File.append(path, content)", description: "Append string to file", transpiles_to: "Add-Content -Path path -Value content" }
+      - { name: "File.exist?(path)", description: "Check if file exists", transpiles_to: "(Test-Path path)" }
+      - { name: "File.delete(path)", description: "Delete a file", transpiles_to: "Remove-Item path" }
+      - { name: "File.size(path)", description: "File size in bytes", transpiles_to: "(Get-Item path).Length" }
+    examples:
+      - rush: 'content = File.read("config.txt")'
+        note: "Read file to string"
+      - rush: 'data = File.read_json("config.json"); puts data.name'
+        note: "Parse JSON and access properties directly"
+      - rush: 'rows = File.read_csv("data.csv"); puts rows.count'
+        note: "Parse CSV — each row is an object with column-name properties"
+      - rush: 'File.write("output.txt", result)'
+        note: "Standalone write — no assignment needed"
+
+  Dir:
+    description: "Directory operations"
+    status: "implemented"
+    methods:
+      - name: "Dir.files(path, recursive: false)"
+        description: "List files in directory. Replaces `find . -type f`"
+        examples:
+          - { rush: 'Dir.files(".")', note: "Files in current dir" }
+          - { rush: 'Dir.files("src", recursive: true)', note: "All files recursively" }
+        note: "`files` is instantly clear. Shell `find` still works for complex cases"
+      - { name: "Dir.dirs(path)", description: "List subdirectories" }
+      - { name: "Dir.exist?(path)", description: "Check if directory exists" }
+      - { name: "Dir.mkdir(path)", description: "Create directory (and parents)" }
+
+  predicate_methods:
     description: |
-      ScriptEngine decides if a line is Rush syntax or a shell command:
-      1. Starts with Rush keyword (if, def, for, while, class, enum, begin) → Rush
-      2. Contains `=` after first token → Rush assignment
-      3. Method call with known Rush method name (foo.each, foo.select) → Rush
-      4. Method call on variable: identifier.method() pattern → Rush
-      5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
-      6. PascalCase receiver: ClassName.method() or EnumName.prop → Rush
-      7. Everything else → shell command (goes through CommandTranslator)
-    note: "ALL_CAPS names (ARGV, PATH) are not treated as class receivers"
-
-  command_substitution:
-    syntax: "name = $(whoami)"
-    transpiles_to: "$name = (whoami)"
-    note: "Capture shell command output into variable"
-
-  exit_codes:
-    syntax: |
-      ls /nonexistent
-      if $?.failed?
-        puts "command failed with code #{$?.code}"
-      end
-    note: "$? gives access to the last command's exit status. Predicate methods: .ok?, .failed?"
+      Methods ending in `?` return boolean. This is one of Ruby's best ideas —
+      self-documenting, clearly boolean, reads like English.
+    examples:
+      - { method: ".empty?", description: "True if string/array is empty" }
+      - { method: ".include?(x)", description: "True if collection contains x" }
+      - { method: ".start_with?(s)", description: "True if string starts with s" }
+      - { method: ".end_with?(s)", description: "True if string ends with s" }
+      - { method: ".nil?", description: "True if value is nil/null" }
+      - { method: ".exist?", description: "True if file/dir exists (File/Dir)" }
+      - { method: ".ok?", description: "True if exit status was 0 ($?)" }
+      - { method: ".failed?", description: "True if exit status was non-zero ($?)" }
+    transpilation: |
+      `.empty?` → `.Length -eq 0` or `-eq ''`
+      `.include?(x)` → `-contains x` or `.Contains(x)`
+      `.start_with?(s)` → `.StartsWith(s)`
+      `.ok?` → `$LASTEXITCODE -eq 0`
+    note: "Transpiler strips the `?` and maps to .NET/PS equivalents"
 
 # ============================================================================
 # BUILT-IN VARIABLES
@@ -992,90 +1162,6 @@ builtin_functions:
       - "When piping to ai, both stdout and stderr from the prefix command are sent as context"
 
 # ============================================================================
-# STANDARD LIBRARY OBJECTS
-# ============================================================================
-stdlib:
-  File:
-    description: "File operations — clean OO interface over .NET System.IO"
-    status: "implemented"
-    methods:
-      - { name: "File.read(path)", description: "Read entire file as string", transpiles_to: "Get-Content path -Raw" }
-      - { name: "File.read_lines(path)", description: "Read file as array of lines", transpiles_to: "@(Get-Content path)" }
-      - { name: "File.read_json(path)", description: "Read and parse JSON file → object/hash", transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)" }
-      - { name: "File.read_csv(path)", description: "Read and parse CSV file → array of objects", transpiles_to: "@(Import-Csv path)" }
-      - { name: "File.write(path, content)", description: "Write string to file (overwrites)", transpiles_to: "Set-Content -Path path -Value content" }
-      - { name: "File.append(path, content)", description: "Append string to file", transpiles_to: "Add-Content -Path path -Value content" }
-      - { name: "File.exist?(path)", description: "Check if file exists", transpiles_to: "(Test-Path path)" }
-      - { name: "File.delete(path)", description: "Delete a file", transpiles_to: "Remove-Item path" }
-      - { name: "File.size(path)", description: "File size in bytes", transpiles_to: "(Get-Item path).Length" }
-    examples:
-      - rush: 'content = File.read("config.txt")'
-        note: "Read file to string"
-      - rush: 'data = File.read_json("config.json"); puts data.name'
-        note: "Parse JSON and access properties directly"
-      - rush: 'rows = File.read_csv("data.csv"); puts rows.count'
-        note: "Parse CSV — each row is an object with column-name properties"
-      - rush: 'File.write("output.txt", result)'
-        note: "Standalone write — no assignment needed"
-
-  Dir:
-    description: "Directory operations"
-    status: "implemented"
-    methods:
-      - name: "Dir.files(path, recursive: false)"
-        description: "List files in directory. Replaces `find . -type f`"
-        examples:
-          - { rush: 'Dir.files(".")', note: "Files in current dir" }
-          - { rush: 'Dir.files("src", recursive: true)', note: "All files recursively" }
-        note: "`files` is instantly clear. Shell `find` still works for complex cases"
-      - { name: "Dir.dirs(path)", description: "List subdirectories" }
-      - { name: "Dir.exist?(path)", description: "Check if directory exists" }
-      - { name: "Dir.mkdir(path)", description: "Create directory (and parents)" }
-
-  predicate_methods:
-    description: |
-      Methods ending in `?` return boolean. This is one of Ruby's best ideas —
-      self-documenting, clearly boolean, reads like English.
-    examples:
-      - { method: ".empty?", description: "True if string/array is empty" }
-      - { method: ".include?(x)", description: "True if collection contains x" }
-      - { method: ".start_with?(s)", description: "True if string starts with s" }
-      - { method: ".end_with?(s)", description: "True if string ends with s" }
-      - { method: ".nil?", description: "True if value is nil/null" }
-      - { method: ".exist?", description: "True if file/dir exists (File/Dir)" }
-      - { method: ".ok?", description: "True if exit status was 0 ($?)" }
-      - { method: ".failed?", description: "True if exit status was non-zero ($?)" }
-    transpilation: |
-      `.empty?` → `.Length -eq 0` or `-eq ''`
-      `.include?(x)` → `-contains x` or `.Contains(x)`
-      `.start_with?(s)` → `.StartsWith(s)`
-      `.ok?` → `$LASTEXITCODE -eq 0`
-    note: "Transpiler strips the `?` and maps to .NET/PS equivalents"
-
-# ============================================================================
-# SIZE LITERALS
-# ============================================================================
-hash_literals:
-  description: |
-    Hash (dictionary) literals use Ruby-style { key: value } syntax.
-    Transpile to PowerShell hashtables @{ Key = Value }.
-  syntax: "{ key1: value1, key2: value2 }"
-  transpiles_to: "@{ key1 = value1; key2 = value2 }"
-  examples:
-    - rush: '{ name: "DNS", port: 53 }'
-      powershell: '@{ name = "DNS"; port = 53 }'
-    - rush: |
-        ports = [
-          { port: 53,  name: "DNS" },
-          { port: 88,  name: "Kerberos" },
-        ]
-      note: "Array of hashes — very common pattern"
-  iteration:
-    syntax: 'hash.each { |k, v| puts "#{k}=#{v}" }'
-    transpiles_to: '$hash.GetEnumerator() | ForEach-Object { ... }'
-    note: "Block receives key and value parameters"
-
-# ============================================================================
 # SIZE LITERALS
 # ============================================================================
 size_literals:
@@ -1087,7 +1173,7 @@ size_literals:
   note: "These are PowerShell-native and pass through unchanged"
 
 # ============================================================================
-# TIME / DURATION (future)
+# TIME / DURATION
 # ============================================================================
 time_duration:
   status: "implemented"
@@ -1194,97 +1280,3 @@ examples:
         warn "health check failed: #{e.message}"
         exit 1
       end
-
-# ============================================================================
-# COMMON MISTAKES (for LLM code generation accuracy)
-# ============================================================================
-# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Ruby, NOT Bash.
-# It borrows ideas from all three but has its own syntax rules.
-
-common_mistakes:
-  - wrong: '$name = "Mark"'
-    right: 'name = "Mark"'
-    reason: "No $ prefix for variables in Rush. Just bare identifiers."
-
-  - wrong: 'foreach ($x in $list) { ... }'
-    right: 'for x in list ... end'
-    reason: "Rush uses Ruby-style for/in/end, not PowerShell foreach"
-
-  - wrong: 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }'
-    right: 'Dir.files(".").select { |f| f.Length > 1mb }'
-    reason: "Use Rush stdlib and methods, not raw PowerShell cmdlets"
-
-  - wrong: '[System.IO.File]::ReadAllText("path")'
-    right: 'File.read("path")'
-    reason: "Use Rush stdlib, not raw .NET static calls"
-
-  - wrong: 'puts("hello")'
-    right: 'puts "hello"'
-    reason: "puts/warn/print are keywords used without parens (Ruby-style)"
-
-  - wrong: 'if (x > 5) { puts x }'
-    right: 'if x > 5; puts x; end'
-    reason: "Rush uses if/end blocks, not braces for control flow. Parens optional."
-
-  - wrong: 'data = JSON.parse(File.read("data.json"))'
-    right: 'data = File.read_json("data.json")'
-    reason: "Use File.read_json for one-step JSON loading"
-
-  - wrong: 'require "json"'
-    right: "# No require/import needed — stdlib is always available"
-    reason: "Rush stdlib (File, Dir, Time) is built-in, no imports"
-
-  - wrong: '@name = value'
-    right: 'self.name = value'
-    reason: "Rush uses self.prop, not @prop (Ruby instance variables)"
-
-  - wrong: 'Dog.new(name: "Rex")'
-    right: 'Dog.new("Rex")'
-    reason: "Named args at .new() call site not yet supported — use positional args"
-
-  - wrong: 'static def add(a, b)'
-    right: 'def self.add(a, b)'
-    reason: "Static methods use Ruby-style def self.name(), not a static keyword"
-
-  - wrong: 'enum Color { red, green, blue }'
-    right: "enum Color\\n  red\\n  green\\n  blue\\nend"
-    reason: "Enums use block syntax with end, one member per line — not braces or commas"
-
-# ============================================================================
-# UNIX → RUSH TRANSLATION GUIDE (for LLMs)
-# ============================================================================
-# Common Unix shell idioms and their Rush equivalents.
-# Use these patterns when translating user intent into Rush code.
-
-unix_translations:
-  - unix: 'cat config.json | jq ".name"'
-    rush: 'data = File.read_json("config.json"); puts data.name'
-    note: "JSON parsing is built into File stdlib"
-
-  - unix: 'find . -name "*.log" -delete'
-    rush: 'Dir.files(".", recursive: true).select { |f| f.Name =~ /\.log$/ }.each { |f| File.delete(f.FullName) }'
-    note: "Method chaining replaces find + xargs"
-
-  - unix: 'wc -l file.txt'
-    rush: 'puts File.read_lines("file.txt").count'
-    note: "read_lines returns array, .count gives line count"
-
-  - unix: 'cat data.csv | head -5'
-    rush: 'File.read_lines("data.csv").first(5).each { |l| puts l }'
-    note: "Method chaining replaces head"
-
-  - unix: 'du -sh * | sort -rh | head -5'
-    rush: 'Dir.files(".").sort_by { |f| f.Length }.reverse.first(5).each { |f| puts "#{f.Name} #{f.Length.to_filesize}" }'
-    note: "Object pipeline — no string parsing needed"
-
-  - unix: 'grep -r "TODO" src/'
-    rush: 'grep -r "TODO" src/'
-    note: "Shell commands just work — no translation needed"
-
-  - unix: 'test -f config.json && echo "exists"'
-    rush: 'puts "exists" if File.exist?("config.json")'
-    note: "Postfix if + predicate method = readable"
-
-  - unix: 'mkdir -p /tmp/myapp/logs'
-    rush: 'Dir.mkdir("/tmp/myapp/logs")'
-    note: "Dir.mkdir creates parent dirs automatically (-Force)"
