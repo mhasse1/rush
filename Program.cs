@@ -249,11 +249,14 @@ while (true)
     // If so, accumulate multi-line blocks, parse, transpile to PS, and execute.
     if (scriptEngine.IsRushSyntax(input))
     {
-        // Accumulate multi-line blocks (if/end, def/end, etc.)
+        // Accumulate multi-line blocks (if/end, def/end, etc.) with auto-indent
         while (scriptEngine.IsIncomplete(input))
         {
+            var depth = scriptEngine.GetBlockDepth(input);
+            if (depth < 0) depth = 1; // Lexer failed — assume 1 level
+            var indent = new string(' ', depth * 2);
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.Write(Prompt.Continuation);
+            Console.Write(indent);
             Console.ResetColor();
             var continuation = lineEditor.ReadLine();
             if (continuation == null) break;

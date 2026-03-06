@@ -429,10 +429,13 @@ public class ScriptEngine
     /// Check if the input is an incomplete Rush construct that needs more lines.
     /// Counts block-start keywords vs 'end' keywords.
     /// </summary>
-    public bool IsIncomplete(string input)
+    /// <summary>
+    /// Get the current block nesting depth of the input.
+    /// Returns -1 if lexing fails (treat as incomplete).
+    /// </summary>
+    public int GetBlockDepth(string input)
     {
         int depth = 0;
-        // Simple keyword counting — handles nesting
         try
         {
             var lexer = new Lexer(input);
@@ -465,12 +468,13 @@ public class ScriptEngine
         }
         catch
         {
-            // If lexing fails, assume incomplete (let user keep typing)
-            return true;
+            return -1;
         }
 
-        return depth > 0;
+        return depth;
     }
+
+    public bool IsIncomplete(string input) => GetBlockDepth(input) > 0;
 
     /// <summary>
     /// Parse and transpile a single REPL input (may be multi-line) to PowerShell code.

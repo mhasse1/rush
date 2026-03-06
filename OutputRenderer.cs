@@ -33,58 +33,68 @@ public static class OutputRenderer
     {
         if (results.Count == 0) return;
 
-        // Single result or collection of simple values: print simply
-        if (results.Count == 1)
+        // Filter out null entries — PowerShell pipelines can produce these
+        var filtered = results.Where(r => r?.BaseObject != null).ToList();
+        if (filtered.Count == 0)
         {
-            var single = results[0];
+            // All nulls — print non-null PSObjects as strings
+            foreach (var r in results)
+                if (r != null) Console.WriteLine(r.ToString());
+            return;
+        }
+
+        // Single result or collection of simple values: print simply
+        if (filtered.Count == 1)
+        {
+            var single = filtered[0];
             if (IsSimpleValue(single) || IsPathInfo(single))
             {
                 Console.WriteLine(single.ToString());
                 return;
             }
         }
-        else if (results.All(r => IsSimpleValue(r)))
+        else if (filtered.All(r => IsSimpleValue(r)))
         {
             // Collection of strings/ints/etc — just print each value
-            foreach (var r in results)
+            foreach (var r in filtered)
                 Console.WriteLine(r.ToString());
             return;
         }
 
         // Check if these are file system items — render ls-style
-        var baseTypeName = GetBaseTypeName(results[0]);
+        var baseTypeName = GetBaseTypeName(filtered[0]);
 
         if (baseTypeName is "System.IO.DirectoryInfo" or "System.IO.FileInfo"
-            || IsMixedFileSystemItems(results))
+            || IsMixedFileSystemItems(filtered))
         {
-            RenderFileSystemItems(results);
+            RenderFileSystemItems(filtered);
             return;
         }
 
         // Process objects — custom rendering with human-readable memory
         if (baseTypeName == "System.Diagnostics.Process")
         {
-            RenderProcesses(results);
+            RenderProcesses(filtered);
             return;
         }
 
         // Check for type-specific display properties
         if (baseTypeName != null && TypeDisplayProperties.TryGetValue(baseTypeName, out var typeProps) && typeProps.Length > 0)
         {
-            RenderTable(results, typeProps);
+            RenderTable(filtered, typeProps);
             return;
         }
 
         // Generic: pick reasonable properties
-        var properties = GetDisplayProperties(results[0]);
+        var properties = GetDisplayProperties(filtered[0]);
         if (properties.Length == 0)
         {
-            foreach (var result in results)
+            foreach (var result in filtered)
                 Console.WriteLine(result.ToString());
             return;
         }
 
-        RenderTable(results, properties);
+        RenderTable(filtered, properties);
     }
 
     private static void RenderFileSystemItems(IReadOnlyList<PSObject> results)
