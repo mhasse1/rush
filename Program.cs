@@ -270,7 +270,7 @@ while (true)
             Console.ResetColor();
 
             // TODO: Status line will show contextual hints (esc v → $EDITOR, etc.)
-            // See design notes in plans/status-line-design.md
+            // See docs/status-line-design.md
 
             var continuation = lineEditor.ReadLine();
 
