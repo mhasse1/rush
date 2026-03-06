@@ -269,26 +269,10 @@ while (true)
             Console.Write(indent);
             Console.ResetColor();
 
-            // Floating hint below cursor (from line 3 onwards)
-            bool showingHint = continuationCount >= 3 && config.ShowHints;
-            if (showingHint)
-            {
-                int savedCol = Console.CursorLeft;
-                int savedRow = Console.CursorTop;
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.Write($"\n\n# ({lineEditor.EditInEditorHint})");
-                Console.ResetColor();
-                try { Console.SetCursorPosition(savedCol, savedRow); } catch { }
-            }
+            // TODO: Status line will show contextual hints (esc v → $EDITOR, etc.)
+            // See design notes in plans/status-line-design.md
 
             var continuation = lineEditor.ReadLine();
-
-            // Clean up hint + blank line below (cursor moved down after Enter)
-            if (showingHint)
-            {
-                Console.Write("\x1b[J");
-                Console.Out.Flush();
-            }
 
             if (continuation == null) break;           // Ctrl+D
             if (continuation == "") { input = ""; break; }  // Ctrl+C — cancel block
