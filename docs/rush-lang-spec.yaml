@@ -126,8 +126,9 @@ regex:
       - { rush: '/error|warn/i', powershell: "[regex]'(?i)error|warn'" }
 
   match:
-    - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
-    - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
+    operators:
+      - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
+      - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
     examples:
       - { rush: 'name =~ /^test/', powershell: '$name -match "^test"' }
       - { rush: 'name !~ /admin/', powershell: '$name -notmatch "admin"' }
