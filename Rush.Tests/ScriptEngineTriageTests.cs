@@ -352,4 +352,40 @@ public class ScriptEngineTriageTests
         Assert.NotNull(result);
         Assert.Contains("$HOME/bin", result);
     }
+
+    [Fact]
+    public void TranspileFile_ExportSave_StripsFlag()
+    {
+        var result = _engine.TranspileFile("export --save FOO=bar");
+        Assert.NotNull(result);
+        Assert.Contains("$env:FOO", result);
+        Assert.Contains("[Environment]::SetEnvironmentVariable", result);
+        Assert.DoesNotContain("--save", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddWithName_UsesTargetVar()
+    {
+        var result = _engine.TranspileFile("path add --name=MANPATH /usr/local/man");
+        Assert.NotNull(result);
+        Assert.Contains("$env:MANPATH", result);
+        Assert.Contains("/usr/local/man", result);
+        Assert.DoesNotContain("$env:PATH", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddWithNameAndFront_PrependsToTargetVar()
+    {
+        var result = _engine.TranspileFile("path add --name=MANPATH --front /usr/local/man");
+        Assert.NotNull(result);
+        Assert.Contains("/usr/local/man:$env:MANPATH", result);
+    }
+
+    [Fact]
+    public void TranspileFile_PathAddWithoutName_StillUsesPATH()
+    {
+        var result = _engine.TranspileFile("path add /opt/bin");
+        Assert.NotNull(result);
+        Assert.Contains("$env:PATH", result);
+    }
 }

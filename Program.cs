@@ -1009,10 +1009,21 @@ while (true)
         }
 
         // ── export: set environment variable ────────────────────────
-        // export FOO=bar  or  export FOO="bar baz"
-        if (segment.StartsWith("export ", StringComparison.OrdinalIgnoreCase) && segment.Contains('='))
+        // export FOO=bar  or  export FOO="bar baz"  or  export --save FOO=bar
+        if (segment.StartsWith("export ", StringComparison.OrdinalIgnoreCase) &&
+            (segment.Contains('=') || segment.Contains("--save", StringComparison.OrdinalIgnoreCase)))
         {
             var exportBody = segment[7..].Trim();
+
+            // Detect and strip --save flag
+            bool save = false;
+            if (exportBody.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
+                exportBody.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+            {
+                save = true;
+                exportBody = exportBody[6..].TrimStart();
+            }
+
             var eqPos = exportBody.IndexOf('=');
             if (eqPos > 0)
             {
@@ -1029,6 +1040,17 @@ while (true)
                 ps.Runspace = runspace;
                 ps.AddScript($"$env:{varName} = '{varValue.Replace("'", "''")}'");
                 ps.Invoke();
+
+                if (save)
+                    SaveExportToInit(varName, varValue);
+            }
+            else if (save)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine("export --save: requires KEY=value");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+                continue;
             }
             lastSegmentFailed = false;
             continue;
@@ -2015,15 +2037,15 @@ static string StripLeadingWhitespace(string code)
 // ── PATH Management ─────────────────────────────────────────────────
 
 /// <summary>
-/// Sync PATH to both .NET Environment and PowerShell runspace.
+/// Sync an environment variable to both .NET Environment and PowerShell runspace.
 /// </summary>
-static void SetPath(string newPath, Runspace runspace)
+static void SetEnvVar(string varName, string newValue, Runspace runspace)
 {
-    Environment.SetEnvironmentVariable("PATH", newPath);
+    Environment.SetEnvironmentVariable(varName, newValue);
     using var ps = PowerShell.Create();
     ps.Runspace = runspace;
-    var escaped = newPath.Replace("'", "''");
-    ps.AddScript($"$env:PATH = '{escaped}'");
+    var escaped = newValue.Replace("'", "''");
+    ps.AddScript($"$env:{varName} = '{escaped}'");
     ps.Invoke();
 }
 
@@ -2118,10 +2140,119 @@ static void SavePathToInit(string pathLine)
 }
 
 /// <summary>
+/// Save an "export KEY=value" line into init.rush's Environment section.
+/// Idempotent: replaces existing export for the same variable.
+/// </summary>
+static void SaveExportToInit(string varName, string varValue)
+{
+    try
+    {
+        var initPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".config", "rush", "init.rush");
+
+        // Construct the line to persist (quote value if it contains spaces)
+        var exportLine = varValue.Contains(' ')
+            ? $"export {varName}=\"{varValue}\""
+            : $"export {varName}={varValue}";
+
+        if (!File.Exists(initPath))
+        {
+            File.WriteAllText(initPath,
+                "# ── Environment ──────────────────────────────────────────\n" +
+                exportLine + "\n");
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+            Console.ResetColor();
+            return;
+        }
+
+        var lines = File.ReadAllLines(initPath).ToList();
+
+        // 1. Check for existing export of same variable → replace in place
+        var existingIdx = lines.FindIndex(l =>
+        {
+            var t = l.TrimStart();
+            return t.StartsWith($"export {varName}=", StringComparison.OrdinalIgnoreCase);
+        });
+
+        if (existingIdx >= 0)
+        {
+            lines[existingIdx] = exportLine;
+            File.WriteAllLines(initPath, lines);
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  updated in: ~/.config/rush/init.rush");
+            Console.ResetColor();
+            return;
+        }
+
+        // 2. Find "# ── Environment" section → insert after section content
+        var envSectionIdx = lines.FindIndex(l => l.TrimStart().StartsWith("# ── Environment"));
+        if (envSectionIdx >= 0)
+        {
+            var insertIdx = envSectionIdx + 1;
+            while (insertIdx < lines.Count)
+            {
+                var trimmed = lines[insertIdx].TrimStart();
+                if (trimmed.StartsWith("export ", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("# export ", StringComparison.OrdinalIgnoreCase) ||
+                    (string.IsNullOrWhiteSpace(trimmed) && insertIdx == envSectionIdx + 1))
+                {
+                    insertIdx++;
+                }
+                else break;
+            }
+            lines.Insert(insertIdx, exportLine);
+        }
+        else
+        {
+            // 3. No Environment section — create one (after PATH section or at end)
+            var pathSectionIdx = lines.FindIndex(l => l.TrimStart().StartsWith("# ── PATH"));
+            int insertAt;
+            if (pathSectionIdx >= 0)
+            {
+                // Find end of PATH section content
+                insertAt = pathSectionIdx + 1;
+                while (insertAt < lines.Count)
+                {
+                    var t = lines[insertAt].TrimStart();
+                    if (t.StartsWith("path add", StringComparison.OrdinalIgnoreCase) ||
+                        t.StartsWith("# path add", StringComparison.OrdinalIgnoreCase) ||
+                        t.StartsWith("# export PATH", StringComparison.OrdinalIgnoreCase) ||
+                        t.StartsWith("export PATH", StringComparison.OrdinalIgnoreCase) ||
+                        string.IsNullOrWhiteSpace(t))
+                        insertAt++;
+                    else break;
+                }
+            }
+            else
+            {
+                insertAt = lines.Count;
+            }
+            lines.Insert(insertAt, exportLine);
+            lines.Insert(insertAt, "# ── Environment ──────────────────────────────────────────");
+            if (insertAt > 0 && !string.IsNullOrWhiteSpace(lines[insertAt - 1]))
+                lines.Insert(insertAt, "");
+        }
+
+        File.WriteAllLines(initPath, lines);
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+        Console.ResetColor();
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  save failed: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
+/// <summary>
 /// Remove a "path add" line from init.rush matching the given directory.
 /// Matches against both expanded and original (tilde) forms.
 /// </summary>
-static void RemovePathFromInit(string expandedDir, string originalDir)
+static void RemovePathFromInit(string expandedDir, string originalDir, string varName = "PATH")
 {
     try
     {
@@ -2138,6 +2269,17 @@ static void RemovePathFromInit(string expandedDir, string originalDir)
             if (!trimmed.StartsWith("path add ", StringComparison.OrdinalIgnoreCase)) return false;
             // Extract the dir from the line (strip flags)
             var lineArgs = trimmed[9..].Trim();
+
+            // Extract --name= from line to match the right variable
+            string lineVarName = "PATH";
+            var lineNameMatch = System.Text.RegularExpressions.Regex.Match(lineArgs, @"--name=(\S+)");
+            if (lineNameMatch.Success)
+            {
+                lineVarName = lineNameMatch.Groups[1].Value;
+                lineArgs = lineArgs.Replace(lineNameMatch.Value, "").Trim();
+            }
+            if (!lineVarName.Equals(varName, StringComparison.OrdinalIgnoreCase)) return false;
+
             if (lineArgs.StartsWith("--front ", StringComparison.OrdinalIgnoreCase))
                 lineArgs = lineArgs[8..].Trim();
             if (lineArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
@@ -2166,19 +2308,30 @@ static void RemovePathFromInit(string expandedDir, string originalDir)
 }
 
 /// <summary>
-/// Built-in PATH management: list, add, remove, edit.
+/// Built-in path variable management: list, add, remove, edit.
+/// Supports --name=VARNAME to target any colon-separated env var (default: PATH).
 /// Returns true if the command failed.
 /// </summary>
 static bool HandlePathCommand(string args, Runspace runspace)
 {
-    var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
-    var entries = currentPath.Split(':').Where(e => !string.IsNullOrEmpty(e)).ToList();
+    // Extract --name=VARNAME flag from anywhere in args
+    string varName = "PATH";
+    var nameMatch = System.Text.RegularExpressions.Regex.Match(args, @"--name=(\S+)");
+    if (nameMatch.Success)
+    {
+        varName = nameMatch.Groups[1].Value;
+        args = args.Replace(nameMatch.Value, "").Trim();
+        args = System.Text.RegularExpressions.Regex.Replace(args, @"\s{2,}", " ").Trim();
+    }
+
+    var currentValue = Environment.GetEnvironmentVariable(varName) ?? "";
+    var entries = currentValue.Split(':').Where(e => !string.IsNullOrEmpty(e)).ToList();
 
     // ── path / path check — list entries with existence indicators ──
     if (string.IsNullOrEmpty(args) || args.Equals("check", StringComparison.OrdinalIgnoreCase))
     {
         Console.ForegroundColor = Theme.Current.Muted;
-        Console.WriteLine("  PATH entries:");
+        Console.WriteLine($"  {varName} entries:");
         Console.ResetColor();
         for (int i = 0; i < entries.Count; i++)
         {
@@ -2241,7 +2394,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
         if (entries.Contains(expandedDir))
         {
             Console.ForegroundColor = Theme.Current.Warning;
-            Console.WriteLine($"  note: {expandedDir} already in PATH");
+            Console.WriteLine($"  note: {expandedDir} already in {varName}");
             Console.ResetColor();
         }
 
@@ -2253,17 +2406,17 @@ static bool HandlePathCommand(string args, Runspace runspace)
             Console.ResetColor();
         }
 
-        // Add to PATH
-        string newPath;
+        // Add to variable
+        string newValue;
         if (front)
         {
-            newPath = expandedDir + ":" + currentPath;
+            newValue = expandedDir + ":" + currentValue;
         }
         else
         {
-            newPath = currentPath + ":" + expandedDir;
+            newValue = currentValue + ":" + expandedDir;
         }
-        SetPath(newPath, runspace);
+        SetEnvVar(varName, newValue, runspace);
 
         Console.ForegroundColor = Theme.Current.Muted;
         Console.Write(front ? "  prepended: " : "  appended:  ");
@@ -2275,9 +2428,10 @@ static bool HandlePathCommand(string args, Runspace runspace)
         {
             // Use the original (unexpanded) dir if it had ~ for portability
             var savedDir = dir.Contains('~') ? dir : expandedDir;
+            var nameFlag = varName != "PATH" ? $"--name={varName} " : "";
             var pathLine = front
-                ? $"path add --front {savedDir}"
-                : $"path add {savedDir}";
+                ? $"path add --front {nameFlag}{savedDir}"
+                : $"path add {nameFlag}{savedDir}";
             SavePathToInit(pathLine);
         }
 
@@ -2307,13 +2461,13 @@ static bool HandlePathCommand(string args, Runspace runspace)
         if (entries.Count == before)
         {
             Console.ForegroundColor = Theme.Current.Warning;
-            Console.Error.WriteLine($"  not found in PATH: {expandedDir}");
+            Console.Error.WriteLine($"  not found in {varName}: {expandedDir}");
             Console.ResetColor();
             return true;
         }
 
-        var newPath = string.Join(":", entries);
-        SetPath(newPath, runspace);
+        var newValue = string.Join(":", entries);
+        SetEnvVar(varName, newValue, runspace);
 
         Console.ForegroundColor = Theme.Current.Muted;
         Console.Write("  removed:   ");
@@ -2321,7 +2475,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
         Console.WriteLine(expandedDir);
 
         if (save)
-            RemovePathFromInit(expandedDir, dir);
+            RemovePathFromInit(expandedDir, dir, varName);
 
         return false;
     }
@@ -2336,7 +2490,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
         {
             tempFile = Path.GetTempFileName();
             File.WriteAllText(tempFile,
-                "# Edit PATH entries (one per line). Blank lines and #comments are ignored.\n" +
+                $"# Edit {varName} entries (one per line). Blank lines and #comments are ignored.\n" +
                 string.Join("\n", entries) + "\n");
 
             // Open editor with inherited stdio
@@ -2354,7 +2508,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
             if (proc.ExitCode != 0)
             {
                 Console.ForegroundColor = Theme.Current.Warning;
-                Console.WriteLine("  path edit: editor exited with error, PATH unchanged");
+                Console.WriteLine($"  path edit: editor exited with error, {varName} unchanged");
                 Console.ResetColor();
                 return false;
             }
@@ -2366,11 +2520,11 @@ static bool HandlePathCommand(string args, Runspace runspace)
                 .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith('#'))
                 .ToList();
 
-            var newPath = string.Join(":", newEntries);
-            SetPath(newPath, runspace);
+            var newValue = string.Join(":", newEntries);
+            SetEnvVar(varName, newValue, runspace);
 
             Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine($"  PATH updated ({newEntries.Count} entries)");
+            Console.WriteLine($"  {varName} updated ({newEntries.Count} entries)");
             Console.ResetColor();
             return false;
         }
@@ -2392,7 +2546,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
     Console.Error.WriteLine($"  path: unknown subcommand '{args.Split(' ')[0]}'");
     Console.ResetColor();
     Console.ForegroundColor = Theme.Current.Muted;
-    Console.Error.WriteLine("  usage: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit | check]");
+    Console.Error.WriteLine("  usage: path [--name=VAR] [add [--front] [--save] <dir> | rm [--save] <dir> | edit | check]");
     Console.ResetColor();
     return true;
 }

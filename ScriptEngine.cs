@@ -619,10 +619,14 @@ public class ScriptEngine
     /// </summary>
     private static string? TranslateBuiltin(string line)
     {
-        // export VAR=value → set both PowerShell and .NET environment
+        // export [--save] VAR=value → set both PowerShell and .NET environment
         if (line.StartsWith("export ", StringComparison.OrdinalIgnoreCase))
         {
             var assignment = line[7..].Trim();
+            // Strip --save flag (runtime-only, irrelevant in scripts)
+            if (assignment.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
+                assignment.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+                assignment = assignment[6..].TrimStart();
             var eqPos = assignment.IndexOf('=');
             if (eqPos > 0)
             {
@@ -647,21 +651,34 @@ public class ScriptEngine
             return $"Remove-Item Env:{varName} -ErrorAction SilentlyContinue; [Environment]::SetEnvironmentVariable('{varName}', $null)";
         }
 
-        // path add [--front] <dir> → manipulate PATH
+        // path add [--front] [--save] [--name=VAR] <dir> → manipulate path variable
         if (line.StartsWith("path add ", StringComparison.OrdinalIgnoreCase))
         {
             var args = line[9..].Trim();
             bool front = false;
-            if (args.StartsWith("--front ", StringComparison.OrdinalIgnoreCase) ||
-                args.StartsWith("--front\t", StringComparison.OrdinalIgnoreCase))
+            string targetVar = "PATH";
+
+            // Parse flags (order-independent)
+            while (args.StartsWith("--"))
             {
-                front = true;
-                args = args[8..].Trim();
+                if (args.StartsWith("--front", StringComparison.OrdinalIgnoreCase))
+                {
+                    front = true;
+                    args = args[7..].TrimStart();
+                }
+                else if (args.StartsWith("--save", StringComparison.OrdinalIgnoreCase))
+                {
+                    args = args[6..].TrimStart();
+                }
+                else if (args.StartsWith("--name=", StringComparison.OrdinalIgnoreCase))
+                {
+                    var spaceIdx = args.IndexOf(' ');
+                    if (spaceIdx < 0) spaceIdx = args.Length;
+                    targetVar = args[7..spaceIdx];
+                    args = spaceIdx < args.Length ? args[spaceIdx..].TrimStart() : "";
+                }
+                else break;
             }
-            // Strip --save flag (irrelevant at runtime)
-            if (args.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
-                args.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
-                args = args[7..].Trim();
 
             // Strip quotes
             if ((args.StartsWith('"') && args.EndsWith('"')) ||
@@ -671,9 +688,9 @@ public class ScriptEngine
             // Expand ~ to home dir in PowerShell
             var psDir = args.Replace("~", "$HOME");
             if (front)
-                return $"$env:PATH = \"{psDir}:$env:PATH\"; [Environment]::SetEnvironmentVariable('PATH', $env:PATH)";
+                return $"$env:{targetVar} = \"{psDir}:$env:{targetVar}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
             else
-                return $"$env:PATH = \"$env:PATH:{psDir}\"; [Environment]::SetEnvironmentVariable('PATH', $env:PATH)";
+                return $"$env:{targetVar} = \"$env:{targetVar}:{psDir}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
         }
 
         // alias name='command' → CommandTranslator handled at runtime, skip in scripts
