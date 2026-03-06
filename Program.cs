@@ -254,7 +254,7 @@ while (true)
         {
             var depth = scriptEngine.GetBlockDepth(input);
             if (depth < 0) depth = 1; // Lexer failed — assume 1 level
-            var indent = new string(' ', depth * 2);
+            var indent = new string(' ', Prompt.InputPrefix.Length + depth * 2);
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(indent);
             Console.ResetColor();
@@ -268,7 +268,7 @@ while (true)
             {
                 var newDepth = scriptEngine.GetBlockDepth(input);
                 if (newDepth < 0) newDepth = 0;
-                var correctIndent = new string(' ', newDepth * 2);
+                var correctIndent = new string(' ', Prompt.InputPrefix.Length + newDepth * 2);
                 // Move cursor up, clear line, rewrite with correct indent
                 Console.Write("\x1b[A\x1b[2K");
                 Console.ForegroundColor = Theme.Current.Muted;
