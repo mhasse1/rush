@@ -1181,9 +1181,13 @@ The `ai` builtin lets you query an LLM directly from the shell. It streams respo
 | `ai "prompt"` | Ask a question |
 | `ai "prompt" < file` | Ask with file context via redirection |
 | `cat file \| ai "prompt"` | Pipe content as context |
+| `failing-cmd \| ai "what happened?"` | Pipe errors — stderr is included automatically |
 | `ai "prompt" > out.txt` | Capture response to file |
 | `ai --provider ollama "prompt"` | Use a specific provider |
 | `ai --model gpt-4o "prompt"` | Use a specific model |
+| `ai --exec` | Execute the last AI response as a command |
+
+**Fence stripping:** Markdown code fences (` ``` `) are automatically stripped from AI output. When the AI wraps commands in fences, only the clean content is displayed. `ai --exec` prefers code block content — so explanatory text is skipped and only the actual commands run.
 
 **Setup:**
 

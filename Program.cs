@@ -850,10 +850,26 @@ while (true)
                     {
                         FileName = currentBinary,
                         ArgumentList = { "--resume" },
-                        UseShellExecute = false
+                        UseShellExecute = false,
+                        RedirectStandardInput = false,
+                        RedirectStandardOutput = false,
+                        RedirectStandardError = false
                     };
-                    Process.Start(psi);
-                    Environment.Exit(0);
+                    var child = Process.Start(psi);
+                    if (child != null)
+                    {
+                        // Child inherits our terminal (stdin/stdout/stderr).
+                        // Parent waits then exits with child's exit code.
+                        child.WaitForExit();
+                        Environment.Exit(child.ExitCode);
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine("reload: failed to start new process");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
                 }
                 catch (Exception ex)
                 {
