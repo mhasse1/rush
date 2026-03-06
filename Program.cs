@@ -1238,6 +1238,44 @@ while (true)
         }
 
         // ── path: PATH management ─────────────────────────────────────
+        // ── ai --exec: run last AI response ──────────────────────
+        if (segment.Equals("ai --exec", StringComparison.OrdinalIgnoreCase) ||
+            segment.TrimEnd().Equals("ai --exec", StringComparison.OrdinalIgnoreCase))
+        {
+            var lastResponse = AiCommand.GetLastResponse();
+            if (string.IsNullOrWhiteSpace(lastResponse))
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine("ai: no previous response to execute");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+                continue;
+            }
+
+            // Extract first non-empty line as the command
+            var command = lastResponse
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(l => l.Trim())
+                .FirstOrDefault(l => l.Length > 0);
+
+            if (string.IsNullOrEmpty(command))
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine("ai: last response contained no executable content");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+                continue;
+            }
+
+            // Show what we're executing
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine($"  \u2192 {command}");
+            Console.ResetColor();
+
+            // Replace segment and fall through to normal dispatch
+            segment = command;
+        }
+
         // ── ai builtin ────────────────────────────────────────────
         if (segment.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("ai ", StringComparison.OrdinalIgnoreCase))
@@ -1375,6 +1413,13 @@ while (true)
                     ps.AddScript(preTrans);
                     var results = ps.Invoke();
                     pipedContent = string.Join("\n", results.Select(r => r?.ToString() ?? ""));
+                    // Include error stream so AI sees stderr too
+                    if (ps.Streams.Error.Count > 0)
+                    {
+                        var errors = string.Join("\n", ps.Streams.Error.Select(e => e.ToString()));
+                        pipedContent = string.IsNullOrEmpty(pipedContent)
+                            ? errors : pipedContent + "\n" + errors;
+                    }
                 }
                 catch (Exception ex)
                 {

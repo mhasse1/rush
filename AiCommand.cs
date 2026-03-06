@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Rush;
 
@@ -19,6 +20,17 @@ public static class AiCommand
         ["gemini"] = new GeminiProvider(),
         ["ollama"] = new OllamaProvider(),
     };
+
+    // ── Last response storage (for ai --exec) ────────────────────────
+    private static string? _lastResponse;
+    private static string? _lastCodeContent;
+
+    /// <summary>
+    /// Get the last AI response for execution.
+    /// Prefers extracted code block content over the full response.
+    /// </summary>
+    internal static string? GetLastResponse()
+        => _lastCodeContent ?? _lastResponse;
 
     /// <summary>
     /// Execute an AI prompt. Streams tokens to stdout as they arrive.
@@ -74,16 +86,23 @@ public static class AiCommand
             var systemPrompt = systemOverride ?? BuildSystemPrompt(history);
             var userMessage = BuildUserMessage(prompt, pipedInput);
 
-            // ── Stream response ──────────────────────────────────────
-            var responseBuilder = new StringBuilder();
+            // ── Stream response (with fence stripping) ────────────────
+            var stripper = new FenceStripper();
             await foreach (var token in provider.StreamAsync(systemPrompt, userMessage, model, apiKey, ct))
             {
-                Console.Write(token);
-                responseBuilder.Append(token);
+                var output = stripper.Process(token);
+                if (output.Length > 0) Console.Write(output);
             }
+            var trailing = stripper.Flush();
+            if (trailing.Length > 0) Console.Write(trailing);
             Console.WriteLine();
 
-            return (true, responseBuilder.ToString());
+            // Store for ai --exec
+            var fullResponse = stripper.DisplayContent;
+            _lastResponse = fullResponse;
+            _lastCodeContent = stripper.CodeContent;
+
+            return (true, fullResponse);
         }
         catch (OperationCanceledException)
         {
@@ -406,5 +425,108 @@ public static class AiCommand
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"ai: {message}");
         Console.ResetColor();
+    }
+
+    // ── Fence Stripping ──────────────────────────────────────────────
+
+    /// <summary>
+    /// Line-buffered streaming filter that strips markdown code fences.
+    /// Accumulates tokens into a line buffer; when a newline arrives,
+    /// evaluates the complete line and suppresses fence markers (```).
+    /// Also tracks content inside fences for command extraction.
+    /// </summary>
+    internal class FenceStripper
+    {
+        private readonly StringBuilder _lineBuffer = new();
+        private readonly StringBuilder _displayContent = new();
+        private readonly StringBuilder _codeContent = new();
+        private bool _insideFence;
+        private bool _hadFences;
+
+        /// <summary>
+        /// Process a streaming token. Returns text to display (may be empty
+        /// if the token is buffered or part of a fence line).
+        /// </summary>
+        public string Process(string token)
+        {
+            var output = new StringBuilder();
+
+            foreach (char c in token)
+            {
+                if (c == '\n')
+                {
+                    var line = _lineBuffer.ToString();
+                    if (IsFenceLine(line))
+                    {
+                        // Toggle fence state, suppress the line
+                        if (_insideFence)
+                        {
+                            // Closing fence
+                            _insideFence = false;
+                        }
+                        else
+                        {
+                            // Opening fence
+                            _insideFence = true;
+                            _hadFences = true;
+                        }
+                    }
+                    else
+                    {
+                        // Regular line — output it
+                        output.Append(line);
+                        output.Append('\n');
+                        _displayContent.Append(line);
+                        _displayContent.Append('\n');
+                        if (_insideFence)
+                        {
+                            _codeContent.Append(line);
+                            _codeContent.Append('\n');
+                        }
+                    }
+                    _lineBuffer.Clear();
+                }
+                else
+                {
+                    _lineBuffer.Append(c);
+                }
+            }
+
+            return output.ToString();
+        }
+
+        /// <summary>
+        /// Flush any remaining buffered content at end of stream.
+        /// </summary>
+        public string Flush()
+        {
+            var line = _lineBuffer.ToString();
+            _lineBuffer.Clear();
+
+            if (IsFenceLine(line))
+                return "";
+
+            if (line.Length > 0)
+            {
+                _displayContent.Append(line);
+                if (_insideFence)
+                    _codeContent.Append(line);
+                return line;
+            }
+
+            return "";
+        }
+
+        /// <summary>Full response with fences stripped.</summary>
+        public string DisplayContent => _displayContent.ToString().TrimEnd();
+
+        /// <summary>
+        /// Only content from inside code fences (for --exec).
+        /// Null if no fences were present in the response.
+        /// </summary>
+        public string? CodeContent => _hadFences ? _codeContent.ToString().TrimEnd() : null;
+
+        private static bool IsFenceLine(string line)
+            => Regex.IsMatch(line.Trim(), @"^```\w*$");
     }
 }

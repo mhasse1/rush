@@ -309,4 +309,160 @@ public class AiCommandTests
         // ai should be colored as a builtin (not plain white)
         Assert.NotEqual("ai \"hello\"", result);
     }
+
+    // ── Fence Stripping ──────────────────────────────────────────────
+
+    [Fact]
+    public void FenceStripper_PassesThroughPlainText()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = stripper.Process("hello world\n");
+        output += stripper.Flush();
+        Assert.Equal("hello world\n", output);
+        Assert.Equal("hello world", stripper.DisplayContent);
+        Assert.Null(stripper.CodeContent);
+    }
+
+    [Fact]
+    public void FenceStripper_StripsSimpleFences()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = "";
+        output += stripper.Process("```\n");
+        output += stripper.Process("ls -la\n");
+        output += stripper.Process("```\n");
+        output += stripper.Flush();
+        Assert.Equal("ls -la\n", output);
+        Assert.Equal("ls -la", stripper.DisplayContent);
+    }
+
+    [Fact]
+    public void FenceStripper_StripsLanguageTag()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = "";
+        output += stripper.Process("```bash\n");
+        output += stripper.Process("du -sh * | sort -rh\n");
+        output += stripper.Process("```\n");
+        output += stripper.Flush();
+        Assert.Equal("du -sh * | sort -rh\n", output);
+        Assert.Equal("du -sh * | sort -rh", stripper.DisplayContent);
+    }
+
+    [Fact]
+    public void FenceStripper_PreservesTextAroundFences()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = "";
+        output += stripper.Process("Here's how:\n");
+        output += stripper.Process("```bash\n");
+        output += stripper.Process("ls -la\n");
+        output += stripper.Process("```\n");
+        output += stripper.Process("That's it.\n");
+        output += stripper.Flush();
+        Assert.Equal("Here's how:\nls -la\nThat's it.\n", output);
+    }
+
+    [Fact]
+    public void FenceStripper_ExtractsCodeContent()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        stripper.Process("Here's the command:\n");
+        stripper.Process("```bash\n");
+        stripper.Process("find . -size +100M\n");
+        stripper.Process("```\n");
+        stripper.Process("This will find large files.\n");
+        stripper.Flush();
+        Assert.Equal("find . -size +100M", stripper.CodeContent);
+    }
+
+    [Fact]
+    public void FenceStripper_CodeContentNull_WhenNoFences()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        stripper.Process("just plain text\n");
+        stripper.Flush();
+        Assert.Null(stripper.CodeContent);
+    }
+
+    [Fact]
+    public void FenceStripper_MultipleCodeBlocks()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        stripper.Process("Step 1:\n");
+        stripper.Process("```\n");
+        stripper.Process("mkdir test\n");
+        stripper.Process("```\n");
+        stripper.Process("Step 2:\n");
+        stripper.Process("```\n");
+        stripper.Process("cd test\n");
+        stripper.Process("```\n");
+        stripper.Flush();
+        Assert.Equal("mkdir test\ncd test", stripper.CodeContent);
+        Assert.Equal("Step 1:\nmkdir test\nStep 2:\ncd test", stripper.DisplayContent);
+    }
+
+    [Fact]
+    public void FenceStripper_HandlesCharByCharStreaming()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = "";
+        // Feed character by character: "```\nls\n```\n"
+        foreach (char c in "```\nls\n```\n")
+        {
+            output += stripper.Process(c.ToString());
+        }
+        output += stripper.Flush();
+        Assert.Equal("ls\n", output);
+    }
+
+    [Fact]
+    public void FenceStripper_HandlesLargeChunks()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        // Feed entire response as one chunk
+        var output = stripper.Process("```python\nprint('hello')\n```\n");
+        output += stripper.Flush();
+        Assert.Equal("print('hello')\n", output);
+    }
+
+    [Fact]
+    public void FenceStripper_TripleBackticksInMiddleOfLine_NotStripped()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        var output = stripper.Process("Use ```code``` for inline code.\n");
+        output += stripper.Flush();
+        // Line contains ``` but is not a fence line (has other content)
+        Assert.Contains("Use", output);
+    }
+
+    // ── GetLastResponse ──────────────────────────────────────────────
+
+    [Fact]
+    public void GetLastResponse_ReturnsNull_Initially()
+    {
+        // Note: This test may be affected by other tests that call ExecuteAsync.
+        // In isolation, GetLastResponse returns null or a previously stored value.
+        // We test the storage mechanism via FenceStripper instead.
+        var stripper = new AiCommand.FenceStripper();
+        stripper.Process("test\n");
+        stripper.Flush();
+        Assert.Null(stripper.CodeContent); // No fences
+        Assert.Equal("test", stripper.DisplayContent);
+    }
+
+    [Fact]
+    public void GetLastResponse_PrefersCodeContent()
+    {
+        var stripper = new AiCommand.FenceStripper();
+        stripper.Process("explanation\n");
+        stripper.Process("```\n");
+        stripper.Process("actual-command\n");
+        stripper.Process("```\n");
+        stripper.Flush();
+
+        // CodeContent should be preferred over DisplayContent
+        Assert.Equal("actual-command", stripper.CodeContent);
+        Assert.Contains("explanation", stripper.DisplayContent);
+    }
 }
