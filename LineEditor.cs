@@ -19,6 +19,14 @@ public class LineEditor
     public EditMode Mode { get; set; } = EditMode.Vi;
     private ViMode _viMode = ViMode.Insert;
 
+    /// <summary>Current buffer contents (for edit-in-editor handoff).</summary>
+    public string CurrentBuffer => new string(_buffer?.ToArray() ?? Array.Empty<char>());
+
+    /// <summary>Hint text showing the keybinding for edit-in-editor.</summary>
+    public string EditInEditorHint => Mode == EditMode.Vi
+        ? "esc v → $EDITOR"
+        : "C-x C-e → $EDITOR";
+
     // Tab completion callback
     public Func<string, int, (string newInput, int newCursor)?>? CompleteHandler { get; set; }
     public Action? ShowCompletionsHandler { get; set; }
@@ -410,6 +418,11 @@ public class LineEditor
                     RepeatViSearch(!_lastSearchForward);
                 return null;
 
+            // -- Edit in $EDITOR --
+            case 'v':
+                Console.WriteLine();
+                return "\x16";  // sentinel: open in editor
+
             default:
                 break;
         }
@@ -742,6 +755,17 @@ public class LineEditor
                 _startTop = 0;
                 Redraw();
                 return null;
+
+            case ConsoleKey.X when key.Modifiers.HasFlag(ConsoleModifiers.Control):
+            {
+                var nextKey = Console.ReadKey(intercept: true);
+                if (nextKey.Key == ConsoleKey.E && nextKey.Modifiers.HasFlag(ConsoleModifiers.Control))
+                {
+                    Console.WriteLine();
+                    return "\x16";  // sentinel: open in editor
+                }
+                return null;  // Ctrl+X followed by something else — ignore
+            }
 
             case ConsoleKey.C when key.Modifiers.HasFlag(ConsoleModifiers.Control):
                 Console.WriteLine("^C");

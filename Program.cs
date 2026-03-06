@@ -238,6 +238,13 @@ while (true)
     var input = lineEditor.ReadLine();
     if (input == null || signalExit) break; // EOF (Ctrl+D) or SIGHUP/SIGTERM
 
+    // ── Edit in $EDITOR (v in vi normal, Ctrl+X Ctrl+E in emacs) ──
+    if (input == "\x16")
+    {
+        input = OpenInEditor(lineEditor.CurrentBuffer);
+        if (input == null) continue;
+    }
+
     // ── Continuation Lines (trailing \, unclosed quotes/brackets) ──
     input = ReadContinuationLines(input);
 
@@ -250,8 +257,21 @@ while (true)
     if (scriptEngine.IsRushSyntax(input))
     {
         // Accumulate multi-line blocks (if/end, def/end, etc.) with auto-indent
+        int continuationCount = 0;
+        bool hintShown = false;
         while (scriptEngine.IsIncomplete(input))
         {
+            continuationCount++;
+
+            // Show editor hint after 3 continuation lines (once)
+            if (continuationCount == 3 && !hintShown)
+            {
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine($"  ({lineEditor.EditInEditorHint})");
+                Console.ResetColor();
+                hintShown = true;
+            }
+
             var depth = scriptEngine.GetBlockDepth(input);
             if (depth < 0) depth = 1; // Lexer failed — assume 1 level
             var indent = new string(' ', Prompt.InputPrefix.Length + depth * 2);
@@ -260,6 +280,17 @@ while (true)
             Console.ResetColor();
             var continuation = lineEditor.ReadLine();
             if (continuation == null) break;
+
+            // Edit in $EDITOR — hand off entire accumulated block
+            if (continuation == "\x16")
+            {
+                var editorContent = input + "\n" + lineEditor.CurrentBuffer;
+                var edited = OpenInEditor(editorContent);
+                if (edited == null) { input = ""; break; }
+                input = edited;
+                break;
+            }
+
             input += "\n" + continuation;
 
             // Auto-outdent: if the line was `end`, rewrite at the correct depth
@@ -1867,6 +1898,56 @@ static int RunInteractive(string command, CommandTranslator? translator = null)
         Console.Error.WriteLine($"  {ex.Message}");
         Console.ResetColor();
         return 1;
+    }
+}
+
+// ── Edit in $EDITOR ─────────────────────────────────────────────────
+
+/// <summary>
+/// Open content in $EDITOR (or vi), return edited result. Returns null on error or cancel.
+/// </summary>
+static string? OpenInEditor(string content)
+{
+    var editor = Environment.GetEnvironmentVariable("EDITOR") ?? "vi";
+    string? tempFile = null;
+    try
+    {
+        tempFile = Path.Combine(Path.GetTempPath(), $"rush-edit-{Guid.NewGuid():N}.rush");
+        File.WriteAllText(tempFile, content + "\n");
+
+        var psi = new ProcessStartInfo(editor, tempFile) { UseShellExecute = false };
+        var proc = Process.Start(psi);
+        if (proc == null)
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine($"  could not start {editor}");
+            Console.ResetColor();
+            return null;
+        }
+        proc.WaitForExit();
+
+        if (proc.ExitCode != 0)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  editor cancelled");
+            Console.ResetColor();
+            return null;
+        }
+        proc.Dispose();
+
+        var result = File.ReadAllText(tempFile).TrimEnd('\n', '\r');
+        return string.IsNullOrWhiteSpace(result) ? null : result;
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  editor: {ex.Message}");
+        Console.ResetColor();
+        return null;
+    }
+    finally
+    {
+        if (tempFile != null) try { File.Delete(tempFile); } catch { }
     }
 }
 
