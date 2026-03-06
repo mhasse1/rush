@@ -84,9 +84,9 @@ puts "#{not_found} not found on disk"
 |---|----------|--------|----------------------|-------|
 | 1 | `env.HOME` for env vars | ✅ Resolved | `ENV["HOME"]`, `$HOME` | Dot access for clean names, bracket `env["X-Y"]` for edge cases. Transpiles to `$env:HOME` |
 | 2 | `File.read_lines()` / `File.append()` | ✅ Resolved | `cat`, `>>`, shell commands | Clean OO file ops. Shell commands still work for one-offs |
-| 3 | `?` in method names | ✅ Resolved | Drop the `?`, use `is_` prefix | `.empty?`, `.include?`, `.start_with?` — self-documenting predicates. One of Ruby's best ideas |
-| 4 | `match/when/end` | ✅ Resolved | `case/when/end`, `switch/case` | `match` is modern (Rust, Ruby 3). Avoids bash `case/esac` baggage |
-| 5 | `next` for skip | ✅ Resolved | `continue` | Ruby's `next`. Clean, short, reads naturally in blocks |
+| 3 | `?` in method names | ✅ Resolved | Drop the `?`, use `is_` prefix | `.empty?`, `.include?`, `.start_with?` — self-documenting predicates, clearly boolean |
+| 4 | `match/when/end` | ✅ Resolved | `case/when/end`, `switch/case` | `match` is modern. Avoids bash `case/esac` baggage |
+| 5 | `next` for skip | ✅ Resolved | `continue` | Clean, short, reads naturally in blocks |
 | 6 | `ask()` built-in | ✅ Resolved | `input()`, `read`, `prompt()` | `ask` is human-readable. `char: true` for single-char input |
 | 7 | `Dir.files()` | ✅ Resolved | `Dir.glob()`, `ls`, `find` | `files` is instantly clear. Shell `find` still works for complex cases |
 | 8 | `+=` for increment (no `++`) | ✅ Resolved | `++`, `+= 1` | `+=` is accessible to non-C developers. No pre/post ambiguity |
@@ -171,7 +171,7 @@ end
 # === 4. Port Connectivity ===
 puts "[4/6] Port Connectivity...".yellow
 
-# [RESOLVED] Array of hashes — Ruby-style
+# [RESOLVED] Array of hashes
 ports = [
   { port: 53,  name: "DNS" },
   { port: 88,  name: "Kerberos" },
@@ -246,10 +246,10 @@ end
 | 2 | PS cmdlets pass through | ✅ Resolved | Alias everything to snake_case | Standing on the shoulders of giants. Rush doesn't hide PS, it makes it pleasant |
 | 3 | `&.` safe navigation | ✅ Resolved | `?.` (C#/JS style), no safe nav | `ip&.IPAddress` — nil returns nil instead of crashing. Very useful in shell scripts |
 | 4 | `$()` command capture | ✅ Resolved | backticks, `exec()` | Bash convention, universally understood |
-| 5 | `$?.ok?` / `$?.failed?` | ✅ Resolved | `$?.success`, `$? == 0` | Predicate methods on exit status. `.ok?` is Ruby-inspired |
-| 6 | Hash literals `{ key: val }` | ✅ Resolved | PowerShell `@{ Key = Val }` | Ruby-style is cleaner. Transpiles to PS hashtables |
+| 5 | `$?.ok?` / `$?.failed?` | ✅ Resolved | `$?.success`, `$? == 0` | Predicate methods on exit status — self-documenting |
+| 6 | Hash literals `{ key: val }` | ✅ Resolved | PowerShell `@{ Key = Val }` | Cleaner syntax. Transpiles to PS hashtables |
 | 7 | Array literals `[1, 2, 3]` | ✅ Resolved | PowerShell `@(1, 2, 3)` | Standard square brackets. Transpiles to PS arrays |
-| 8 | Named args `count: 2` | ✅ Resolved | `-Count 2` (PS style) | Ruby-style for Rush functions. PS flags still work for PS cmdlets |
+| 8 | Named args `count: 2` | ✅ Resolved | `-Count 2` (PS style) | Colon syntax for Rush functions. PS flags still work for PS cmdlets |
 
 ---
 
@@ -260,9 +260,9 @@ All core design questions from Examples 1 and 2 are now resolved.
 | # | Question | Resolution |
 |---|----------|-----------|
 | 1 | PS cmdlet syntax | **Pass through.** Standing on shoulders of giants. Rush doesn't hide PS, it makes it pleasant |
-| 2 | Method chaining on cmdlets | **Yes.** `Get-NetIPAddress().select { }` — PS power + Ruby ergonomics. The core value prop |
+| 2 | Method chaining on cmdlets | **Yes.** `Get-NetIPAddress().select { }` — PS power + clean ergonomics. The core value prop |
 | 3 | `"text".green` colored output | **Yes.** Colors are too common in shell scripts NOT to be ergonomic. Extends to numeric formatting |
-| 4 | `?` predicate methods | **Yes.** So obvious you don't have to be a Rubyist. Ruby is the most legible language |
+| 4 | `?` predicate methods | **Yes.** So obvious you don't need prior exposure. Self-documenting boolean methods |
 | 5 | `next` vs `continue` | **Both.** `next` preferred — "continue sounds like run the next line." `continue` as alias for familiarity |
 
 ---
@@ -359,7 +359,7 @@ end
 | 1 | Functions with `def/end` | ✅ Resolved | Positional + named args. Implicit return. Shell commands work inside |
 | 2 | `env[/DEPLOY/]` regex filter | ✅ New | Filter env vars by regex. Returns hash of matching key/value pairs |
 | 3 | Numeric methods `.round(1)` | ✅ New | Method chaining on numbers. `.to_i`, `.to_f`, `.round`, `.abs` |
-| 4 | `3.times { \|i\| }` | ✅ Resolved | Ruby-style numeric iteration. Already in spec |
+| 4 | `3.times { \|i\| }` | ✅ Resolved | Numeric iteration. Already in spec |
 | 5 | Implicit return | ✅ Resolved | Last expression is return value. Explicit `return` also works |
 
 ---
@@ -394,7 +394,7 @@ elapsed.round(1).to_s + " seconds"                   # "3.2 seconds"
 
 ### Regex — clean and obvious
 ```rush
-# Match operator: =~ (Ruby convention)
+# Match operator: =~
 name =~ /^test/                  # true if name starts with "test"
 name !~ /admin/                  # true if name does NOT contain "admin"
 
@@ -413,6 +413,6 @@ env[/^RUSH_/]                    # all env vars starting with "RUSH_"
 
 **Regex design principles:**
 - `/pattern/` for literals — universally understood
-- `=~` for match, `!~` for not match — Ruby/Perl convention, unambiguous
+- `=~` for match, `!~` for not match — unambiguous, widely recognized
 - `.sub` / `.gsub` / `.scan` for substitution — method syntax, not `s///` syntax
 - No obscure operators to memorize

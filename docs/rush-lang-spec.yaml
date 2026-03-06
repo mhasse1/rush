@@ -9,8 +9,8 @@
 # on the embedded PS engine. This means every .NET type, cmdlet, and
 # module is available automatically.
 #
-# Design philosophy: Bash's pipeline/process model + Ruby's clean syntax.
-# If you know bash and Ruby, you can guess the Rush syntax and be right.
+# Design philosophy: Bash's pipeline/process model + clean, readable syntax.
+# Blocks use `end`, variables need no sigils, and interpolation uses #{expr}.
 # ============================================================================
 
 meta:
@@ -25,19 +25,19 @@ meta:
 # MENTAL MODEL — read this first
 # ============================================================================
 mental_model:
-  one_line: "Bash's process model + Ruby's syntax, transpiling to PowerShell 7"
+  one_line: "Bash's process model + clean readable syntax, transpiling to PowerShell 7"
   rules:
     - "Shell commands pass through verbatim — `ls -la` just works"
     - "No sigils — `name = x` not `$name = x`"
     - "Interpolation is #{expr} not ${expr}"
     - "Blocks use `end`, not braces — braces are for lambdas only"
     - "Every .NET type and PowerShell cmdlet is available automatically"
-    - "When in doubt, it works like Ruby — except pipelines work on objects"
+    - "When in doubt, prefer the most readable form — pipelines work on objects"
 
 # ============================================================================
 # COMMON MISTAKES (for LLM code generation accuracy)
 # ============================================================================
-# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Ruby, NOT Bash.
+# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Bash, NOT any other language.
 # It borrows ideas from all three but has its own syntax rules.
 
 common_mistakes:
@@ -45,7 +45,7 @@ common_mistakes:
     right: 'name = "Mark"'  # no $ prefix in Rush
 
   - wrong: 'foreach ($x in $list) { ... }'
-    right: 'for x in list ... end'  # Ruby-style for/in/end
+    right: 'for x in list ... end'  # Rush for/in/end
 
   - wrong: 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }'
     right: 'Dir.files(".").select { |f| f.Length > 1mb }'  # use Rush stdlib
@@ -73,7 +73,7 @@ common_mistakes:
     reason: "Named args at .new() call site not yet supported — use positional args"
 
   - wrong: 'static def add(a, b)'
-    right: 'def self.add(a, b)'  # Ruby-style def self.name()
+    right: 'def self.add(a, b)'  # def self.name() for static methods
 
   - wrong: 'enum Color { red, green, blue }'
     right: "enum Color\\n  red\\n  green\\n  blue\\nend"
@@ -234,7 +234,7 @@ strings:
 # ============================================================================
 control_flow:
   description: |
-    Ruby-style block keywords: if/elsif/else/end, unless/end.
+    Block keywords: if/elsif/else/end, unless/end.
     No braces for control flow — braces are reserved for lambdas.
 
   if:
@@ -306,7 +306,7 @@ control_flow:
     syntax: "obj&.method"
     transpiles_to: "if ($null -ne $obj) { $obj.Method }"
     description: |
-      Ruby-style safe navigation operator. If obj is nil, returns nil
+      Safe navigation operator. If obj is nil, returns nil
       instead of throwing. Very useful in shell scripts where values
       may not exist.
     examples:
@@ -378,7 +378,7 @@ loops:
       0..4 | ForEach-Object {
         Write-Output $_
       }
-    note: "Ruby-style numeric iteration"
+    note: "Numeric iteration — reads naturally as English"
 
   loop_control:
     - name: "next"
@@ -389,7 +389,7 @@ loops:
           powershell: "if ($line -eq '') { continue }"
         - rush: "next unless item.valid?"
           powershell: "if (-not $item.IsValid) { continue }"
-      note: "Ruby-style. Reads naturally: 'next if blank'. Preferred over continue."
+      note: "Reads naturally: 'next if blank'. Preferred over continue."
     - name: "continue"
       description: "Alias for next — supported for familiarity"
       transpiles_to: "continue"
@@ -426,7 +426,7 @@ loops:
         value2 { body }
         default { body }
       }
-    note: "'match' is modern (Rust, Ruby 3). Avoids bash case/esac baggage. 'case' also works as alias."
+    note: "'match' avoids bash case/esac baggage. 'case' also works as alias."
 
 # ============================================================================
 # FUNCTIONS
@@ -466,7 +466,7 @@ functions:
 
   return:
     description: |
-      Last expression is the implicit return value (Ruby-style).
+      Last expression is the implicit return value.
       Explicit `return expr` also works.
     example:
       rush: |
@@ -477,7 +477,7 @@ functions:
 
   named_args:
     syntax: 'deploy("staging", dry_run: true)'
-    note: "Named arguments use Ruby-style colon syntax. Space after colon is optional: dry_run:true also works."
+    note: "Named arguments use colon syntax: name: value. Space after colon is optional: dry_run:true also works."
 
 # ============================================================================
 # BLOCKS & LAMBDAS
@@ -586,7 +586,7 @@ regex:
 
   design_principles:
     - "/pattern/ for literals — universally understood"
-    - "=~ for match, !~ for not match — Ruby/Perl convention, unambiguous"
+    - "=~ for match, !~ for not match — unambiguous, widely recognized"
     - ".sub / .gsub / .scan for substitution — method syntax, not s/// syntax"
     - "No obscure operators to memorize"
 
@@ -670,7 +670,7 @@ numeric_methods:
 # ============================================================================
 hash_literals:
   description: |
-    Hash (dictionary) literals use Ruby-style { key: value } syntax.
+    Hash (dictionary) literals use { key: value } syntax.
     Transpile to PowerShell hashtables @{ Key = Value }.
   syntax: "{ key1: value1, key2: value2 }"
   transpiles_to: "@{ key1 = value1; key2 = value2 }"
@@ -694,7 +694,7 @@ hash_literals:
 classes:
   status: "implemented"
   description: |
-    Ruby-style class definitions that transpile to PowerShell classes.
+    Class definitions that transpile to PowerShell classes.
     Supports attributes (attr), constructors (initialize), instance methods,
     static methods, inheritance, and self for property access.
     Instantiation uses ClassName.new().
@@ -926,8 +926,8 @@ classes:
     - ".new() is the only instantiation syntax — detected by uppercase first char"
     - "Methods without return get [void]; methods with return get [object]"
     - "Constructor defaults generate PS constructor overloads (PS doesn't support constructor defaults)"
-    - "Inheritance uses < syntax (Ruby-style), not : or extends"
-    - "Static methods use def self.method_name() (Ruby-style)"
+    - "Inheritance uses < syntax, not : or extends"
+    - "Static methods use def self.method_name()"
 
   deferred: []  # All planned class features are now implemented
 
@@ -1011,7 +1011,7 @@ enums:
 # ============================================================================
 error_handling:
   description: |
-    Ruby-style begin/rescue/ensure/end for exception handling.
+    Structured begin/rescue/ensure/end for exception handling.
 
   syntax: |
     begin
@@ -1079,8 +1079,8 @@ stdlib:
 
   predicate_methods:
     description: |
-      Methods ending in `?` return boolean. This is one of Ruby's best ideas —
-      self-documenting, clearly boolean, reads like English.
+      Methods ending in `?` return boolean — self-documenting, clearly
+      boolean, reads like English.
     examples:
       - { method: ".empty?", description: "True if string/array is empty" }
       - { method: ".include?(x)", description: "True if collection contains x" }
@@ -1117,7 +1117,7 @@ builtin_variables:
         note: "All env vars starting with RUSH_"
       - rush: 'env[/PATH/].each { |k, v| puts "#{k}=#{v}" }'
         note: "Iterate over filtered env vars"
-    note: "Lowercase `env` — no Ruby-style SHOUTING. Transpiles to PowerShell $env: provider"
+    note: "Lowercase `env` — clean and readable. Transpiles to PowerShell $env: provider"
   - { name: "__FILE__", description: "Current script path" }
   - { name: "__DIR__", description: "Current script directory" }
 
@@ -1160,6 +1160,57 @@ builtin_functions:
       - "Markdown code fences (```) are stripped from output automatically"
       - "ai --exec prefers code block content over full response — explanatory text is skipped"
       - "When piping to ai, both stdout and stderr from the prefix command are sent as context"
+
+# ============================================================================
+# SHELL BUILTINS (REPL commands — not transpiled, handled directly)
+# ============================================================================
+shell_builtins:
+  - name: "export"
+    description: "Set environment variable"
+    examples:
+      - { rush: 'export FOO=bar', note: "Set for current session" }
+      - { rush: 'export --save EDITOR=vim', note: "Set and persist to init.rush" }
+    note: "--save writes to ~/.config/rush/init.rush Environment section (idempotent)"
+
+  - name: "path"
+    description: "Manage colon-separated path variables"
+    examples:
+      - { rush: 'path', note: "List PATH entries" }
+      - { rush: 'path add ~/bin', note: "Append to PATH" }
+      - { rush: 'path add --front ~/bin', note: "Prepend to PATH" }
+      - { rush: 'path add --save ~/bin', note: "Add to PATH and persist to init.rush" }
+      - { rush: 'path rm ~/bin', note: "Remove from PATH" }
+      - { rush: 'path edit', note: "Edit PATH in $EDITOR" }
+      - { rush: 'path --name=MANPATH add ~/man', note: "Manage any path-like variable" }
+      - { rush: 'path --name=PYTHONPATH', note: "List entries of any path variable" }
+    note: "--name=VARNAME works with any colon-separated env var (default: PATH)"
+
+  - name: "init"
+    description: "Edit startup script and reload"
+    examples:
+      - { rush: 'init', note: "Opens ~/.config/rush/init.rush in $EDITOR, then reloads" }
+
+  - name: "reload"
+    description: "Reload configuration"
+    examples:
+      - { rush: 'reload', note: "Soft reload — config only" }
+      - { rush: 'reload --hard', note: "Full binary restart with state preservation" }
+
+  - name: "set"
+    description: "View or change settings"
+    examples:
+      - { rush: 'set', note: "Show all settings" }
+      - { rush: 'set editMode vi', note: "Change setting for this session" }
+      - { rush: 'set --save showTips false', note: "Change and persist to config.json" }
+      - { rush: 'set --secret ANTHROPIC_API_KEY sk-ant-...', note: "Save to secrets.rush" }
+    note: "Settings: editMode, theme, showTiming, showTips, showHints, aiProvider, aiModel, and more"
+
+  - name: "sync"
+    description: "Sync config across machines"
+    examples:
+      - { rush: 'sync init github', note: "Initialize sync via GitHub" }
+      - { rush: 'sync push', note: "Push config to remote" }
+      - { rush: 'sync pull', note: "Pull config from remote" }
 
 # ============================================================================
 # SIZE LITERALS

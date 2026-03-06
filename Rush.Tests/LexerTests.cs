@@ -145,7 +145,7 @@ public class LexerTests
     [InlineData("foo")]
     [InlineData("my_var")]
     [InlineData("camelCase")]
-    [InlineData("empty?")]    // Ruby-style predicate
+    [InlineData("empty?")]    // predicate method
     public void Identifiers_Parsed(string input)
     {
         var tokens = Lex(input);

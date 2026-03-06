@@ -1,6 +1,6 @@
 # Rush User Manual
 
-> **Version 0.2.0 (alpha)** — A modern shell with Ruby-inspired syntax on PowerShell 7
+> **Version 0.2.0 (alpha)** — A modern shell with clean, readable syntax on PowerShell 7
 
 ---
 
@@ -23,13 +23,13 @@
 
 ## Overview
 
-Rush is a Unix shell that combines Bash's pipeline and process model with Ruby's clean syntax. Under the hood, Rush code transpiles to PowerShell 7, giving you access to the full .NET runtime while writing natural, readable commands.
+Rush is a Unix shell that combines Bash's pipeline and process model with clean, readable syntax. Under the hood, Rush code transpiles to PowerShell 7, giving you access to the full .NET runtime while writing natural, expressive commands.
 
 **Design principles:**
 
 - Shell commands are first-class — `ls -la /tmp` just works
 - No sigils for variables — `name = "mark"`, not `$name`
-- String interpolation uses `#{expr}` (Ruby-style)
+- String interpolation uses `#{expr}`
 - Block keywords use `end`, not braces — `if`/`end`, `def`/`end`
 - Braces `{ }` are for lambdas and blocks only
 - Pipelines work for both shell commands and objects
@@ -100,7 +100,10 @@ Created automatically on first run. All settings with their defaults:
   "aliases": {},
   "promptFormat": "default",
   "historySize": 500,
-  "theme": "auto"
+  "theme": "auto",
+  "showTiming": true,
+  "showTips": true,
+  "showHints": true
 }
 ```
 
@@ -111,6 +114,11 @@ Created automatically on first run. All settings with their defaults:
 | `promptFormat` | `"default"` | Prompt style |
 | `historySize` | `10`–`∞` (default `500`) | Max history entries |
 | `theme` | `"auto"`, `"dark"`, `"light"` | Color theme (`auto` detects terminal) |
+| `showTiming` | `true`, `false` | Show elapsed time for commands > 500ms |
+| `showTips` | `true`, `false` | Show a rotating tip on startup |
+| `showHints` | `true`, `false` | Show contextual hints during editing — surfaces lesser-known features so you can use them today |
+| `aiProvider` | `"anthropic"`, `"openai"`, etc. | AI provider for the `ai` command |
+| `aiModel` | `"auto"`, model name | AI model (`auto` = provider default) |
 
 ### Startup Script
 
@@ -136,6 +144,13 @@ A commented default is created on first run.
 ### Reloading
 
 Run `reload` to re-read all config files without restarting Rush.
+
+The `init` command opens init.rush in `$EDITOR` and reloads automatically after you save:
+
+```rush
+init       # opens ~/.config/rush/init.rush in $EDITOR, then reloads
+reload     # re-read config files (settings, theme, aliases)
+```
 
 ---
 
@@ -189,6 +204,7 @@ Rush defaults to vi-style line editing.
 | `u` | Undo |
 | `f`/`F` + char | Find character forward / backward |
 | `j` / `k` | Next / previous history entry |
+| `v` | Open current input in `$EDITOR` (multi-line editing) |
 | `3w` | Count prefix — move 3 words forward |
 
 ### Emacs Mode
@@ -206,6 +222,22 @@ Switch with `set emacs`.
 | `Alt+B` | Back one word |
 | `Alt+F` | Forward one word |
 | `Alt+D` | Delete word forward |
+
+### Edit in $EDITOR
+
+During multi-line input (after 3+ continuation lines), Rush shows a hint:
+
+```
+# (esc v → $EDITOR)
+```
+
+Press **Esc v** (vi normal mode) to open the entire block in your `$EDITOR`. The code is properly indented in the editor for readability. After saving and quitting, Rush executes the result. Quit without saving (`:q!` in vim) to cancel.
+
+**Hints** are not training wheels — they surface lesser-known features so you can take advantage of them today. Disable them with:
+
+```rush
+set --save showHints false
+```
 
 ### Tab Completion
 
@@ -649,7 +681,7 @@ greet("world")              # → "hello, world!"
 greet("world", "hey")       # → "hey, world!"
 ```
 
-**Named arguments** (Ruby-style colon syntax):
+**Named arguments** (colon syntax):
 
 ```rush
 def deploy(env, dry_run: false, verbose: true)
@@ -1120,7 +1152,31 @@ The dot shortcuts extend to any number of dots: each `.` beyond the first means 
 | Command | Description |
 |---------|-------------|
 | `export VAR=value` | Set environment variable |
+| `export --save VAR=value` | Set and persist to init.rush |
 | `unset VAR` | Remove environment variable |
+
+`export --save` writes the export to the `# ── Environment` section in init.rush. If the variable already exists there, the line is updated in place (idempotent).
+
+### PATH Management
+
+| Command | Description |
+|---------|-------------|
+| `path` | List PATH entries (one per line) |
+| `path add ~/bin` | Append directory to PATH |
+| `path add --front ~/bin` | Prepend directory to PATH |
+| `path add --save ~/bin` | Add to PATH and persist to init.rush |
+| `path rm ~/bin` | Remove directory from PATH |
+| `path rm --save ~/bin` | Remove from PATH and init.rush |
+| `path edit` | Edit PATH in `$EDITOR` |
+
+Use `--name=VARNAME` to manage any colon-separated variable:
+
+```rush
+path --name=MANPATH add ~/man          # add to MANPATH
+path --name=PYTHONPATH                  # list PYTHONPATH entries
+path --name=MANPATH edit                # edit MANPATH in $EDITOR
+path --name=MANPATH add --save ~/man   # add and persist
+```
 
 ### Aliases
 
@@ -1221,8 +1277,11 @@ set --save aiModel auto            # "auto" = provider default
 
 | Command | Description |
 |---------|-------------|
+| `init` | Edit init.rush in `$EDITOR`, then reload |
 | `reload` | Reload config files (settings, theme, aliases) |
 | `reload --hard` | Full binary restart preserving session state |
+
+`init` opens `~/.config/rush/init.rush` in your editor. After saving, it re-runs the startup script to pick up changes immediately.
 
 `reload --hard` serializes your session (variables, env, cwd, aliases, flags) to a temp file, restarts the Rush binary, and restores everything. Use this after updating the Rush binary with `install.sh`.
 
@@ -1253,7 +1312,6 @@ trap 'cleanup' EXIT         # Run on shell exit
 
 | Command | Description |
 |---------|-------------|
-| `reload` | Reload all config files |
 | `clear` | Clear the screen |
 | `help` | Show built-in help |
 

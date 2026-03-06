@@ -26,7 +26,7 @@
 ;;; Commentary:
 
 ;; Major mode for editing Rush shell scripts.  Rush is a shell scripting
-;; language that transpiles to PowerShell 7, combining Ruby-like syntax
+;; language that transpiles to PowerShell 7, combining clean readable syntax
 ;; with the full power of the PowerShell/.NET ecosystem.
 ;;
 ;; Features:
@@ -472,7 +472,7 @@ Finds function definitions.")
   "Major mode for editing Rush shell scripts.
 
 Rush is a shell scripting language that transpiles to PowerShell 7.
-It combines Ruby-like syntax with the full power of the PowerShell
+It combines clean, readable syntax with the full power of the PowerShell
 and .NET ecosystem.
 
 \\{rush-mode-map}"

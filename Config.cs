@@ -18,6 +18,7 @@ public class RushConfig
     public string PromptFormat { get; set; } = "default";
     public bool ShowTiming { get; set; } = true;
     public bool ShowTips { get; set; } = true;
+    public bool ShowHints { get; set; } = true;
 
     // ── Error Handling ─────────────────────────────────────────────────
     public bool StopOnError { get; set; } = false;
@@ -67,6 +68,7 @@ public class RushConfig
         new SettingInfo("promptFormat",        "Display",       "default","default",         "Prompt style. Override by defining rush_prompt() in init.rush for full control."),
         new SettingInfo("showTiming",          "Display",       "true",  "true, false",     "Show elapsed time for commands taking longer than 500ms."),
         new SettingInfo("showTips",            "Display",       "true",  "true, false",     "Show a rotating tip on shell startup. Disable with: set --save showTips false"),
+        new SettingInfo("showHints",           "Display",       "true",  "true, false",     "Contextual hints that surface lesser-known features (e.g. esc v → $EDITOR). Not training wheels."),
         new SettingInfo("stopOnError",         "Error Handling","false", "true, false",      "Stop executing on first error (like bash set -e). Interactive sessions exit; scripts abort."),
         new SettingInfo("pipefailMode",        "Error Handling","false", "true, false",      "Fail a pipeline if ANY command fails, not just the last one (like bash set -o pipefail)."),
         new SettingInfo("traceCommands",       "Debugging",     "false", "true, false",      "Print each command before executing (like bash set -x). Shows: + command. Useful for debugging scripts."),
@@ -160,6 +162,7 @@ public class RushConfig
         "promptformat" => PromptFormat,
         "showtiming" => ShowTiming.ToString().ToLowerInvariant(),
         "showtips" => ShowTips.ToString().ToLowerInvariant(),
+        "showhints" => ShowHints.ToString().ToLowerInvariant(),
         "stoponerror" => StopOnError.ToString().ToLowerInvariant(),
         "pipefailmode" => PipefailMode.ToString().ToLowerInvariant(),
         "tracecommands" => TraceCommands.ToString().ToLowerInvariant(),
@@ -199,6 +202,10 @@ public class RushConfig
             case "showtips":
                 if (!bool.TryParse(value, out var tips)) return false;
                 ShowTips = tips;
+                return true;
+            case "showhints":
+                if (!bool.TryParse(value, out var hints)) return false;
+                ShowHints = hints;
                 return true;
             case "stoponerror":
                 if (!bool.TryParse(value, out var se)) return false;
@@ -431,10 +438,14 @@ public class RushConfig
                     #   "#{Time.now.ToString("HH:mm")} #{pwd} > "
                     # end
                     #
-                    # Full example (colored output with Write-Host):
+                    # Full example — replicates the default prompt:
                     # def rush_prompt()
                     #   if $exit_failed
-                    #     Write-Host "✗" -NoNewline -ForegroundColor Red
+                    #     if $exit_code > 1
+                    #       Write-Host "✗ #{$exit_code}" -NoNewline -ForegroundColor Red
+                    #     else
+                    #       Write-Host "✗" -NoNewline -ForegroundColor Red
+                    #     end
                     #   else
                     #     Write-Host "✓" -NoNewline -ForegroundColor Green
                     #   end
@@ -452,12 +463,24 @@ public class RushConfig
                     #     Write-Host "#{host}" -NoNewline -ForegroundColor Blue
                     #   end
                     #
-                    #   dir = pwd
+                    #   dir = $(pwd)
+                    #   home = env.HOME
+                    #   if dir.StartsWith(home)
+                    #     dir = "~" + dir.Substring(home.Length)
+                    #   end
+                    #   parts = dir.Split("/")
+                    #   if parts.Length > 3
+                    #     dir = parts[-2] + "/" + parts[-1]
+                    #   end
                     #   Write-Host "  #{dir}" -NoNewline -ForegroundColor White
                     #
                     #   branch = $(git branch --show-current 2>/dev/null).Trim()
                     #   unless branch.empty?
                     #     Write-Host "  #{branch}" -NoNewline -ForegroundColor Magenta
+                    #     dirty = $(git status --porcelain 2>/dev/null).Trim()
+                    #     unless dirty.empty?
+                    #       Write-Host "*" -NoNewline -ForegroundColor Yellow
+                    #     end
                     #   end
                     # end
                     """.Replace("                    ", ""));

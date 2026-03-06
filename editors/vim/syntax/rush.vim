@@ -55,7 +55,7 @@ syn match   rushFloat         "\<\d\+\.\d\+\>"
 syn match   rushInteger       "\<\d\+\>"
 
 " --------------------------------------------------------------------------
-" Symbols (Ruby-style :name)
+" Symbols (:name)
 " --------------------------------------------------------------------------
 syn match   rushSymbol        ":\a\w*"
 

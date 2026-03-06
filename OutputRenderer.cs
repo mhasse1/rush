@@ -242,6 +242,18 @@ public static class OutputRenderer
             }
             else
             {
+                // Strip verbose PS ErrorActionPreference prefix if present
+                const string eapPrefix = "The running command stopped because the preference variable";
+                if (msg.Contains(eapPrefix))
+                {
+                    var stopIdx = msg.IndexOf("Stop:");
+                    if (stopIdx > 0)
+                    {
+                        var colonIdx = msg.IndexOf(": ", stopIdx + 5);
+                        if (colonIdx > 0)
+                            msg = msg[(colonIdx + 2)..].Trim();
+                    }
+                }
                 Console.Error.WriteLine($"error: {msg}");
             }
         }

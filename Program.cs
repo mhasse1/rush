@@ -270,7 +270,7 @@ while (true)
             Console.ResetColor();
 
             // Floating hint below cursor (from line 3 onwards)
-            bool showingHint = continuationCount >= 3;
+            bool showingHint = continuationCount >= 3 && config.ShowHints;
             if (showingHint)
             {
                 int savedCol = Console.CursorLeft;
@@ -693,6 +693,55 @@ while (true)
             continue;
         }
 
+        // ── which — check builtins before falling through to Get-Command ──
+        if (segment.StartsWith("which ", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("type ", StringComparison.OrdinalIgnoreCase))
+        {
+            var whichCmd = segment.IndexOf(' ') is var sp && sp > 0 ? segment[(sp + 1)..].Trim() : "";
+            if (!string.IsNullOrEmpty(whichCmd))
+            {
+                var rushBuiltins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
+                    "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
+                    "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
+                    "path", "ai", "set", "which", "type"
+                };
+
+                if (rushBuiltins.Contains(whichCmd))
+                {
+                    Console.WriteLine($"{whichCmd}: rush builtin");
+                    lastSegmentFailed = false;
+                }
+                else if (config.Aliases.ContainsKey(whichCmd))
+                {
+                    Console.WriteLine($"{whichCmd}: aliased to '{config.Aliases[whichCmd]}'");
+                    lastSegmentFailed = false;
+                }
+                else
+                {
+                    // Fall through to Get-Command for external commands
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = runspace;
+                    ps.AddScript($"Get-Command '{whichCmd.Replace("'", "''")}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source");
+                    var results = ps.Invoke();
+                    if (results.Count > 0 && results[0] != null)
+                    {
+                        Console.WriteLine(results[0].ToString());
+                        lastSegmentFailed = false;
+                    }
+                    else
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine($"{whichCmd} not found");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
+                }
+                continue;
+            }
+        }
+
         // ── set (settings viewer/editor) ────────────────────────────
         if (segment.Equals("set", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("set ", StringComparison.OrdinalIgnoreCase))
@@ -955,6 +1004,56 @@ while (true)
             continue;
         }
 
+        // ── init — edit init.rush in $EDITOR, then reload ─────────
+        if (segment.Equals("init", StringComparison.OrdinalIgnoreCase))
+        {
+            var initPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                ".config", "rush", "init.rush");
+
+            // Create file if it doesn't exist
+            if (!File.Exists(initPath))
+            {
+                var dir = Path.GetDirectoryName(initPath)!;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                File.WriteAllText(initPath, "# ~/.config/rush/init.rush\n# Startup script — runs on every shell launch.\n");
+            }
+
+            var editor = Environment.GetEnvironmentVariable("EDITOR") ?? "vi";
+            try
+            {
+                var psi = new ProcessStartInfo(editor, initPath) { UseShellExecute = false };
+                var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    proc.WaitForExit();
+                    proc.Dispose();
+
+                    // Re-run init.rush to pick up changes
+                    RunStartupRushFile(runspace, scriptEngine, "init.rush");
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine("  init.rush reloaded");
+                    Console.ResetColor();
+                }
+                else
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"init: could not start {editor}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"init: {ex.Message}");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
+            lastSegmentFailed = false;
+            continue;
+        }
+
         if (segment.Equals("clear", StringComparison.OrdinalIgnoreCase))
         {
             Console.Clear();
@@ -1207,6 +1306,12 @@ while (true)
                             var scriptResults = ps.Invoke().ToList();
                             if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
                             if (ps.HadErrors) OutputRenderer.RenderErrors(ps.Streams);
+
+                            // Reset ErrorActionPreference — TranspileFile sets it to 'Stop'
+                            using var reset = PowerShell.Create();
+                            reset.Runspace = runspace;
+                            reset.AddScript("$ErrorActionPreference = 'Continue'");
+                            reset.Invoke();
                         }
                     }
                     else
@@ -1793,6 +1898,14 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
                     Console.Error.WriteLine($"rush: {filename}: {err}");
                 Console.ResetColor();
             }
+
+            // Reset ErrorActionPreference — TranspileFile sets it to 'Stop'
+            // for script error handling, but we don't want it leaking into
+            // the interactive runspace where it produces verbose error messages.
+            using var reset = PowerShell.Create();
+            reset.Runspace = runspace;
+            reset.AddScript("$ErrorActionPreference = 'Continue'");
+            reset.Invoke();
         }
     }
     catch (Exception ex)
@@ -3505,8 +3618,14 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         var cdpath = Environment.GetEnvironmentVariable("CDPATH");
         if (cdpath != null)
         {
-            foreach (var dir in cdpath.Split(':'))
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            foreach (var rawDir in cdpath.Split(':'))
             {
+                var dir = rawDir;
+                // Expand ~ in CDPATH entries
+                if (dir == "~") dir = home;
+                else if (dir.StartsWith("~/")) dir = Path.Combine(home, dir[2..]);
+
                 var candidate = Path.Combine(dir, path);
                 if (Directory.Exists(candidate)) { path = candidate; break; }
             }
@@ -3568,7 +3687,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "init", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -3698,7 +3817,7 @@ static string GetStartupTip(RushConfig config)
 
         // ── Config ──
         "~/.config/rush/config.json  ← all settings, commented with descriptions",
-        "~/.config/rush/init.rush  ← startup script (PATH, aliases, functions, prompt)",
+        "init  ← edit startup script in $EDITOR and reload",
         "~/.config/rush/secrets.rush  ← API keys & tokens (never synced)",
         "reload  ← reload config without restarting",
         "set --save showTips false  ← disable these startup tips",
@@ -3859,9 +3978,9 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  > / >>     — redirect output to file (overwrite / append)");
     Console.WriteLine("  ~/path     — tilde expansion to home directory");
     Console.WriteLine("  $HOME      — environment variable expansion");
-    Console.WriteLine("  export     — set env var: export FOO=bar");
+    Console.WriteLine("  export     — set env var: export FOO=bar (--save to persist)");
     Console.WriteLine("  unset      — remove env var: unset FOO");
-    Console.WriteLine("  path       — manage PATH: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit]");
+    Console.WriteLine("  path       — manage PATH: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit] (--name=VAR for other vars)");
     Console.WriteLine("  ai         — AI assistant: ai \"prompt\"  cat log | ai \"what went wrong?\"");
     Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
     Console.WriteLine("  source     — run rush script: source file.rush");
@@ -3879,6 +3998,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  set --secret KEY val — save API key/token to secrets.rush");
     Console.WriteLine("  set -e/-x  — stop on error / trace commands (bash-compatible)");
     Console.WriteLine("  sync       — config sync: sync init [github|ssh|path] | push | pull | status");
+    Console.WriteLine("  init       — edit init.rush in $EDITOR, then reload");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
     Console.WriteLine();
@@ -3946,7 +4066,17 @@ static void RunNonInteractive(string command)
             catch (ActionPreferenceStopException ex)
             {
                 Console.ForegroundColor = Theme.Current.Error;
-                Console.Error.WriteLine(ex.Message);
+                // Strip the verbose PS prefix: "The running command stopped because..."
+                var innerMsg = ex.InnerException?.Message ?? ex.Message;
+                // If still has the preference variable prefix, extract the actual error
+                const string prefix = "The running command stopped because the preference variable";
+                if (innerMsg.Contains(prefix))
+                {
+                    var colonIdx = innerMsg.IndexOf(": ", innerMsg.IndexOf("Stop:") + 1);
+                    if (colonIdx > 0)
+                        innerMsg = innerMsg[(colonIdx + 2)..].Trim();
+                }
+                Console.Error.WriteLine($"error: {innerMsg}");
                 Console.ResetColor();
                 Environment.ExitCode = 1;
             }
