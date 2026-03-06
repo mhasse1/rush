@@ -1169,6 +1169,58 @@ The dot shortcuts extend to any number of dots: each `.` beyond the first means 
 | `set +x` | Clear trace |
 | `set -o pipefail` | Fail pipeline if any segment fails |
 | `set +o pipefail` | Clear pipefail |
+| `set --save key val` | Change setting and persist to config.json |
+| `set --secret KEY val` | Save API key/token to secrets.rush |
+
+### AI Assistant
+
+The `ai` builtin lets you query an LLM directly from the shell. It streams responses in real-time and is fully context-aware (Rush language, OS, cwd, recent commands).
+
+| Command | Description |
+|---------|-------------|
+| `ai "prompt"` | Ask a question |
+| `ai "prompt" < file` | Ask with file context via redirection |
+| `cat file \| ai "prompt"` | Pipe content as context |
+| `ai "prompt" > out.txt` | Capture response to file |
+| `ai --provider ollama "prompt"` | Use a specific provider |
+| `ai --model gpt-4o "prompt"` | Use a specific model |
+
+**Setup:**
+
+```rush
+set --secret ANTHROPIC_API_KEY sk-ant-...    # Default provider
+set --secret OPENAI_API_KEY sk-...           # For OpenAI
+set --secret GEMINI_API_KEY AIza...          # For Google Gemini
+# Ollama requires no key (runs locally)
+```
+
+**Config:**
+
+```rush
+set --save aiProvider anthropic    # anthropic, openai, gemini, ollama
+set --save aiModel auto            # "auto" = provider default
+```
+
+**Custom providers:** Drop a JSON file in `~/.config/rush/ai-providers/`:
+
+```json
+{
+  "name": "together",
+  "endpoint": "https://api.together.xyz/v1/chat/completions",
+  "format": "openai",
+  "apiKeyEnvVar": "TOGETHER_API_KEY",
+  "defaultModel": "meta-llama/Llama-3-70b-chat-hf"
+}
+```
+
+### Hot Reload
+
+| Command | Description |
+|---------|-------------|
+| `reload` | Reload config files (settings, theme, aliases) |
+| `reload --hard` | Full binary restart preserving session state |
+
+`reload --hard` serializes your session (variables, env, cwd, aliases, flags) to a temp file, restarts the Rush binary, and restores everything. Use this after updating the Rush binary with `install.sh`.
 
 ### Signals
 

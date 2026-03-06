@@ -32,6 +32,10 @@ public class RushConfig
     // ── Completion ─────────────────────────────────────────────────────
     public bool CompletionIgnoreCase { get; set; } = true;
 
+    // ── AI ───────────────────────────────────────────────────────────
+    public string AiProvider { get; set; } = "anthropic";
+    public string AiModel { get; set; } = "auto";
+
     // ── Aliases ────────────────────────────────────────────────────────
     public Dictionary<string, string> Aliases { get; set; } = new();
 
@@ -68,6 +72,8 @@ public class RushConfig
         new SettingInfo("traceCommands",       "Debugging",     "false", "true, false",      "Print each command before executing (like bash set -x). Shows: + command. Useful for debugging scripts."),
         new SettingInfo("strictGlobs",         "Globbing",      "false", "true, false",      "Error when a glob pattern (*.txt) matches nothing. false = pass the pattern through as literal text."),
         new SettingInfo("completionIgnoreCase","Completion",    "true",  "true, false",      "Case-insensitive Tab completion for paths and commands."),
+        new SettingInfo("aiProvider",          "AI",            "anthropic","anthropic, openai, gemini, ollama","AI provider for the `ai` command. Custom providers via ~/.config/rush/ai-providers/"),
+        new SettingInfo("aiModel",             "AI",            "auto","model name","Override the default model for your AI provider. \"auto\" = use provider default."),
     };
 
     /// <summary>
@@ -159,6 +165,8 @@ public class RushConfig
         "tracecommands" => TraceCommands.ToString().ToLowerInvariant(),
         "strictglobs" => StrictGlobs.ToString().ToLowerInvariant(),
         "completionignorecase" => CompletionIgnoreCase.ToString().ToLowerInvariant(),
+        "aiprovider" => AiProvider,
+        "aimodel" => AiModel,
         _ => ""
     };
 
@@ -211,6 +219,12 @@ public class RushConfig
             case "completionignorecase":
                 if (!bool.TryParse(value, out var ci)) return false;
                 CompletionIgnoreCase = ci;
+                return true;
+            case "aiprovider":
+                AiProvider = value;
+                return true;
+            case "aimodel":
+                AiModel = value;
                 return true;
             default:
                 return false;

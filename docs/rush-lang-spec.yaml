@@ -970,6 +970,19 @@ builtin_functions:
       - { rush: 'name = ask "What is your name? "', note: "Returns string input" }
       - { rush: 'ans = ask "Continue? (y/n) ", char: true', note: "Single character, no Enter needed" }
     transpiles_to: "Read-Host (with char: true → [Console]::ReadKey())"
+  - name: "ai"
+    description: "AI assistant — query an LLM with shell context. Streams response in real-time."
+    examples:
+      - { rush: 'ai "how do I find large files?"', note: "Simple prompt" }
+      - { rush: 'ai "what went wrong?" < error.log', note: "File context via redirection" }
+      - { rush: 'cat error.log | ai "what went wrong?"', note: "Pipe context into AI" }
+      - { rush: 'ai --provider ollama "hello"', note: "Use a specific provider" }
+      - { rush: 'ai --model gpt-4o "explain this"', note: "Use a specific model" }
+    transpiles_to: "native (HttpClient streaming to console)"
+    config:
+      - { key: "aiProvider", default: "anthropic", options: "anthropic, openai, gemini, ollama, or custom" }
+      - { key: "aiModel", default: "auto", note: "auto = use provider default model" }
+    setup: "set --secret ANTHROPIC_API_KEY sk-ant-..."
 
 # ============================================================================
 # STANDARD LIBRARY OBJECTS

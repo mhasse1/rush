@@ -21,6 +21,10 @@ if (args.Contains("--login") || args.Contains("-l"))
 // Strip login flags so they don't interfere with other argument parsing
 args = args.Where(a => a is not "--login" and not "-l").ToArray();
 
+// ── Hot-Reload Resume Detection ──────────────────────────────────────
+bool isResuming = args.Contains("--resume");
+args = args.Where(a => a != "--resume").ToArray();
+
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
 {
@@ -133,6 +137,9 @@ lineEditor.ShowCompletionsHandler = () =>
 // ── Run Startup Scripts ─────────────────────────────────────────────
 RunStartupScripts(runspace, scriptEngine);
 
+// ── Capture State Baseline (for reload --hard) ──────────────────────
+ReloadState.CaptureBaseline(runspace);
+
 // ── State ────────────────────────────────────────────────────────────
 string? previousDirectory = null;
 var dirStack = new Stack<string>();
@@ -142,6 +149,28 @@ bool setE = cfgStopOnError;   // set -e: exit on error (from config or set -e)
 bool setX = cfgTrace;         // set -x: trace commands (from config or set -x)
 bool setPipefail = cfgPipefail; // set -o pipefail (from config or set -o pipefail)
 bool signalExit = false; // Set by SIGHUP/SIGTERM to trigger graceful exit
+
+// ── Hot-Reload State Restoration ─────────────────────────────────────
+if (isResuming)
+{
+    try
+    {
+        var saved = ReloadState.Load();
+        if (saved != null)
+        {
+            ReloadState.Restore(saved, runspace, ref previousDirectory, ref setE, ref setX, ref setPipefail);
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  session restored");
+            Console.ResetColor();
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"resume: {ex.Message}");
+        Console.ResetColor();
+    }
+}
 
 // ── Signal Handling ──────────────────────────────────────────────────
 Console.CancelKeyPress += (_, e) =>
@@ -672,6 +701,41 @@ while (true)
                     lastSegmentFailed = true;
                 }
             }
+            else if (setArg.StartsWith("--secret ", StringComparison.OrdinalIgnoreCase))
+            {
+                // set --secret KEY value — persist env var to secrets.rush
+                var rest = setArg[9..].Trim();
+                var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 2)
+                {
+                    var secretKey = parts[0];
+                    var secretVal = parts[1].Trim('"', '\'');
+                    // Set in current session immediately
+                    Environment.SetEnvironmentVariable(secretKey, secretVal);
+                    // Persist to secrets.rush
+                    try
+                    {
+                        SecretsFile.SetExport(secretKey, secretVal);
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  {secretKey} = *** (saved to secrets.rush)");
+                        Console.ResetColor();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine($"  error saving secret: {ex.Message}");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                    }
+                }
+                else
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine("  usage: set --secret <KEY> <value>");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
             else
             {
                 // set key value — change for session
@@ -764,15 +828,52 @@ while (true)
             continue;
         }
 
-        if (segment.Equals("reload", StringComparison.OrdinalIgnoreCase))
+        if (segment.Equals("reload", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("reload ", StringComparison.OrdinalIgnoreCase))
         {
-            config = RushConfig.Load();
-            var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
-            setE = reloadE; setX = reloadX; setPipefail = reloadPf;
-            Theme.Initialize(config.GetThemeOverride());
-            Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine("  config reloaded");
-            Console.ResetColor();
+            var reloadArg = segment.Length > 6 ? segment[6..].Trim() : "";
+            if (reloadArg.Equals("--hard", StringComparison.OrdinalIgnoreCase))
+            {
+                // Full binary restart with state preservation
+                try
+                {
+                    var state = ReloadState.Capture(runspace, config, previousDirectory, setE, setX, setPipefail);
+                    ReloadState.Save(state);
+                    lineEditor.SaveHistory();
+
+                    var currentBinary = Environment.ProcessPath ?? "rush";
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine("  restarting rush...");
+                    Console.ResetColor();
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = currentBinary,
+                        ArgumentList = { "--resume" },
+                        UseShellExecute = false
+                    };
+                    Process.Start(psi);
+                    Environment.Exit(0);
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"reload: {ex.Message}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                }
+            }
+            else
+            {
+                // Soft reload — config only (existing behavior)
+                config = RushConfig.Load();
+                var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
+                setE = reloadE; setX = reloadX; setPipefail = reloadPf;
+                Theme.Initialize(config.GetThemeOverride());
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine("  config reloaded");
+                Console.ResetColor();
+            }
             lastSegmentFailed = false;
             continue;
         }
@@ -1137,6 +1238,41 @@ while (true)
         }
 
         // ── path: PATH management ─────────────────────────────────────
+        // ── ai builtin ────────────────────────────────────────────
+        if (segment.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("ai ", StringComparison.OrdinalIgnoreCase))
+        {
+            var (aiCmd, _, aiStdin) = RedirectionParser.Parse(segment);
+            var aiArgs = aiCmd.Length > 2 ? aiCmd[2..].TrimStart() : "";
+            string? pipedInput = null;
+            if (aiStdin != null)
+            {
+                try { pipedInput = File.ReadAllText(aiStdin.FilePath); }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"ai: {ex.Message}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                    continue;
+                }
+            }
+            using var aiCts = new CancellationTokenSource();
+            ConsoleCancelEventHandler aiCancel = (_, e) => { e.Cancel = true; aiCts.Cancel(); };
+            Console.CancelKeyPress += aiCancel;
+            try
+            {
+                var (aiOk, _) = AiCommand.ExecuteAsync(aiArgs, pipedInput, config,
+                    lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
+                lastSegmentFailed = !aiOk;
+            }
+            finally
+            {
+                Console.CancelKeyPress -= aiCancel;
+            }
+            continue;
+        }
+
         if (segment.Equals("path", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("path ", StringComparison.OrdinalIgnoreCase))
         {
@@ -1217,6 +1353,53 @@ while (true)
             || redirect != null
             || stdinRedirect != null
             || CommandTranslator.HasUnquotedPipe(cmdPart);
+
+        // ── Pipe-to-AI interception ── cmd | ai "prompt" ──────────
+        if (CommandTranslator.HasUnquotedPipe(cmdPart))
+        {
+            var pipeSegs = CommandTranslator.SplitOnPipe(cmdPart);
+            var lastPipeSeg = pipeSegs[^1].Trim();
+            if (lastPipeSeg.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
+                lastPipeSeg.StartsWith("ai ", StringComparison.OrdinalIgnoreCase))
+            {
+                // Execute everything before | ai through PowerShell, capture output
+                var prePipeline = string.Join(" | ", pipeSegs[..^1]);
+                var aiPipeArgs = lastPipeSeg.Length > 2 ? lastPipeSeg[2..].TrimStart() : "";
+                string pipedContent;
+                try
+                {
+                    using var ps = PowerShell.Create();
+                    ps.Runspace = runspace;
+                    // Translate the prefix pipeline
+                    var preTrans = translator.Translate(prePipeline) ?? prePipeline;
+                    ps.AddScript(preTrans);
+                    var results = ps.Invoke();
+                    pipedContent = string.Join("\n", results.Select(r => r?.ToString() ?? ""));
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    Console.Error.WriteLine($"ai: pipe error: {ex.Message}");
+                    Console.ResetColor();
+                    lastSegmentFailed = true;
+                    continue;
+                }
+                using var aiPipeCts = new CancellationTokenSource();
+                ConsoleCancelEventHandler aiPipeCancel = (_, e) => { e.Cancel = true; aiPipeCts.Cancel(); };
+                Console.CancelKeyPress += aiPipeCancel;
+                try
+                {
+                    var (aiPipeOk, _) = AiCommand.ExecuteAsync(aiPipeArgs, pipedContent, config,
+                        lineEditor.History, aiPipeCts.Token).GetAwaiter().GetResult();
+                    lastSegmentFailed = !aiPipeOk;
+                }
+                finally
+                {
+                    Console.CancelKeyPress -= aiPipeCancel;
+                }
+                continue;
+            }
+        }
 
         if (!needsPowerShell)
         {
@@ -3010,7 +3193,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
@@ -3304,6 +3487,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  export     — set env var: export FOO=bar");
     Console.WriteLine("  unset      — remove env var: unset FOO");
     Console.WriteLine("  path       — manage PATH: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit]");
+    Console.WriteLine("  ai         — AI assistant: ai \"prompt\"  cat log | ai \"what went wrong?\"");
     Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
     Console.WriteLine("  source     — run rush script: source file.rush");
     Console.WriteLine("  $(cmd)     — command substitution: echo $(ls | count)");
@@ -3317,6 +3501,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  history    — show command history (persistent)");
     Console.WriteLine("  alias      — show command mappings (no args)");
     Console.WriteLine("  set        — show all settings (set <key> <value> to change, --save to persist)");
+    Console.WriteLine("  set --secret KEY val — save API key/token to secrets.rush");
     Console.WriteLine("  set -e/-x  — stop on error / trace commands (bash-compatible)");
     Console.WriteLine("  sync       — config sync: sync init [github|ssh|path] | push | pull | status");
     Console.WriteLine("  reload     — reload config");

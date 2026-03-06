@@ -56,6 +56,11 @@
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.4.7" />
   </ItemGroup>
 
+  <!-- ── Embedded AI context ──────────────────────────────────────────── -->
+  <ItemGroup>
+    <EmbeddedResource Include="docs/rush-lang-spec.yaml" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="Rush.Tests" />
   </ItemGroup>

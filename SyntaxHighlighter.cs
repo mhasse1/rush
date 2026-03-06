@@ -30,7 +30,8 @@ public class SyntaxHighlighter
         "jobs", "fg", "bg", "wait", // Job control
         "pushd", "popd", "dirs", // Directory stack
         "printf", "read", "exec", "trap", // Shell builtins
-        "path" // PATH management
+        "path", // PATH management
+        "ai" // AI assistant
     };
 
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)
