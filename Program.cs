@@ -273,18 +273,22 @@ while (true)
             bool showingHint = continuationCount >= 3;
             if (showingHint)
             {
-                Console.Write("\x1b[s");  // save cursor position
+                int savedCol = Console.CursorLeft;
+                int savedRow = Console.CursorTop;
                 Console.ForegroundColor = Theme.Current.Muted;
-                Console.Write($"\n# ({lineEditor.EditInEditorHint})");
+                Console.Write($"\n\n# ({lineEditor.EditInEditorHint})");
                 Console.ResetColor();
-                Console.Write("\x1b[u");  // restore cursor position
+                try { Console.SetCursorPosition(savedCol, savedRow); } catch { }
             }
 
             var continuation = lineEditor.ReadLine();
 
-            // Clean up hint line (cursor is now on hint line after Enter)
+            // Clean up hint + blank line below (cursor moved down after Enter)
             if (showingHint)
-                Console.Write("\x1b[2K\r");
+            {
+                Console.Write("\x1b[J");
+                Console.Out.Flush();
+            }
 
             if (continuation == null) break;           // Ctrl+D
             if (continuation == "") { input = ""; break; }  // Ctrl+C — cancel block
@@ -293,9 +297,9 @@ while (true)
             if (continuation == "\x16")
             {
                 var editorContent = input + "\n" + lineEditor.CurrentBuffer;
-                var edited = OpenInEditor(editorContent);
+                var edited = OpenInEditor(IndentRushBlock(editorContent, scriptEngine));
                 if (edited == null) { input = ""; break; }
-                input = edited;
+                input = StripLeadingWhitespace(edited);
                 break;
             }
 
@@ -1921,7 +1925,8 @@ static string? OpenInEditor(string content)
     try
     {
         tempFile = Path.Combine(Path.GetTempPath(), $"rush-edit-{Guid.NewGuid():N}.rush");
-        File.WriteAllText(tempFile, content + "\n");
+        var originalContent = content + "\n";
+        File.WriteAllText(tempFile, originalContent);
 
         var psi = new ProcessStartInfo(editor, tempFile) { UseShellExecute = false };
         var proc = Process.Start(psi);
@@ -1936,14 +1941,24 @@ static string? OpenInEditor(string content)
 
         if (proc.ExitCode != 0)
         {
-            Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine("  editor cancelled");
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine("command cancelled");
             Console.ResetColor();
             return null;
         }
         proc.Dispose();
 
-        var result = File.ReadAllText(tempFile).TrimEnd('\n', '\r');
+        var result = File.ReadAllText(tempFile);
+        // If file unchanged (e.g. :q! in vim), treat as cancelled
+        if (result == originalContent)
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine("command cancelled");
+            Console.ResetColor();
+            return null;
+        }
+
+        result = result.TrimEnd('\n', '\r');
         return string.IsNullOrWhiteSpace(result) ? null : result;
     }
     catch (Exception ex)
@@ -1957,6 +1972,44 @@ static string? OpenInEditor(string content)
     {
         if (tempFile != null) try { File.Delete(tempFile); } catch { }
     }
+}
+
+/// <summary>
+/// Auto-indent a Rush block for display in an editor.
+/// Walks lines progressively, computing block depth to determine indent.
+/// </summary>
+static string IndentRushBlock(string code, ScriptEngine engine)
+{
+    var lines = code.Split('\n');
+    var sb = new System.Text.StringBuilder();
+    var accumulated = "";
+    for (int i = 0; i < lines.Length; i++)
+    {
+        var line = lines[i].Trim();
+        if (i == 0)
+        {
+            sb.AppendLine(line);
+            accumulated = line;
+            continue;
+        }
+        var depth = engine.GetBlockDepth(accumulated);
+        if (depth < 0) depth = 1;
+        // `end` gets outdented to match its block opener
+        if (line.Equals("end", StringComparison.OrdinalIgnoreCase))
+            depth = Math.Max(0, depth - 1);
+        sb.AppendLine(new string(' ', depth * 2) + line);
+        accumulated += "\n" + line;
+    }
+    return sb.ToString().TrimEnd('\n', '\r');
+}
+
+/// <summary>
+/// Strip leading whitespace from each line (for execution after editor edit).
+/// </summary>
+static string StripLeadingWhitespace(string code)
+{
+    var lines = code.Split('\n');
+    return string.Join("\n", lines.Select(l => l.TrimStart()));
 }
 
 // ── PATH Management ─────────────────────────────────────────────────

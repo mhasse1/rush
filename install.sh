@@ -41,6 +41,20 @@ if [[ "${1:-}" == "--dev" ]]; then
     exit 0
 fi
 
+# ── Fast path: symlink already points at publish dir ─────────────────
+# If a previous --dev install created a direct symlink, just rebuild.
+if [[ -L "$BIN_LINK" ]] && [[ "$(readlink "$BIN_LINK")" == "$PUBLISH_DIR/rush" ]]; then
+    echo "Building release binary..."
+    export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"
+    export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
+    dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
+
+    VERSION=$("$PUBLISH_DIR/rush" --version 2>/dev/null || echo "unknown")
+    echo ""
+    echo "Installed: $VERSION  (dev symlink)"
+    exit 0
+fi
+
 # ── Standard install: copy to /usr/local/lib/rush ────────────────────
 echo "Building release binary..."
 export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"

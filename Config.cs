@@ -412,8 +412,8 @@ public class RushConfig
 
                     # ── Functions ─────────────────────────────────────────────
                     # def mkcd(dir)
-                    #   mkdir -p #{dir}
-                    #   cd #{dir}
+                    #   mkdir -p $dir
+                    #   cd $dir
                     # end
 
                     # ── Custom Prompt ────────────────────────────────────────
