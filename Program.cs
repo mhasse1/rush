@@ -258,19 +258,9 @@ while (true)
     {
         // Accumulate multi-line blocks (if/end, def/end, etc.) with auto-indent
         int continuationCount = 0;
-        bool hintShown = false;
         while (scriptEngine.IsIncomplete(input))
         {
             continuationCount++;
-
-            // Show editor hint after 3 continuation lines (once)
-            if (continuationCount == 3 && !hintShown)
-            {
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  ({lineEditor.EditInEditorHint})");
-                Console.ResetColor();
-                hintShown = true;
-            }
 
             var depth = scriptEngine.GetBlockDepth(input);
             if (depth < 0) depth = 1; // Lexer failed — assume 1 level
@@ -278,7 +268,24 @@ while (true)
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(indent);
             Console.ResetColor();
+
+            // Floating hint below cursor (from line 3 onwards)
+            bool showingHint = continuationCount >= 3;
+            if (showingHint)
+            {
+                Console.Write("\x1b[s");  // save cursor position
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.Write($"\n# ({lineEditor.EditInEditorHint})");
+                Console.ResetColor();
+                Console.Write("\x1b[u");  // restore cursor position
+            }
+
             var continuation = lineEditor.ReadLine();
+
+            // Clean up hint line (cursor is now on hint line after Enter)
+            if (showingHint)
+                Console.Write("\x1b[2K\r");
+
             if (continuation == null) break;           // Ctrl+D
             if (continuation == "") { input = ""; break; }  // Ctrl+C — cancel block
 
