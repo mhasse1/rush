@@ -586,9 +586,24 @@ public class CommandMapping
 
         var psArgs = new List<string>();
         var positionalArgs = new List<string>();
+        var redirectionParts = new List<string>();
+        bool inRedirection = false;
 
         foreach (var arg in args)
         {
+            // Shell redirection operators — pass through unquoted after the command
+            if (!inRedirection && (arg == ">" || arg == ">>" || arg == "2>" || arg == "2>>"))
+            {
+                inRedirection = true;
+                redirectionParts.Add(arg);
+                continue;
+            }
+            if (inRedirection)
+            {
+                redirectionParts.Add(arg);
+                continue;
+            }
+
             if (arg.StartsWith('-') && FlagMap.TryGetValue(arg, out var psFlag))
             {
                 // Exact match in flag map (e.g., -l, -a, -la)
@@ -633,6 +648,9 @@ public class CommandMapping
         {
             parts.AddRange(positionalArgs);
         }
+
+        // Append redirection operators after the command (not inside quotes)
+        parts.AddRange(redirectionParts);
 
         return string.Join(' ', parts);
     }
