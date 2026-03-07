@@ -114,6 +114,8 @@ internal static class AiAgent
         string? modelOverride,
         IReadOnlyList<string> history,
         RushConfig config,
+        bool verbose,
+        bool debug,
         CancellationToken ct)
     {
         // ── Validate provider
@@ -147,6 +149,21 @@ internal static class AiAgent
         // ── Build system prompt
         var systemPrompt = BuildAgentSystemPrompt(llm, history);
 
+        // ── Debug log setup
+        StreamWriter? debugLog = null;
+        string? debugLogPath = null;
+        if (debug)
+        {
+            debugLogPath = Path.Combine(Path.GetTempPath(), "rush-agent.log");
+            debugLog = new StreamWriter(debugLogPath, append: false, Encoding.UTF8) { AutoFlush = true };
+            debugLog.WriteLine($"═══ Rush Agent Debug Log ═══");
+            debugLog.WriteLine($"Time:     {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            debugLog.WriteLine($"Task:     {task}");
+            debugLog.WriteLine($"Provider: {resolvedProvider}");
+            debugLog.WriteLine($"Model:    {model}");
+            debugLog.WriteLine();
+        }
+
         // ── Print header
         var truncatedTask = task.Length > 60 ? task[..57] + "..." : task;
         Console.WriteLine();
@@ -154,6 +171,12 @@ internal static class AiAgent
         Console.Write("\U0001F916 ");
         Console.WriteLine($"Starting agent: {truncatedTask}");
         Console.ResetColor();
+        if (debug && debugLogPath != null)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"  debug log: {debugLogPath}");
+            Console.ResetColor();
+        }
         Console.WriteLine();
 
         // ── Build initial messages (provider-specific format)
@@ -176,6 +199,10 @@ internal static class AiAgent
             {
                 ct.ThrowIfCancellationRequested();
                 turnCount++;
+
+                // Debug: log turn start
+                debugLog?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ═══ Turn {turnCount} ═══");
+                debugLog?.WriteLine();
 
                 // Call LLM with tools
                 var turnBlocks = new List<object>(); // assistant content blocks for this turn
@@ -228,6 +255,14 @@ internal static class AiAgent
                 {
                     Console.WriteLine();
                     summaryText.Append(thinkingBuffer);
+                }
+
+                // Debug: log thinking text
+                if (debugLog != null && thinkingBuffer.Length > 0)
+                {
+                    debugLog.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── thinking ──");
+                    debugLog.WriteLine(thinkingBuffer.ToString().TrimEnd());
+                    debugLog.WriteLine();
                 }
 
                 // ── Build assistant content blocks for message history ──
@@ -323,6 +358,18 @@ internal static class AiAgent
                     Console.WriteLine(command);
                     Console.ResetColor();
 
+                    // Verbose: show tool_use JSON inline
+                    if (verbose)
+                        PrintJsonBox("tool_use", input);
+
+                    // Debug: log tool_use
+                    if (debugLog != null)
+                    {
+                        debugLog.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── tool_use: {name} ──");
+                        debugLog.WriteLine(FormatJson(input));
+                        debugLog.WriteLine();
+                    }
+
                     // Execute via LlmMode
                     var result = llm.ExecuteCommand(execCommand);
                     commandCount++;
@@ -335,6 +382,18 @@ internal static class AiAgent
                     {
                         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
                     });
+
+                    // Verbose: show tool_result JSON inline
+                    if (verbose)
+                        PrintJsonBox("tool_result", TruncateJson(resultJson, 500));
+
+                    // Debug: log full tool_result
+                    if (debugLog != null)
+                    {
+                        debugLog.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── tool_result ({result.Status}) ──");
+                        debugLog.WriteLine(FormatJson(resultJson));
+                        debugLog.WriteLine();
+                    }
 
                     if (isGemini)
                         toolResultParts.Add(new { functionResponse = new { name, response = new { content = resultJson } } });
@@ -355,21 +414,29 @@ internal static class AiAgent
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine("  Agent cancelled.");
             Console.ResetColor();
+            debugLog?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── CANCELLED ──");
+            debugLog?.Dispose();
             return (false, "");
         }
         catch (AiException ex)
         {
             WriteAgentError(ex.Message);
+            debugLog?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── ERROR: {ex.Message} ──");
+            debugLog?.Dispose();
             return (false, "");
         }
         catch (HttpRequestException ex)
         {
             WriteAgentError($"network error: {ex.Message}");
+            debugLog?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── NETWORK ERROR: {ex.Message} ──");
+            debugLog?.Dispose();
             return (false, "");
         }
         catch (Exception ex)
         {
             WriteAgentError($"error: {ex.Message}");
+            debugLog?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── ERROR: {ex.Message} ──");
+            debugLog?.Dispose();
             return (false, "");
         }
 
@@ -378,10 +445,18 @@ internal static class AiAgent
         Console.WriteLine();
         Console.ForegroundColor = ConsoleColor.DarkGray;
         var elapsed = totalSw.Elapsed.TotalSeconds;
-        Console.WriteLine($"  Done. {commandCount} command{(commandCount != 1 ? "s" : "")}, " +
-                          $"{turnCount} turn{(turnCount != 1 ? "s" : "")}, {elapsed:F1}s");
+        var summaryLine = $"Done. {commandCount} command{(commandCount != 1 ? "s" : "")}, " +
+                          $"{turnCount} turn{(turnCount != 1 ? "s" : "")}, {elapsed:F1}s";
+        Console.WriteLine($"  {summaryLine}");
         Console.ResetColor();
         Console.WriteLine();
+
+        // Debug: finalize log
+        if (debugLog != null)
+        {
+            debugLog.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ═══ {summaryLine} ═══");
+            debugLog.Dispose();
+        }
 
         return (true, summaryText.ToString());
     }
@@ -721,5 +796,51 @@ internal static class AiAgent
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"ai --agent: {message}");
         Console.ResetColor();
+    }
+
+    // ── Verbose / Debug Helpers ──────────────────────────────────────
+
+    /// <summary>Print a JSON payload in a box-drawing frame (for --verbose)</summary>
+    private static void PrintJsonBox(string label, string json)
+    {
+        var formatted = FormatJson(json);
+        var lines = formatted.Split('\n');
+
+        Console.ForegroundColor = ConsoleColor.DarkYellow;
+        Console.WriteLine($"  \u256d\u2500 {label}");
+        foreach (var line in lines)
+        {
+            Console.Write("  \u2502 ");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine(line);
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+        }
+        Console.WriteLine("  \u2570\u2500");
+        Console.ResetColor();
+    }
+
+    /// <summary>Pretty-print JSON, falling back to raw string on parse failure.</summary>
+    private static string FormatJson(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    /// <summary>Truncate JSON string for inline display, preserving valid JSON structure hint.</summary>
+    private static string TruncateJson(string json, int maxLen)
+    {
+        if (json.Length <= maxLen)
+            return json;
+        return json[..maxLen] + " ...(truncated)";
     }
 }

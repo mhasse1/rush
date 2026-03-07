@@ -139,13 +139,19 @@ public static class AiCommand
     {
         var (prompt, providerName, modelOverride, _, _) = ParseArgs(arguments);
 
+        // Agent-only flags: --verbose (inline JSON) and --debug (log file)
+        var tokens = TokenizeArgs(arguments);
+        bool verbose = tokens.Any(t => t.Equals("--verbose", StringComparison.OrdinalIgnoreCase));
+        bool debug = tokens.Any(t => t.Equals("--debug", StringComparison.OrdinalIgnoreCase));
+
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            WriteError("usage: ai --agent \"your task\"");
+            WriteError("usage: ai --agent [--verbose] [--debug] \"your task\"");
             return (false, "");
         }
 
-        return await AiAgent.RunAsync(prompt, llm, providerName, modelOverride, history, config, ct);
+        return await AiAgent.RunAsync(prompt, llm, providerName, modelOverride,
+            history, config, verbose, debug, ct);
     }
 
     // ── Argument Parsing ──────────────────────────────────────────────
