@@ -132,7 +132,7 @@ internal static class AiAgent
         var configModel = config.AiModel;
         if (string.Equals(configModel, "auto", StringComparison.OrdinalIgnoreCase))
             configModel = "";
-        var defaultModel = isGemini ? "gemini-2.0-flash" : "claude-sonnet-4-20250514";
+        var defaultModel = isGemini ? "gemini-2.0-flash" : "claude-sonnet-4-6";
         var model = !string.IsNullOrEmpty(modelOverride) ? modelOverride
             : !string.IsNullOrEmpty(configModel) ? configModel
             : defaultModel;
@@ -212,6 +212,21 @@ internal static class AiAgent
                 var inputJsonAccum = new StringBuilder();
                 var thinkingBuffer = new StringBuilder();
                 bool hadText = false;
+
+                // Debug: log outgoing request body
+                if (debugLog != null)
+                {
+                    var debugBody = isGemini ? "(gemini body)" : JsonSerializer.Serialize(new
+                    {
+                        model, max_tokens = MaxTokens, stream = true,
+                        system = systemPrompt.Length > 200 ? systemPrompt[..200] + "..." : systemPrompt,
+                        tools = new[] { AnthropicToolDef },
+                        messages
+                    }, new JsonSerializerOptions { WriteIndented = true });
+                    debugLog.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] ── request body ──");
+                    debugLog.WriteLine(debugBody);
+                    debugLog.WriteLine();
+                }
 
                 var eventStream = isGemini
                     ? StreamGeminiAgent(systemPrompt, messages, model, apiKey, ct)

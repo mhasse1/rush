@@ -330,11 +330,16 @@ internal static class AiHttpClient
         if (resp.IsSuccessStatusCode) return;
 
         var status = (int)resp.StatusCode;
+        string? errorBody = null;
+        try { errorBody = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult(); }
+        catch { /* ignore */ }
+
+        var detail = !string.IsNullOrEmpty(errorBody) ? $"\n{errorBody}" : "";
         throw status switch
         {
-            401 or 403 => new AiException("auth failed. Check API key in secrets.rush"),
-            429 => new AiException("rate limited. Try again shortly."),
-            _ => new AiException($"HTTP {status}: {resp.ReasonPhrase}")
+            401 or 403 => new AiException($"auth failed. Check API key in secrets.rush{detail}"),
+            429 => new AiException($"rate limited. Try again shortly.{detail}"),
+            _ => new AiException($"HTTP {status}: {resp.ReasonPhrase}{detail}")
         };
     }
 }
