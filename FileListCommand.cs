@@ -53,6 +53,10 @@ public static class FileListCommand
     {
         var opts = ParseArgs(argsStr);
         var paths = opts.Paths.Count > 0 ? opts.Paths : new List<string> { "." };
+
+        // Expand glob patterns (*, ?, [) in paths
+        paths = ExpandGlobs(paths);
+
         bool multiPath = paths.Count > 1;
         bool anyError = false;
 
@@ -890,6 +894,59 @@ public static class FileListCommand
     }
 
     // ── Error Output ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Expand glob patterns (*, ?, [) in path arguments.
+    /// Non-glob paths pass through unchanged. Globs that match nothing
+    /// pass through as-is (will produce "No such file" error later).
+    /// </summary>
+    private static List<string> ExpandGlobs(List<string> paths)
+    {
+        var result = new List<string>();
+        foreach (var p in paths)
+        {
+            // Skip paths without glob characters
+            if (!p.Contains('*') && !p.Contains('?') && !p.Contains('['))
+            {
+                result.Add(p);
+                continue;
+            }
+
+            // Expand ~ before globbing
+            var expanded = p;
+            if (expanded.StartsWith("~/") || expanded == "~")
+            {
+                var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+                expanded = expanded == "~" ? home : Path.Combine(home, expanded[2..]);
+            }
+
+            // Split into directory and pattern
+            var dir = Path.GetDirectoryName(expanded);
+            var pattern = Path.GetFileName(expanded);
+            if (string.IsNullOrEmpty(dir))
+                dir = Environment.CurrentDirectory;
+            dir = Path.GetFullPath(dir);
+
+            try
+            {
+                var matches = Directory.GetFileSystemEntries(dir, pattern);
+                if (matches.Length > 0)
+                {
+                    Array.Sort(matches, StringComparer.OrdinalIgnoreCase);
+                    result.AddRange(matches);
+                }
+                else
+                {
+                    result.Add(p); // No matches — keep original for error message
+                }
+            }
+            catch
+            {
+                result.Add(p); // Directory doesn't exist — keep original
+            }
+        }
+        return result;
+    }
 
     private static void PrintError(string msg)
     {
