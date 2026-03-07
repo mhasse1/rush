@@ -7,3 +7,4 @@ publish/
 *.DotSettings.user
 *.swp
 *~
+.DS_Store
