@@ -8,8 +8,15 @@ using Rush;
 // ── PowerShell Home Directory ─────────────────────────────────────
 // Single-file publish makes Assembly.Location empty, so PowerShell can't
 // find powershell.config.json and crashes. Set PSHOME to the binary's dir.
+// AppContext.BaseDirectory can also be empty for single-file; fall back to
+// the directory of the running process executable.
 if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PSHOME")))
-    Environment.SetEnvironmentVariable("PSHOME", AppContext.BaseDirectory);
+{
+    var baseDir = AppContext.BaseDirectory;
+    if (string.IsNullOrEmpty(baseDir))
+        baseDir = Path.GetDirectoryName(Environment.ProcessPath) ?? "/usr/local/bin";
+    Environment.SetEnvironmentVariable("PSHOME", baseDir);
+}
 
 // Version is derived from git at build time (see Rush.csproj GitVersion target).
 // InformationalVersion = "1.2.348-a3b4c5d" (commit count + short SHA)
