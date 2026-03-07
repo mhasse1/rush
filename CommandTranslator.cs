@@ -570,12 +570,27 @@ public class CommandMapping
         {
             if (arg.StartsWith('-') && FlagMap.TryGetValue(arg, out var psFlag))
             {
+                // Exact match in flag map (e.g., -l, -a, -la)
                 if (!string.IsNullOrEmpty(psFlag))
                     psArgs.Add(psFlag);
             }
+            else if (arg.StartsWith('-') && !arg.StartsWith("--") && arg.Length > 2)
+            {
+                // Decompose combined single-char flags: -lah → -l, -a, -h
+                foreach (var ch in arg[1..])
+                {
+                    var singleFlag = $"-{ch}";
+                    if (FlagMap.TryGetValue(singleFlag, out var mapped))
+                    {
+                        if (!string.IsNullOrEmpty(mapped))
+                            psArgs.Add(mapped);
+                    }
+                    // Unknown single-char flags silently ignored (e.g., -h for ls)
+                }
+            }
             else if (arg.StartsWith('-'))
             {
-                // Unknown flag — pass it through as-is to PowerShell
+                // Long flag or unrecognized — pass through to PowerShell
                 psArgs.Add(arg);
             }
             else
