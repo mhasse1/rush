@@ -14,7 +14,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_SimpleQuotedPrompt()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("\"how do I find large files?\"");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("\"how do I find large files?\"");
         Assert.Equal("how do I find large files?", prompt);
         Assert.Null(provider);
         Assert.Null(model);
@@ -24,7 +24,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_UnquotedPrompt()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("hello world");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("hello world");
         Assert.Equal("hello world", prompt);
         Assert.Null(provider);
     }
@@ -32,7 +32,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_ProviderFlag()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("--provider ollama \"hello\"");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("--provider ollama \"hello\"");
         Assert.Equal("hello", prompt);
         Assert.Equal("ollama", provider);
         Assert.Null(model);
@@ -41,7 +41,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_ModelFlag()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("--model gpt-4o \"explain this\"");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("--model gpt-4o \"explain this\"");
         Assert.Equal("explain this", prompt);
         Assert.Null(provider);
         Assert.Equal("gpt-4o", model);
@@ -50,7 +50,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_AllFlags()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs(
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs(
             "--provider openai --model gpt-4o --system \"be brief\" \"what is rush?\"");
         Assert.Equal("what is rush?", prompt);
         Assert.Equal("openai", provider);
@@ -61,7 +61,7 @@ public class AiCommandTests
     [Fact]
     public void ParseArgs_EmptyInput()
     {
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("");
         Assert.Equal("", prompt);
         Assert.Null(provider);
         Assert.Null(model);
@@ -71,9 +71,34 @@ public class AiCommandTests
     public void ParseArgs_FlagsAfterPrompt()
     {
         // Flags and prompt can be in any order
-        var (prompt, provider, model, system) = AiCommand.ParseArgs("\"hello\" --provider gemini");
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("\"hello\" --provider gemini");
         Assert.Equal("hello", prompt);
         Assert.Equal("gemini", provider);
+    }
+
+    [Fact]
+    public void ParseArgs_AgentFlag()
+    {
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("--agent \"deploy the app\"");
+        Assert.Equal("deploy the app", prompt);
+        Assert.True(agent);
+        Assert.Null(provider);
+    }
+
+    [Fact]
+    public void ParseArgs_AgentWithProvider()
+    {
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("--agent --provider anthropic \"check logs\"");
+        Assert.Equal("check logs", prompt);
+        Assert.True(agent);
+        Assert.Equal("anthropic", provider);
+    }
+
+    [Fact]
+    public void ParseArgs_NoAgentFlag()
+    {
+        var (prompt, provider, model, system, agent) = AiCommand.ParseArgs("\"just a question\"");
+        Assert.False(agent);
     }
 
     // ── Tokenizer ─────────────────────────────────────────────────────

@@ -132,15 +132,16 @@ public class RushConfig
     /// Apply config settings to the shell components.
     /// Returns (setE, setX, setPipefail) for the REPL loop.
     /// </summary>
-    public (bool stopOnError, bool traceCommands, bool pipefailMode) Apply(LineEditor editor, CommandTranslator translator)
+    public (bool stopOnError, bool traceCommands, bool pipefailMode) Apply(LineEditor? editor, CommandTranslator translator)
     {
-        // Edit mode
-        editor.Mode = EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
-            ? Rush.EditMode.Emacs
-            : Rush.EditMode.Vi;
-
-        // History size
-        editor.MaxHistory = HistorySize;
+        // Edit mode + history size (skip if no editor, e.g. LLM mode)
+        if (editor != null)
+        {
+            editor.Mode = EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
+                ? Rush.EditMode.Emacs
+                : Rush.EditMode.Vi;
+            editor.MaxHistory = HistorySize;
+        }
 
         // Custom aliases
         foreach (var (alias, command) in Aliases)

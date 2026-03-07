@@ -82,6 +82,7 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 - "Did you mean?" suggestions on typos
 - Configurable via `~/.config/rush/config.json`
 - Startup script at `~/.config/rush/init.rush`
+- LLM agent mode (`rush --llm`) — JSON wire protocol for AI-driven automation
 
 ## Configuration
 
@@ -101,6 +102,9 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 ```
 rush                 Start interactive shell
 rush -c 'command'    Execute command and exit
+rush script.rush     Execute a Rush script
+rush --llm           LLM agent mode (JSON wire protocol, runs init.rush)
+rush --llm --inherit /path/state.json   LLM mode with inherited session state
 rush --version       Show version
 rush --help          Show help
 ```
@@ -121,6 +125,7 @@ Key components:
 - `SyntaxHighlighter` — real-time ANSI colorization of commands, flags, strings, operators
 - `Prompt` — git-aware prompt rendering with exit code indication
 - `TabCompleter` — path + command completion via PowerShell's `CommandCompletion` API
+- `LlmMode` — JSON wire protocol for machine-to-machine operation (`rush --llm`)
 
 ## License
 

@@ -1143,23 +1143,115 @@ builtin_functions:
     transpiles_to: "Read-Host (with char: true → [Console]::ReadKey())"
   - name: "ai"
     description: "AI assistant — query an LLM with shell context. Streams response in real-time. Markdown code fences are stripped automatically. Piped commands include stderr."
+    syntax:
+      basic: 'ai "your prompt here"'
+      with_flags: 'ai --provider ollama --model llama3.2 "your prompt"'
+      pipe_context: 'cat file.txt | ai "summarize this"'
+      stdin_redirect: 'ai "explain this" < config.yaml'
+      capture_output: 'ai "generate a Makefile" > Makefile'
+      exec_last: 'ai --exec'
+    semantics:
+      invocation: |
+        ai is a REPL builtin, not a Rush expression. It is handled directly
+        in the command loop before transpilation. It cannot appear on the
+        right side of an assignment — `result = ai "prompt"` is NOT valid.
+      output: |
+        Tokens stream to stdout in real-time as they arrive from the API.
+        The complete response is stored internally for ai --exec.
+        To capture output, use shell redirection: ai "prompt" > file.txt
+      turns: "Single-turn by default. Each ai call sends one system message + one user message. No conversation state is preserved. Use ai --agent for multi-turn autonomous execution."
+      pipe_to_ai: |
+        When the last segment of a pipeline is `ai`, Rush intercepts it:
+        runs everything before `| ai` through PowerShell, captures stdout,
+        and passes it to the AI as context. The user message becomes:
+          [Input]
+          <captured output from pipe>
+
+          [Question]
+          <the prompt>
+      stdin_redirect_behavior: |
+        `ai "prompt" < file` reads the file content and passes it as
+        piped input (same format as pipe-to-ai). Parsed by RedirectionParser.
+      context_injection: |
+        The system prompt automatically includes: Rush version, detailed OS
+        (e.g. "macOS 15.2 (arm64)"), current working directory, last 10
+        commands from history, and the full rush-lang-spec.yaml embedded
+        as a .NET resource. No manual context injection is needed.
+    flags:
+      - { flag: "--provider <name>", description: "Override AI provider for this call" }
+      - { flag: "--model <name>", description: "Override model for this call" }
+      - { flag: "--system <text>", description: "Override the system prompt entirely" }
+      - { flag: "--exec", description: "Execute last AI response as a shell command (separate call, no prompt)" }
+      - { flag: "--agent", description: "Autonomous agent mode — multi-turn task execution with tool_use" }
+    agent_mode:
+      description: |
+        ai --agent "task description" runs the AI as an autonomous agent.
+        The agent executes commands via LlmMode's execution engine (same
+        process, shared runspace) and iterates until the task is complete.
+      behavior: |
+        1. Sends task to LLM API with tool/function calling (run_command tool)
+        2. Streams thinking text to terminal (dim gray)
+        3. Executes tool calls via LlmMode.ExecuteCommand()
+        4. Feeds structured JSON results back to the LLM
+        5. Repeats until LLM sends end_turn or max 25 turns reached
+      tool:
+        name: "run_command"
+        input: '{ "command": "ls -la", "timeout_seconds": 30 }'
+        returns: "LlmResult JSON envelope (status, stdout, stderr, exit_code, cwd)"
+      terminal_output: |
+        Thinking text: dim gray. Commands: cyan with ▸ prefix.
+        Results: ✓ green (success) or ✗ red (error) with one-line summary.
+        Summary line: "Done. N commands, M turns, Xs"
+      supported_providers: "Anthropic (tool_use) and Gemini (function calling). OpenAI support planned."
+    flag_notes: |
+      Flags and prompt can appear in any order. The prompt is whatever tokens
+      remain after flag extraction. Quoted strings are preserved as single tokens.
+      Example: ai --model gpt-4o --provider openai "explain this code"
+      Example: ai --agent "find all TODO comments in the codebase"
+    providers:
+      builtin:
+        - { name: "anthropic", default_model: "claude-sonnet-4-20250514", api_key_env: "ANTHROPIC_API_KEY", note: "Default provider" }
+        - { name: "openai", default_model: "gpt-4o", api_key_env: "OPENAI_API_KEY" }
+        - { name: "gemini", default_model: "gemini-2.0-flash", api_key_env: "GEMINI_API_KEY" }
+        - { name: "ollama", default_model: "llama3.2", api_key_env: "", note: "Local — no API key needed" }
+      custom: |
+        Drop a JSON file in ~/.config/rush/ai-providers/:
+        { "name": "together", "endpoint": "https://api.together.xyz/v1/chat/completions",
+          "format": "openai", "apiKeyEnvVar": "TOGETHER_API_KEY",
+          "defaultModel": "meta-llama/Llama-3-70b-chat-hf" }
+        format field selects the API wire format: openai, anthropic, gemini, or ollama.
+        Custom providers override builtins if names collide.
+      model_override: |
+        --model works per-call and overrides both config and provider default.
+        You can use any model the provider supports:
+          ai --model claude-sonnet-4-20250514 "prompt"   # specific Anthropic model
+          ai --provider openai --model gpt-4o "prompt"   # cross-provider + model
     examples:
-      - { rush: 'ai "how do I find large files?"', note: "Simple prompt" }
-      - { rush: 'ai "what went wrong?" < error.log', note: "File context via redirection" }
-      - { rush: 'cat error.log | ai "what went wrong?"', note: "Pipe context into AI" }
-      - { rush: 'failing-cmd | ai "what happened?"', note: "Stderr is included automatically" }
-      - { rush: 'ai --provider ollama "hello"', note: "Use a specific provider" }
-      - { rush: 'ai --model gpt-4o "explain this"', note: "Use a specific model" }
-      - { rush: 'ai --exec', note: "Execute last AI response as a command" }
-    transpiles_to: "native (HttpClient streaming to console)"
+      - { rush: 'ai "how do I find large files?"', note: "Simple prompt — streams to terminal" }
+      - { rush: 'ai "what went wrong?" < error.log', note: "File context via stdin redirection" }
+      - { rush: 'cat error.log | ai "what went wrong?"', note: "Pipe context into AI — stderr included" }
+      - { rush: 'git diff | ai "write a commit message"', note: "Pipe command output as context" }
+      - { rush: 'ai --provider ollama "hello"', note: "Use a specific provider for this call" }
+      - { rush: 'ai --model gpt-4o "explain this"', note: "Use a specific model for this call" }
+      - { rush: 'ai "generate a dockerfile" > Dockerfile', note: "Capture response to file" }
+      - { rush: 'ai --exec', note: "Run last AI response — prefers code block content" }
+      - { rush: 'ai --system "You are a pirate" "translate this"', note: "Override system prompt" }
+    transpiles_to: "native (not transpiled — HttpClient streaming to console, handled in REPL loop)"
     config:
       - { key: "aiProvider", default: "anthropic", options: "anthropic, openai, gemini, ollama, or custom" }
       - { key: "aiModel", default: "auto", note: "auto = use provider default model" }
     setup: "set --secret ANTHROPIC_API_KEY sk-ant-..."
+    limitations:
+      - "NOT an expression — cannot assign: `result = ai \"prompt\"` is invalid"
+      - "Single-turn only — no multi-turn conversation state"
+      - "No --file flag — use stdin redirection or pipe instead"
+      - "No tool use / function calling — simple chat completion"
+      - "Context window depends on provider/model — large prompts (14k+ tokens) work fine with Claude/GPT-4o but may truncate with smaller models"
     notes:
       - "Markdown code fences (```) are stripped from output automatically"
       - "ai --exec prefers code block content over full response — explanatory text is skipped"
       - "When piping to ai, both stdout and stderr from the prefix command are sent as context"
+      - "Cancellable with Ctrl+C — gracefully stops streaming"
 
 # ============================================================================
 # SHELL BUILTINS (REPL commands — not transpiled, handled directly)
@@ -1250,13 +1342,75 @@ llm_mode:
     JSON wire protocol. Every prompt is a JSON context line. Every command result
     is a JSON envelope. Designed for LLM agents driving the shell programmatically.
   activation: "rush --llm"
+  flags:
+    inherit:
+      syntax: "rush --llm --inherit /path/to/state.json"
+      description: |
+        Carries over live runtime state from a parent interactive session.
+        The state file is consumed (deleted after loading) — one-shot transfer.
+      state_fields:
+        - { field: "env", description: "User-defined environment variables (diffed against baseline)" }
+        - { field: "variables", description: "User-defined PowerShell variables" }
+        - { field: "aliases", description: "Aliases from running session" }
+        - { field: "cwd", description: "Current working directory" }
+        - { field: "previousDirectory", description: "Previous directory (for cd -)" }
+        - { field: "setE", description: "set -e (stop on error)" }
+        - { field: "setX", description: "set -x (trace commands)" }
+        - { field: "setPipefail", description: "set -o pipefail" }
+  startup:
+    description: |
+      Before entering the wire protocol loop, LLM mode runs:
+      1. Config aliases are applied to the command translator
+      2. Rush built-in variables are injected ($os, $hostname, $rush_version, $is_login_shell)
+      3. init.rush and secrets.rush are executed (PATH, exports, functions)
+      4. Baseline snapshot is captured (for state diffing)
+      5. If --inherit is provided, inherited state is restored
+  environment:
+    description: "Environment variables forced on startup to prevent hidden interactive prompts"
+    forced:
+      - { var: "NO_COLOR", value: "1", reason: "Disable ANSI color codes in all output" }
+      - { var: "CI", value: "true", reason: "Signals build tools/installers to skip interactive prompts" }
+      - { var: "GIT_TERMINAL_PROMPT", value: "0", reason: "Forces git to fail-fast instead of prompting for credentials" }
+      - { var: "DEBIAN_FRONTEND", value: "noninteractive", reason: "Prevents package managers from hanging on configuration choices" }
+    ssh_keepalive:
+      description: "SSH commands auto-inject keepalive options so dead connections are detected in ~45s"
+      injected_args: "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
+      note: "Applied to any native command starting with 'ssh'. Prevents indefinite hangs on network partition."
   wire_protocol:
     context_prompt:
       description: "Emitted before each command. Provides host, user, cwd, git state."
+      fields:
+        - { field: "ready", type: "bool", description: "Always true — signals ready for input" }
+        - { field: "host", type: "string", description: "Hostname (prevents LLM hallucinating which machine)" }
+        - { field: "user", type: "string", description: "Current user" }
+        - { field: "cwd", type: "string", description: "Current working directory (full path)" }
+        - { field: "git_branch", type: "string?", description: "Git branch name (omitted if not in a repo)" }
+        - { field: "git_dirty", type: "bool", description: "Whether there are uncommitted changes" }
+        - { field: "last_exit_code", type: "int", description: "Exit code of previous command" }
+        - { field: "shell", type: "string", description: "Always 'rush'" }
+        - { field: "version", type: "string", description: "Rush version string" }
       example: '{"ready":true,"host":"server","user":"mark","cwd":"/home/mark","git_branch":"main","git_dirty":false,"last_exit_code":0,"shell":"rush","version":"1.2.54"}'
     result_envelope:
       description: "Emitted after each command execution."
-      example: '{"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"...","stderr":"","duration_ms":12}'
+      fields:
+        - { field: "status", type: "string", description: "success | error | syntax_error | output_limit" }
+        - { field: "exit_code", type: "int", description: "Process exit code" }
+        - { field: "cwd", type: "string", description: "Working directory after command (may have changed via cd)" }
+        - { field: "stdout", type: "string | array", description: "Captured output — string for text, JSON array for objects" }
+        - { field: "stdout_type", type: "string?", description: "Present only when output is structured objects. Value: 'objects'. Omitted for text output." }
+        - { field: "stderr", type: "string?", description: "Captured standard error (omitted if empty)" }
+        - { field: "duration_ms", type: "int", description: "Execution time in milliseconds" }
+      example: '{"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"hello","duration_ms":12}'
+      object_mode:
+        description: "When PowerShell returns structured .NET objects (FileInfo, Process, etc.), stdout is a JSON array with curated property projections."
+        detection: "Auto-detected — simple values (string, int, bool, DateTime) and PathInfo stay as text."
+        example: '{"status":"success","exit_code":0,"cwd":"/tmp","stdout_type":"objects","stdout":[{"name":"foo.txt","size":1234,"modified":"2026-03-06T13:00:00Z","type":"file","path":"/tmp/foo.txt"}],"duration_ms":27}'
+        projections:
+          - { type: "FileInfo", fields: "name, size, modified (ISO 8601), type='file', path" }
+          - { type: "DirectoryInfo", fields: "name, modified (ISO 8601), type='directory', path" }
+          - { type: "Process", fields: "pid, name, memory, cpu" }
+          - { type: "PSDriveInfo", fields: "name, used, free, provider" }
+          - { type: "fallback", fields: "Up to 10 non-PS properties from the object" }
       status_values:
         - { value: "success", meaning: "Command completed successfully" }
         - { value: "error", meaning: "Command failed (check exit_code and stderr)" }
@@ -1272,18 +1426,46 @@ llm_mode:
       description: "Read files with metadata and encoding for transport"
       usage: "lcat <path>"
       note: "Text files return utf8 content. Binary files return base64-encoded content. Includes mime type, size, line count."
+      result_fields:
+        - { field: "type", values: "text | binary" }
+        - { field: "path", description: "Absolute path to file" }
+        - { field: "size", description: "File size in bytes" }
+        - { field: "mime", description: "MIME type (text/plain, application/json, image/png, etc.)" }
+        - { field: "encoding", values: "utf8 | base64" }
+        - { field: "content", description: "File content (UTF-8 text or base64-encoded binary)" }
+        - { field: "lines", description: "Line count (text files only)" }
       examples:
-        - { cmd: "lcat config.yaml", returns: "UTF-8 content with mime=text/yaml" }
-        - { cmd: "lcat image.png", returns: "base64 content with mime=image/png" }
+        - cmd: "lcat config.yaml"
+          result: '{"type":"text","path":"/home/mark/config.yaml","size":245,"mime":"text/yaml","encoding":"utf8","content":"key: value\n...","lines":12}'
+        - cmd: "lcat image.png"
+          result: '{"type":"binary","path":"/home/mark/image.png","size":8192,"mime":"image/png","encoding":"base64","content":"iVBORw0KGgo..."}'
     spool:
       description: "Sliding window into captured output from last command that exceeded 4KB limit"
       usage: "spool <offset>:<count> | spool --head=N | spool --tail=N | spool --grep=<pattern> | spool --all"
-      note: "Returns spool_position and spool_total so you always know where you are in the buffer."
+      note: "Returns spool_position and spool_total so you always know where you are in the buffer. Negative offset counts from end."
+      result_fields:
+        - { field: "spool_position", description: "Starting line index of this slice" }
+        - { field: "spool_total", description: "Total lines in the spool buffer" }
+        - { field: "stdout", description: "The requested lines joined with newlines" }
       examples:
         - { cmd: "spool 0:10", note: "First 10 lines" }
         - { cmd: "spool 500:20", note: "Lines 500-519" }
-        - { cmd: "spool --tail=50", note: "Last 50 lines" }
+        - { cmd: "spool -50:50", note: "Last 50 lines (negative offset)" }
+        - { cmd: "spool --tail=50", note: "Last 50 lines (convenience)" }
         - { cmd: "spool --grep=ERROR", note: "Matching lines with line numbers" }
+        - { cmd: "spool --all", note: "Full output (use with caution)" }
+    timeout:
+      description: "Run a command with a time limit. Kills the child on timeout."
+      usage: "timeout <seconds> <command>"
+      note: "Exit code 124 on timeout (Unix convention). Works on native commands and Rush syntax. The inner command is dispatched through the normal triage (IsRushSyntax → transpile, else → shell)."
+      result_fields:
+        - { field: "error_type", value: "timeout", description: "Present when the command timed out" }
+        - { field: "exit_code", value: 124, description: "Standard timeout exit code" }
+        - { field: "stdout", description: "Any partial output captured before timeout" }
+      examples:
+        - { cmd: "timeout 30 ssh server 'df -h'", note: "SSH with 30s safety net" }
+        - { cmd: "timeout 5 find / -name '*.log'", note: "Cap a potentially slow search" }
+        - { cmd: "timeout 60 ls", note: "Normal completion within limit — returns standard success result" }
   output_limit:
     threshold: "4KB"
     preview_size: "512 bytes"

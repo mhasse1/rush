@@ -27,7 +27,11 @@ args = args.Where(a => a != "--resume").ToArray();
 
 // ── LLM Mode Detection ─────────────────────────────────────────────
 bool llmMode = args.Contains("--llm");
-args = args.Where(a => a != "--llm").ToArray();
+string? inheritPath = null;
+var inheritIdx = Array.IndexOf(args, "--inherit");
+if (inheritIdx >= 0 && inheritIdx + 1 < args.Length)
+    inheritPath = args[inheritIdx + 1];
+args = args.Where(a => a != "--llm" && a != "--inherit" && a != inheritPath).ToArray();
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -46,6 +50,7 @@ if (args.Length > 0)
         Console.WriteLine("  rush script.rush     Execute Rush script file");
         Console.WriteLine("  rush -c 'command'    Execute command and exit");
         Console.WriteLine("  rush --llm           LLM wire protocol mode (JSON I/O)");
+        Console.WriteLine("  rush --llm --inherit <state.json>  LLM mode with parent session state");
         Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
@@ -81,6 +86,38 @@ if (llmMode)
     rs.Open();
     var tr = new CommandTranslator();
     var se = new ScriptEngine(tr);
+
+    // Apply config aliases to translator (null editor — no LineEditor in LLM mode)
+    llmConfig.Apply(null, tr);
+
+    // Set Rush built-in variables ($os, $hostname, $rush_version, $is_login_shell)
+    InjectRushEnvVars(rs, Version, isLoginShell);
+
+    // Run startup scripts (init.rush, secrets.rush) — user's PATH, exports, aliases
+    RunStartupScripts(rs, se);
+
+    // Capture baseline so ReloadState diffing works if needed
+    ReloadState.CaptureBaseline(rs);
+
+    // Restore inherited session state if --inherit provided
+    if (inheritPath != null)
+    {
+        try
+        {
+            var saved = ReloadState.Load(inheritPath);
+            if (saved != null)
+            {
+                string? prevDir = null;
+                bool dummyE = false, dummyX = false, dummyPf = false;
+                ReloadState.Restore(saved, rs, ref prevDir, ref dummyE, ref dummyX, ref dummyPf);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"{{\"status\":\"error\",\"stderr\":\"inherit: {ex.Message.Replace("\"", "\\\"")}\"}}");
+        }
+    }
+
     var llm = new Rush.LlmMode(rs, se, tr, Version);
     llm.Run();
     return;
@@ -147,18 +184,7 @@ lineEditor.ShowCompletionsHandler = () =>
 };
 
 // ── Rush Environment Variables ───────────────────────────────────────
-// Expose os, hostname, rush_version as PS variables so Rush scripts can use them
-{
-    using var ps = PowerShell.Create();
-    ps.Runspace = runspace;
-    var osName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-        System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
-        System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-        System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-    var loginVal = isLoginShell ? "$true" : "$false";
-    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{Version}'; $is_login_shell = {loginVal}");
-    ps.Invoke();
-}
+InjectRushEnvVars(runspace, Version, isLoginShell);
 
 // ── Run Startup Scripts ─────────────────────────────────────────────
 RunStartupScripts(runspace, scriptEngine);
@@ -1514,9 +1540,20 @@ while (true)
             Console.CancelKeyPress += aiCancel;
             try
             {
-                var (aiOk, _) = AiCommand.ExecuteAsync(aiArgs, pipedInput, config,
-                    lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
-                lastSegmentFailed = !aiOk;
+                // Check for --agent flag: autonomous multi-turn agent mode
+                if (aiArgs.Contains("--agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    var llm = new LlmMode(runspace, scriptEngine, translator, Version);
+                    var (aiOk, _) = AiCommand.ExecuteAgentAsync(aiArgs, llm, config,
+                        lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
+                    lastSegmentFailed = !aiOk;
+                }
+                else
+                {
+                    var (aiOk, _) = AiCommand.ExecuteAsync(aiArgs, pipedInput, config,
+                        lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
+                    lastSegmentFailed = !aiOk;
+                }
             }
             finally
             {
@@ -1935,6 +1972,21 @@ static void RunStartupScripts(Runspace runspace, ScriptEngine engine)
 {
     RunStartupRushFile(runspace, engine, "init.rush");
     RunStartupRushFile(runspace, engine, "secrets.rush");
+}
+
+/// <summary>
+/// Inject Rush built-in variables ($os, $hostname, $rush_version, $is_login_shell)
+/// into a PowerShell runspace. Called from both interactive and LLM mode paths.
+/// </summary>
+static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShell)
+{
+    using var ps = PowerShell.Create();
+    ps.Runspace = runspace;
+    var osName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "macos" :
+        RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "linux" : "windows";
+    var loginVal = isLoginShell ? "$true" : "$false";
+    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}");
+    ps.Invoke();
 }
 
 // ── Script File Execution ──────────────────────────────────────────

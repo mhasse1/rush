@@ -687,10 +687,13 @@ public class ScriptEngine
 
             // Expand ~ to home dir in PowerShell
             var psDir = args.Replace("~", "$HOME");
+            // Use ${env:VAR} braces to prevent PowerShell from parsing the colon
+            // separator as part of the provider path (e.g., $env:PATH:/dir would
+            // try to access "PATH:/dir" in the env provider and return $null).
             if (front)
-                return $"$env:{targetVar} = \"{psDir}:$env:{targetVar}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
+                return $"$env:{targetVar} = \"{psDir}:${{env:{targetVar}}}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
             else
-                return $"$env:{targetVar} = \"$env:{targetVar}:{psDir}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
+                return $"$env:{targetVar} = \"${{env:{targetVar}}}:{psDir}\"; [Environment]::SetEnvironmentVariable('{targetVar}', $env:{targetVar})";
         }
 
         // alias name='command' → CommandTranslator handled at runtime, skip in scripts

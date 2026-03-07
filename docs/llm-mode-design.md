@@ -80,6 +80,7 @@ One JSON object per line. No decoration. No ambiguity.
 | **Errors** | Friendly suggestions, "did you mean" | Raw error text + exit codes |
 | **Timing** | "took 2.3s" (if > 500ms) | `duration_ms` field in every response |
 | **Colors** | Theme-based ANSI | None — `NO_COLOR=1` forced |
+| **Interactive prompts** | Normal (git credential, npm choice) | Suppressed — `CI=true`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive` |
 | **Hints/Tips** | Random tips, esc-v hint | Disabled |
 | **Syntax errors** | Console error message | Structured JSON before execution |
 | **Exit codes** | Status icon in next prompt | Explicit field in result + context |
@@ -92,7 +93,8 @@ One JSON object per line. No decoration. No ambiguity.
 `rush --llm` enters a REPL with:
 - JSON context prompt instead of human prompt
 - JSON result envelope wrapping every command
-- `NO_COLOR=1` forced, `ShowHints=false`, `ShowTips=false`
+- `NO_COLOR=1`, `CI=true`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive`
+- `ShowHints=false`, `ShowTips=false`
 - Disable line editor (no vi mode, no tab completion, no history navigation) — read raw lines from stdin
 - AST pre-validation for Rush syntax: catch parse errors before execution
 
@@ -107,31 +109,80 @@ Data for the context prompt is already computed in `Prompt.cs`: hostname, userna
 | `Program.cs` | Add `--llm` flag parsing, `RunLlmMode()` method |
 | `Prompt.cs` | Extract data-gathering into reusable method (currently mixed with rendering) |
 
-### Phase 2: State Inheritance
+### Phase 2: State Inheritance ✓
 
-`rush --llm --inherit` carries over:
-- All environment variables from parent shell
-- All `def`-defined functions
-- Optionally: last N commands from history (opt-in, since history may contain secrets)
+`rush --llm` now runs `init.rush` and `secrets.rush` on every session — the LLM gets the user's PATH, exports, and aliases automatically. Rush environment variables (`$os`, `$hostname`, `$rush_version`, `$is_login_shell`) are injected. Config aliases are applied to the command translator.
 
-This is mostly wiring — `--inherit` already has precedent in subshell design.
+`rush --llm --inherit /path/to/state.json` additionally carries over live runtime state from a parent interactive session:
+- Environment variables (user-defined, diffed against baseline)
+- PowerShell variables (user-defined)
+- Aliases (from running session)
+- CWD + previous directory (for `cd -`)
+- Shell flags (`set -e`, `set -x`, `set -o pipefail`)
 
-**Security**: History inheritance must be opt-in. `export API_KEY=...` in history is a risk.
+The state file is consumed on use (deleted after loading) — one-shot transfer, same as `reload --hard`.
 
-### Phase 3: Object-Mode Output
+Native commands in LLM mode run via `Process.Start` (not PowerShell `AddScript`) so they use the .NET process PATH which includes init.rush `path add` directories. Translated commands and piped commands still go through PowerShell.
 
-When a command produces .NET/PowerShell objects (not raw text), auto-serialize to JSON instead of formatted text.
+**Files modified**: `Program.cs` (flag parsing, init.rush execution, env var injection), `LlmMode.cs` (native command execution path), `Config.cs` (nullable LineEditor for Apply()), `ReloadState.cs` (Load overload for file path), `ScriptEngine.cs` (path add variable expansion fix).
+
+### Phase 2.5: Timeout & SSH Resilience ✓
+
+Reliability fix shipped before Phase 3. If a command hangs (SSH network partition, unresponsive server, long-running process), the LLM agent can now control execution time.
+
+**`timeout N command`** — wraps any command with a timeout in seconds. On timeout, kills the child process and returns exit code 124 (Unix convention) with `error_type: "timeout"` in the result envelope. Works on both native commands (Process.Start path) and PowerShell-transpiled Rush syntax (async BeginInvoke path).
+
+**SSH keepalive auto-injection** — when a native command starts with `ssh`, Rush injects `-o ServerAliveInterval=15 -o ServerAliveCountMax=3` so dead connections are detected in ~45s instead of hanging forever.
+
+The `timeout` builtin is LLM-mode only — interactive REPL users have Ctrl+C. The `timeoutMs` parameter threads through `ExecuteRushSyntax` → `ExecutePowerShell` and `ExecuteShellCommand` → `ExecuteNativeCommand`/`ExecutePowerShell`, keeping the existing no-timeout behavior as the default.
+
+**Files modified**: `LlmMode.cs` (HandleTimeout, timeoutMs parameter threading, proc.WaitForExit(ms) + Kill, ps.BeginInvoke + WaitOne + Stop, SSH keepalive injection).
+
+### Phase 3: Object-Mode Output ✓
+
+When a command produces .NET/PowerShell objects (not raw text), auto-serialize to JSON instead of formatted text. Text commands (`echo`, `git status`, `cat`, native executables) remain unchanged — `stdout` is a string and `stdout_type` is omitted.
 
 ```
-← ls
-→ {"status":"success","exit_code":0,"cwd":"/tmp","stdout_type":"objects","stdout":[{"name":"foo.txt","size":1234,"modified":"2026-03-06T13:00:00Z","type":"file"},...],...}
+← ls docs
+→ {"status":"success","exit_code":0,"cwd":"/tmp","stdout_type":"objects","stdout":[
+    {"name":"readme.md","size":1234,"modified":"2026-03-06T13:00:00Z","type":"file","path":"/tmp/readme.md"},
+    {"name":"src","modified":"2026-03-06T14:00:00Z","type":"directory","path":"/tmp/src"}
+  ],"duration_ms":27}
+
+← echo hello
+→ {"status":"success","exit_code":0,"cwd":"/tmp","stdout":"hello","duration_ms":14}
 ```
 
-This leverages PowerShell's object pipeline — Rush's unfair advantage. `ls` in bash gives you a string to parse. `ls` in Rush gives you `DirectoryInfo` objects that can be serialized to JSON directly.
+This leverages PowerShell's object pipeline — Rush's unfair advantage. `ls` in bash gives you a string to parse. `ls` in Rush gives you `DirectoryInfo`/`FileInfo` objects serialized to JSON with curated property projections.
 
-Detection: If `ps.Invoke()` returns `PSObject` instances (not raw strings), serialize them via `ConvertTo-Json` equivalent.
+**Detection**: `IsObjectOutput()` checks if `ps.Invoke()` results are structured .NET types (not simple values like string/int/bool/DateTime/Guid, not PathInfo). When detected, `SerializeObjects()` routes each object through type-specific projections:
 
-### Phase 4: Sandbox Mode
+| Type | Fields |
+|------|--------|
+| `FileInfo` | name, size, modified (ISO 8601), type="file", path |
+| `DirectoryInfo` | name, modified (ISO 8601), type="directory", path |
+| `Process` | pid, name, memory, cpu |
+| `PSDriveInfo` | name, used, free, provider |
+| Fallback | Up to 10 non-PS properties |
+
+**Spool for object mode**: Each object serialized as one JSONL line so `spool 0:5` returns 5 objects, `spool --grep=pattern` searches objects by content.
+
+**Files modified**: `LlmMode.cs` (LlmResult.Stdout → object?, StdoutType field, IsObjectOutput, SerializeObjects, type-specific ProjectX methods, ExecutePowerShell branching).
+
+### Phase 3.5: Agent Mode (`ai --agent`) ✓
+
+`ai --agent "task"` — autonomous multi-turn agent that drives LlmMode directly:
+
+- Supports Anthropic (tool_use) and Gemini (function calling) with streaming SSE
+- Single tool: `run_command` — executes commands via `LlmMode.ExecuteCommand()`
+- Agent loop: call LLM → stream thinking + tool_use blocks → execute commands → feed results back → repeat
+- Same-process execution: shares runspace with interactive REPL (variables, cwd persist)
+- Max 25 turns, clean terminal output (dim thinking, cyan commands, green/red results)
+- Ctrl+C cancels cleanly
+
+**Files:** `AiAgent.cs` (new, ~300 lines), `LlmMode.cs` (Execute/GetContext made public), `AiCommand.cs` (--agent flag), `Program.cs` (LlmMode pass-through)
+
+### Phase 4: Sandbox Mode (shelved)
 
 `rush --llm --sandbox` — read-only execution:
 - File write operations (`File.write`, `Dir.mkdir`, `rm`, `mv`, `cp`) blocked at the AST level

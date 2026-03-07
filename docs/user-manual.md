@@ -17,7 +17,8 @@
 9. [The `ls` Builtin](#the-ls-builtin)
 10. [Command Translations](#command-translations)
 11. [Built-in Variables](#built-in-variables)
-12. [Tips & Tricks](#tips--tricks)
+12. [LLM Mode](#llm-mode)
+13. [Tips & Tricks](#tips--tricks)
 
 ---
 
@@ -71,6 +72,7 @@ chsh -s /usr/local/bin/rush
 rush                     Start interactive shell
 rush script.rush         Execute a Rush script
 rush -c 'command'        Execute command and exit
+rush --llm               LLM agent mode (JSON wire protocol)
 rush --version (-v)      Show version
 rush --help (-h)         Show help
 ```
@@ -1242,6 +1244,7 @@ The `ai` builtin lets you query an LLM directly from the shell. It streams respo
 | `ai --provider ollama "prompt"` | Use a specific provider |
 | `ai --model gpt-4o "prompt"` | Use a specific model |
 | `ai --exec` | Execute the last AI response as a command |
+| `ai --agent "task"` | Autonomous agent mode — executes commands to complete a task |
 
 **Fence stripping:** Markdown code fences (` ``` `) are automatically stripped from AI output. When the AI wraps commands in fences, only the clean content is displayed. `ai --exec` prefers code block content — so explanatory text is skipped and only the actual commands run.
 
@@ -1272,6 +1275,35 @@ set --save aiModel auto            # "auto" = provider default
   "defaultModel": "meta-llama/Llama-3-70b-chat-hf"
 }
 ```
+
+#### Agent Mode
+
+`ai --agent` runs the AI as an autonomous agent that executes commands and iterates until the task is complete. Instead of just answering questions, the agent takes action.
+
+```rush
+ai --agent "list the files in docs/ and tell me which are largest"
+ai --agent "check git status and show recent commits"
+ai --agent "find all TODO comments in the source code"
+ai --agent --model claude-sonnet-4-20250514 "deploy the app"
+```
+
+The agent:
+- Receives your task as a goal
+- Executes commands via Rush's LLM mode engine (same process, shared runspace)
+- Observes structured JSON results (including object-mode output)
+- Iterates up to 25 turns until the task is done
+- Streams thinking text and command results to the terminal
+
+**Terminal output:**
+- Thinking text appears in dim gray
+- Commands appear in cyan with `▸` prefix
+- Results show `✓` (green) or `✗` (red) with one-line summaries
+- A summary line at the end shows total commands, turns, and elapsed time
+
+**Supported providers:** Anthropic (default) and Gemini. Use `--provider gemini` for Gemini's rates. OpenAI support coming soon.
+
+**Current limitations:**
+- No approval mode yet — the agent executes commands directly.
 
 ### Hot Reload
 
@@ -1493,6 +1525,120 @@ ls | tee -a log.txt             # Append mode
 | `hostname` | Machine name |
 | `rush_version` | Rush version string |
 | `is_login_shell` | True if launched as login shell |
+
+---
+
+## LLM Mode
+
+`rush --llm` replaces the human shell interface with a structured JSON wire protocol for LLM agents. Every interaction is machine-readable — no ANSI colors, no decorations, no human prompts. Environment variables (`CI=true`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive`) are forced to prevent hidden interactive prompts from hanging the session.
+
+### Session Initialization
+
+`rush --llm` automatically runs `init.rush` and `secrets.rush` before entering the wire protocol loop — the LLM gets the user's PATH, exports, and environment. Rush built-in variables (`$os`, `$hostname`, `$rush_version`, `$is_login_shell`) and config aliases are also loaded.
+
+### State Inheritance
+
+`rush --llm --inherit /path/to/state.json` carries over live runtime state from a parent interactive session:
+
+- Environment variables (user-defined)
+- PowerShell variables (user-defined)
+- Aliases (from running session)
+- CWD + previous directory (for `cd -`)
+- Shell flags (`set -e`, `set -x`, `set -o pipefail`)
+
+The state file is consumed on use (deleted after loading) — one-shot transfer. The state JSON uses the same format as `reload --hard`.
+
+### Wire Protocol
+
+Every turn follows the same pattern:
+
+1. **Rush emits a JSON context line** (host, user, cwd, git state, last exit code)
+2. **LLM sends a command** (plain text or JSON-quoted string for multi-line)
+3. **Rush emits a JSON result envelope** (status, stdout, stderr, duration)
+
+```
+→ {"ready":true,"host":"server","user":"mark","cwd":"/home/mark","git_branch":"main","git_dirty":false,"last_exit_code":0,"shell":"rush","version":"1.2.54"}
+← ls -la
+→ {"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"total 42\n...","duration_ms":12}
+```
+
+### Object-Mode Output
+
+When a command produces structured .NET objects (e.g., `ls` returns `FileInfo`/`DirectoryInfo`, `ps` returns `Process`), Rush auto-detects this and serializes them as a JSON array instead of formatted text. The `stdout_type` field is set to `"objects"` and `stdout` becomes an array of curated property projections:
+
+```
+← ls docs
+→ {"status":"success","exit_code":0,"cwd":"/home/mark","stdout_type":"objects","stdout":[
+    {"name":"readme.md","size":1234,"modified":"2026-03-06T13:00:00Z","type":"file","path":"/home/mark/docs/readme.md"},
+    {"name":"src","modified":"2026-03-06T14:00:00Z","type":"directory","path":"/home/mark/docs/src"}
+  ],"duration_ms":27}
+```
+
+Text commands (`echo`, `git status`, native executables, arithmetic) remain unchanged — `stdout` is a string and `stdout_type` is omitted. Simple values (string, int, bool, DateTime) are always text mode.
+
+### Multi-Line Input
+
+Send Rush blocks as JSON-quoted strings with `\n` for newlines:
+
+```
+← "if File.exist?(\"config.json\")\n  puts \"found\"\nend"
+```
+
+### LLM-Only Builtins
+
+| Command | Description |
+|---------|-------------|
+| `lcat <path>` | Read file with metadata — text as UTF-8, binary as base64, with mime type, size, and encoding |
+| `spool <offset>:<count>` | Sliding window into spooled output (see output limits below) |
+| `spool --head=N` | First N lines of spooled output |
+| `spool --tail=N` | Last N lines of spooled output |
+| `spool --grep=<pattern>` | Search spooled output with line numbers |
+| `spool --all` | Return all spooled output |
+| `timeout <N> <command>` | Run command with N-second timeout — kills on timeout, returns exit code 124 with `error_type: "timeout"` |
+
+### Output Limits
+
+When command output exceeds 4KB, Rush spools it internally and returns a 512-byte preview with line/byte counts. Use `spool` to navigate the captured output:
+
+```json
+{"status":"output_limit","preview":"first 512 bytes...","preview_bytes":512,"stdout_lines":2987,"stdout_bytes":148201,"hint":"Use spool to retrieve: spool 0:50, spool --tail=20, spool --grep=pattern"}
+```
+
+### TTY Commands
+
+Interactive commands (vim, nano, less, top, etc.) return structured errors with alternatives:
+
+```json
+{"status":"error","error_type":"tty_required","command":"vim","hint":"Use lcat to read files, File.write() to write"}
+```
+
+### SSH
+
+For structured remote access, use Rush on both ends:
+
+```bash
+ssh server "rush --llm"
+```
+
+The JSON protocol flows over SSH transparently. The context prompt includes `host` so the LLM always knows which machine it's on.
+
+### Usage
+
+```bash
+# Pipe commands (init.rush runs first, then your command)
+echo "ls" | rush --llm
+
+# Multi-command session
+printf 'ls\npwd\n' | rush --llm
+
+# With inherited state from parent shell
+rush --llm --inherit /tmp/rush-state.json
+
+# From an LLM agent framework
+ssh server "rush --llm"   # JSON in, JSON out
+```
+
+For full protocol details, see `docs/llm-mode-design.md`.
 
 ---
 

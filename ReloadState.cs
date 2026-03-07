@@ -152,13 +152,20 @@ public static class ReloadState
     /// Load state from disk. Returns null if no state file exists.
     /// Deletes the state file after reading (one-shot).
     /// </summary>
-    public static SessionState? Load()
+    public static SessionState? Load() => Load(StatePath);
+
+    /// <summary>
+    /// Load state from a specific file path. Returns null if file doesn't exist.
+    /// Deletes the file after reading (one-shot).
+    /// Used by --inherit to load parent session state.
+    /// </summary>
+    public static SessionState? Load(string path)
     {
-        if (!File.Exists(StatePath)) return null;
+        if (!File.Exists(path)) return null;
 
         try
         {
-            var json = File.ReadAllText(StatePath);
+            var json = File.ReadAllText(path);
             var state = JsonSerializer.Deserialize<SessionState>(json, new JsonSerializerOptions
             {
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -169,7 +176,7 @@ public static class ReloadState
         finally
         {
             // Always clean up — one-shot file
-            try { File.Delete(StatePath); } catch { }
+            try { File.Delete(path); } catch { }
         }
     }
 

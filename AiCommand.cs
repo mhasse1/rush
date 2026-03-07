@@ -43,11 +43,11 @@ public static class AiCommand
         try
         {
             // ── Parse arguments ──────────────────────────────────────
-            var (prompt, providerName, modelOverride, systemOverride) = ParseArgs(arguments);
+            var (prompt, providerName, modelOverride, systemOverride, isAgent) = ParseArgs(arguments);
 
             if (string.IsNullOrWhiteSpace(prompt) && string.IsNullOrWhiteSpace(pipedInput))
             {
-                WriteError("usage: ai \"your question\"");
+                WriteError(isAgent ? "usage: ai --agent \"your task\"" : "usage: ai \"your question\"");
                 return (false, "");
             }
 
@@ -127,20 +127,42 @@ public static class AiCommand
         }
     }
 
+    // ── Agent Mode Entry Point ───────────────────────────────────────
+
+    /// <summary>
+    /// Execute AI agent mode: autonomous multi-turn task execution.
+    /// Called from Program.cs with a LlmMode instance for command execution.
+    /// </summary>
+    public static async Task<(bool success, string response)> ExecuteAgentAsync(
+        string arguments, LlmMode llm, RushConfig config,
+        IReadOnlyList<string> history, CancellationToken ct)
+    {
+        var (prompt, providerName, modelOverride, _, _) = ParseArgs(arguments);
+
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            WriteError("usage: ai --agent \"your task\"");
+            return (false, "");
+        }
+
+        return await AiAgent.RunAsync(prompt, llm, providerName, modelOverride, history, config, ct);
+    }
+
     // ── Argument Parsing ──────────────────────────────────────────────
 
     /// <summary>
-    /// Parse ai arguments: extract prompt, --provider, --model, --system flags.
-    /// Supports: ai "prompt"  ai --provider ollama "prompt"  ai --model gpt-4o "prompt"
+    /// Parse ai arguments: extract prompt, --provider, --model, --system, --agent flags.
+    /// Supports: ai "prompt"  ai --agent "task"  ai --provider ollama "prompt"
     /// </summary>
-    internal static (string prompt, string? provider, string? model, string? system) ParseArgs(string args)
+    internal static (string prompt, string? provider, string? model, string? system, bool agent) ParseArgs(string args)
     {
         if (string.IsNullOrWhiteSpace(args))
-            return ("", null, null, null);
+            return ("", null, null, null, false);
 
         string? provider = null;
         string? model = null;
         string? system = null;
+        bool agent = false;
         var promptParts = new List<string>();
 
         var tokens = TokenizeArgs(args);
@@ -159,13 +181,17 @@ public static class AiCommand
             {
                 system = tokens[++i];
             }
+            else if (t.Equals("--agent", StringComparison.OrdinalIgnoreCase))
+            {
+                agent = true;
+            }
             else
             {
                 promptParts.Add(t);
             }
         }
 
-        return (string.Join(" ", promptParts), provider, model, system);
+        return (string.Join(" ", promptParts), provider, model, system, agent);
     }
 
     /// <summary>

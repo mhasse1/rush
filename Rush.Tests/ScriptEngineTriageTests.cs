@@ -324,8 +324,8 @@ public class ScriptEngineTriageTests
     {
         var result = _engine.TranspileFile("path add --front /opt/bin");
         Assert.NotNull(result);
-        // Front: dir comes before $env:PATH
-        Assert.Contains("/opt/bin:$env:PATH", result);
+        // Front: dir comes before ${env:PATH} (braces prevent PS provider path parsing)
+        Assert.Contains("/opt/bin:${env:PATH}", result);
     }
 
     [Fact]
@@ -333,8 +333,8 @@ public class ScriptEngineTriageTests
     {
         var result = _engine.TranspileFile("path add /opt/bin");
         Assert.NotNull(result);
-        // Append: $env:PATH comes before dir
-        Assert.Contains("$env:PATH:/opt/bin", result);
+        // Append: ${env:PATH} comes before dir (braces prevent PS provider path parsing)
+        Assert.Contains("${env:PATH}:/opt/bin", result);
     }
 
     [Fact]
@@ -378,7 +378,7 @@ public class ScriptEngineTriageTests
     {
         var result = _engine.TranspileFile("path add --name=MANPATH --front /usr/local/man");
         Assert.NotNull(result);
-        Assert.Contains("/usr/local/man:$env:MANPATH", result);
+        Assert.Contains("/usr/local/man:${env:MANPATH}", result);
     }
 
     [Fact]

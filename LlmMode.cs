@@ -28,7 +28,8 @@ public class LlmResult
     [JsonPropertyName("status")] public string Status { get; set; } = "success";
     [JsonPropertyName("exit_code")] public int ExitCode { get; set; }
     [JsonPropertyName("cwd")] public string Cwd { get; set; } = "";
-    [JsonPropertyName("stdout")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Stdout { get; set; }
+    [JsonPropertyName("stdout")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public object? Stdout { get; set; }
+    [JsonPropertyName("stdout_type")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? StdoutType { get; set; }
     [JsonPropertyName("stderr")] [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Stderr { get; set; }
     [JsonPropertyName("duration_ms")] public long DurationMs { get; set; }
 
@@ -303,10 +304,15 @@ public class LlmMode
         // Force machine-friendly settings
         Environment.SetEnvironmentVariable("NO_COLOR", "1");
 
+        // Prevent hidden interactive prompts from hanging the session
+        Environment.SetEnvironmentVariable("CI", "true");
+        Environment.SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0");
+        Environment.SetEnvironmentVariable("DEBIAN_FRONTEND", "noninteractive");
+
         while (true)
         {
             // Emit context prompt
-            var context = GetContextData();
+            var context = GetContext();
             Console.WriteLine(JsonSerializer.Serialize(context, JsonOpts));
 
             // Read command — JSON string or plain text
@@ -328,12 +334,16 @@ public class LlmMode
             }
 
             // Execute and emit result envelope
-            var result = Execute(input);
+            var result = ExecuteCommand(input);
             Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
         }
     }
 
-    private LlmContext GetContextData()
+    /// <summary>
+    /// Get current shell context (host, user, cwd, git info, last exit code).
+    /// Used by agent mode to include context in system prompts.
+    /// </summary>
+    public LlmContext GetContext()
     {
         var cwd = GetCwd();
         var (branch, dirty) = GetGitBranchAndDirty(cwd);
@@ -350,7 +360,11 @@ public class LlmMode
         };
     }
 
-    private LlmResult Execute(string input)
+    /// <summary>
+    /// Execute a command and return structured JSON result.
+    /// Public for agent mode; also called by the wire-protocol REPL.
+    /// </summary>
+    public LlmResult ExecuteCommand(string input)
     {
         var cwd = GetCwd();
         var sw = Stopwatch.StartNew();
@@ -373,6 +387,10 @@ public class LlmMode
         if (firstWord == "spool")
             return HandleSpool(input.Trim(), cwd, sw);
 
+        // timeout
+        if (firstWord == "timeout")
+            return HandleTimeout(input, cwd, sw);
+
         // ── TTY blocklist ─────────────────────────────────────────────
         var (blocked, ttyResult) = TtyBlocklist.Check(input, cwd);
         if (blocked)
@@ -391,7 +409,33 @@ public class LlmMode
         return ExecuteShellCommand(input, cwd, sw);
     }
 
-    private LlmResult ExecuteRushSyntax(string input, string cwd, Stopwatch sw)
+    private LlmResult HandleTimeout(string input, string cwd, Stopwatch sw)
+    {
+        var parts = input.Trim().Split(' ', 3);
+        if (parts.Length < 3 || !int.TryParse(parts[1], out var seconds) || seconds <= 0)
+        {
+            return new LlmResult
+            {
+                Status = "error",
+                ExitCode = 1,
+                Stderr = "Usage: timeout <seconds> <command>",
+                Cwd = cwd,
+                DurationMs = sw.ElapsedMilliseconds
+            };
+        }
+
+        var innerCommand = parts[2];
+        var timeoutMs = seconds * 1000;
+
+        // Dispatch the inner command through the same triage as Execute(),
+        // but with a timeout applied to the actual execution.
+        if (_scriptEngine.IsRushSyntax(innerCommand.Split('\n')[0].Trim()))
+            return ExecuteRushSyntax(innerCommand, cwd, sw, timeoutMs);
+
+        return ExecuteShellCommand(innerCommand, cwd, sw, timeoutMs);
+    }
+
+    private LlmResult ExecuteRushSyntax(string input, string cwd, Stopwatch sw, int? timeoutMs = null)
     {
         string? psCode;
         try
@@ -420,49 +464,89 @@ public class LlmMode
             };
         }
 
-        return ExecutePowerShell(psCode, cwd, sw);
+        return ExecutePowerShell(psCode, cwd, sw, timeoutMs);
     }
 
-    private LlmResult ExecuteShellCommand(string input, string cwd, Stopwatch sw)
+    private LlmResult ExecuteShellCommand(string input, string cwd, Stopwatch sw, int? timeoutMs = null)
     {
-        var translated = _translator.Translate(input) ?? input;
-        return ExecutePowerShell(translated, cwd, sw);
+        var translated = _translator.Translate(input);
+
+        // Native commands (not translated to PowerShell cmdlets) run via Process.Start
+        // so they use the .NET process PATH — which includes paths added by init.rush.
+        // PowerShell's command discovery caches PATH at runspace open and doesn't refresh.
+        bool hasPipe = CommandTranslator.HasUnquotedPipe(input);
+        if (translated == null && !hasPipe)
+            return ExecuteNativeCommand(input, cwd, sw, timeoutMs);
+
+        return ExecutePowerShell(translated ?? input, cwd, sw, timeoutMs);
     }
 
-    private LlmResult ExecutePowerShell(string script, string cwd, Stopwatch sw)
+    private LlmResult ExecuteNativeCommand(string input, string cwd, Stopwatch sw, int? timeoutMs = null)
     {
         try
         {
-            using var ps = PowerShell.Create();
-            ps.Runspace = _runspace;
-            ps.AddScript(script);
+            var trimmed = input.Trim();
+            var firstSpace = trimmed.IndexOf(' ');
+            var exe = firstSpace > 0 ? trimmed[..firstSpace] : trimmed;
+            var args = firstSpace > 0 ? trimmed[(firstSpace + 1)..] : "";
 
-            var results = ps.Invoke().Where(r => r != null).ToList();
-            var stdout = string.Join("\n", results.Select(r => r.ToString()));
-
-            var stderr = "";
-            if (ps.Streams.Error.Count > 0)
-                stderr = string.Join("\n", ps.Streams.Error.Select(e => e.ToString()));
-
-            // Get exit code from PowerShell
-            int exitCode = 0;
-            if (ps.HadErrors) exitCode = 1;
-            try
+            // SSH keepalive injection — detect dead connections in ~45s
+            if (exe.Equals("ssh", StringComparison.OrdinalIgnoreCase))
             {
-                using var exitPs = PowerShell.Create();
-                exitPs.Runspace = _runspace;
-                exitPs.AddScript("$LASTEXITCODE");
-                var exitResult = exitPs.Invoke();
-                if (exitResult.Count > 0 && exitResult[0] != null)
+                args = "-o ServerAliveInterval=15 -o ServerAliveCountMax=3 " + args;
+            }
+
+            var psi = new ProcessStartInfo(exe, args)
+            {
+                WorkingDirectory = cwd,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+                return new LlmResult { Status = "error", ExitCode = 1, Stderr = $"Failed to start: {exe}", Cwd = cwd, DurationMs = sw.ElapsedMilliseconds };
+
+            // Read streams concurrently to avoid deadlock on large output
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            if (timeoutMs.HasValue)
+            {
+                if (!proc.WaitForExit(timeoutMs.Value))
                 {
-                    if (int.TryParse(exitResult[0].ToString(), out var lastExit) && lastExit != 0)
-                        exitCode = lastExit;
+                    // Timed out — kill the child process
+                    try { proc.Kill(true); proc.WaitForExit(1000); } catch { }
+                    _lastExitCode = 124;
+                    var partialOut = stdoutTask.Wait(500) ? stdoutTask.Result.TrimEnd('\n', '\r') : "";
+                    var partialErr = stderrTask.Wait(500) ? stderrTask.Result.TrimEnd('\n', '\r') : "";
+                    return new LlmResult
+                    {
+                        Status = "error",
+                        ExitCode = 124,
+                        ErrorType = "timeout",
+                        Stderr = $"Command timed out after {timeoutMs.Value / 1000}s",
+                        Stdout = string.IsNullOrEmpty(partialOut) ? null : partialOut,
+                        Cwd = cwd,
+                        DurationMs = sw.ElapsedMilliseconds
+                    };
                 }
             }
-            catch { /* ignore */ }
+            else
+            {
+                proc.WaitForExit(); // existing behavior — no timeout
+            }
 
+            var stdout = stdoutTask.GetAwaiter().GetResult().TrimEnd('\n', '\r');
+            var stderr = stderrTask.GetAwaiter().GetResult().TrimEnd('\n', '\r');
+            var exitCode = proc.ExitCode;
             _lastExitCode = exitCode;
-            cwd = GetCwd(); // May have changed after cd
+
+            // Sync CWD — if the command was cd-like, .NET dir doesn't change
+            // (Process.Start runs in a child process). This is fine — cd is
+            // translated by CommandTranslator and goes through PowerShell.
 
             // Check output limit (4KB)
             const int OutputLimit = 4096;
@@ -491,6 +575,146 @@ public class LlmMode
                 ExitCode = exitCode,
                 Cwd = cwd,
                 Stdout = string.IsNullOrEmpty(stdout) ? null : stdout,
+                Stderr = string.IsNullOrEmpty(stderr) ? null : stderr,
+                DurationMs = sw.ElapsedMilliseconds
+            };
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Command not found as native — fall back to PowerShell
+            // (might be a PS function, alias, or cmdlet not in CommandTranslator)
+            return ExecutePowerShell(input, cwd, sw, timeoutMs);
+        }
+        catch (Exception ex)
+        {
+            _lastExitCode = 1;
+            return new LlmResult
+            {
+                Status = "error",
+                ExitCode = 1,
+                Cwd = cwd,
+                Stderr = ex.Message,
+                DurationMs = sw.ElapsedMilliseconds
+            };
+        }
+    }
+
+    private LlmResult ExecutePowerShell(string script, string cwd, Stopwatch sw, int? timeoutMs = null)
+    {
+        try
+        {
+            using var ps = PowerShell.Create();
+            ps.Runspace = _runspace;
+            ps.AddScript(script);
+
+            List<PSObject> results;
+
+            if (timeoutMs.HasValue)
+            {
+                // Async invocation with timeout
+                var output = new PSDataCollection<PSObject>();
+                var asyncResult = ps.BeginInvoke<PSObject, PSObject>(null, output);
+                if (!asyncResult.AsyncWaitHandle.WaitOne(timeoutMs.Value))
+                {
+                    ps.Stop();
+                    _lastExitCode = 124;
+                    // Collect any partial output
+                    var partialOut = string.Join("\n", output.Where(r => r != null).Select(r => r.ToString()));
+                    return new LlmResult
+                    {
+                        Status = "error",
+                        ExitCode = 124,
+                        ErrorType = "timeout",
+                        Stderr = $"Command timed out after {timeoutMs.Value / 1000}s",
+                        Stdout = string.IsNullOrEmpty(partialOut) ? null : partialOut,
+                        Cwd = cwd,
+                        DurationMs = sw.ElapsedMilliseconds
+                    };
+                }
+                ps.EndInvoke(asyncResult);
+                results = output.Where(r => r != null).ToList();
+            }
+            else
+            {
+                results = ps.Invoke().Where(r => r != null).ToList(); // existing — no timeout
+            }
+
+            // ── Object-mode detection ──────────────────────────────
+            bool objectMode = IsObjectOutput(results);
+            string? stdoutType = objectMode ? "objects" : null;
+            object? stdoutValue;
+            string stdoutText; // always needed for byte-count / spool
+
+            if (objectMode)
+            {
+                stdoutValue = SerializeObjects(results);
+                // For spool / byte-count, serialize each object as one JSONL line
+                stdoutText = string.Join("\n", results
+                    .Where(r => r?.BaseObject != null)
+                    .Select(r => JsonSerializer.Serialize(ProjectObject(r))));
+            }
+            else
+            {
+                var text = string.Join("\n", results.Select(r => r.ToString()));
+                stdoutText = text;
+                stdoutValue = string.IsNullOrEmpty(text) ? null : text;
+            }
+
+            var stderr = "";
+            if (ps.Streams.Error.Count > 0)
+                stderr = string.Join("\n", ps.Streams.Error.Select(e => e.ToString()));
+
+            // Get exit code from PowerShell
+            int exitCode = 0;
+            if (ps.HadErrors) exitCode = 1;
+            try
+            {
+                using var exitPs = PowerShell.Create();
+                exitPs.Runspace = _runspace;
+                exitPs.AddScript("$LASTEXITCODE");
+                var exitResult = exitPs.Invoke();
+                if (exitResult.Count > 0 && exitResult[0] != null)
+                {
+                    if (int.TryParse(exitResult[0].ToString(), out var lastExit) && lastExit != 0)
+                        exitCode = lastExit;
+                }
+            }
+            catch { /* ignore */ }
+
+            _lastExitCode = exitCode;
+            cwd = GetCwd(); // May have changed after cd
+
+            // Check output limit (4KB)
+            const int OutputLimit = 4096;
+            if (System.Text.Encoding.UTF8.GetByteCount(stdoutText) > OutputLimit && !string.IsNullOrEmpty(stdoutText))
+            {
+                _spool.Store(stdoutText);
+                var preview = _spool.GetPreview(512);
+                return new LlmResult
+                {
+                    Status = "output_limit",
+                    ExitCode = exitCode,
+                    Cwd = cwd,
+                    StdoutType = stdoutType,
+                    StdoutLines = _spool.TotalLines,
+                    StdoutBytes = _spool.TotalBytes,
+                    Preview = preview,
+                    PreviewBytes = System.Text.Encoding.UTF8.GetByteCount(preview),
+                    Stderr = string.IsNullOrEmpty(stderr) ? null : stderr,
+                    Hint = objectMode
+                        ? $"Output spooled ({FormatBytes(_spool.TotalBytes)}, {results.Count} objects). Use spool to retrieve: spool 0:50, spool --tail=20, spool --grep=<pattern>, spool --all"
+                        : $"Output spooled ({FormatBytes(_spool.TotalBytes)}, {_spool.TotalLines} lines). Use spool to retrieve: spool 0:50, spool --tail=20, spool --grep=<pattern>, spool --all",
+                    DurationMs = sw.ElapsedMilliseconds
+                };
+            }
+
+            return new LlmResult
+            {
+                Status = exitCode == 0 ? "success" : "error",
+                ExitCode = exitCode,
+                Cwd = cwd,
+                StdoutType = stdoutType,
+                Stdout = stdoutValue,
                 Stderr = string.IsNullOrEmpty(stderr) ? null : stderr,
                 DurationMs = sw.ElapsedMilliseconds
             };
@@ -677,6 +901,140 @@ public class LlmMode
             Cwd = cwd,
             DurationMs = sw.ElapsedMilliseconds
         };
+    }
+
+    // ── Object-Mode Helpers ─────────────────────────────────────────
+
+    /// <summary>
+    /// Detect whether PowerShell results are structured objects (FileInfo, Process, etc.)
+    /// rather than simple values (string, int, bool, etc.) that should stay as text.
+    /// </summary>
+    private static bool IsObjectOutput(List<PSObject> results)
+    {
+        if (results.Count == 0) return false;
+        foreach (var r in results)
+        {
+            if (r?.BaseObject == null) continue;
+            var baseObj = r.BaseObject;
+            // Simple values → text mode (matches OutputRenderer.IsSimpleValue)
+            if (baseObj is string or int or long or double or float or bool
+                or decimal or DateTime or Guid)
+                return false;
+            // PathInfo → text mode (pwd/cd output)
+            if (baseObj.GetType().FullName == "System.Management.Automation.PathInfo")
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Safe property access — processes can exit between enumeration and property read.
+    /// </summary>
+    private static object? GetPropValue(PSObject obj, string name)
+    {
+        try { return obj.Properties[name]?.Value; }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Serialize structured PSObject results to a JsonElement array for inline JSON in the envelope.
+    /// </summary>
+    private static JsonElement SerializeObjects(List<PSObject> results)
+    {
+        var projections = new List<Dictionary<string, object?>>();
+        foreach (var r in results)
+        {
+            if (r?.BaseObject == null) continue;
+            projections.Add(ProjectObject(r));
+        }
+        var json = JsonSerializer.Serialize(projections);
+        return JsonDocument.Parse(json).RootElement.Clone();
+    }
+
+    /// <summary>
+    /// Route to type-specific projection or fallback.
+    /// </summary>
+    private static Dictionary<string, object?> ProjectObject(PSObject obj)
+    {
+        var typeName = obj.BaseObject?.GetType().FullName ?? "";
+        return typeName switch
+        {
+            "System.IO.FileInfo" => ProjectFileInfo(obj),
+            "System.IO.DirectoryInfo" => ProjectDirectoryInfo(obj),
+            "System.Diagnostics.Process" => ProjectProcess(obj),
+            "System.Management.Automation.PSDriveInfo" => ProjectPSDrive(obj),
+            _ => ProjectGeneric(obj)
+        };
+    }
+
+    private static Dictionary<string, object?> ProjectFileInfo(PSObject obj)
+    {
+        var fi = (System.IO.FileInfo)obj.BaseObject;
+        return new Dictionary<string, object?>
+        {
+            ["name"] = fi.Name,
+            ["size"] = fi.Length,
+            ["modified"] = fi.LastWriteTimeUtc.ToString("o"),
+            ["type"] = "file",
+            ["path"] = fi.FullName
+        };
+    }
+
+    private static Dictionary<string, object?> ProjectDirectoryInfo(PSObject obj)
+    {
+        var di = (System.IO.DirectoryInfo)obj.BaseObject;
+        return new Dictionary<string, object?>
+        {
+            ["name"] = di.Name,
+            ["modified"] = di.LastWriteTimeUtc.ToString("o"),
+            ["type"] = "directory",
+            ["path"] = di.FullName
+        };
+    }
+
+    private static Dictionary<string, object?> ProjectProcess(PSObject obj)
+    {
+        var proc = (System.Diagnostics.Process)obj.BaseObject;
+        var dict = new Dictionary<string, object?>
+        {
+            ["pid"] = proc.Id,
+            ["name"] = proc.ProcessName
+        };
+        try { dict["memory"] = proc.WorkingSet64; } catch { dict["memory"] = null; }
+        try { dict["cpu"] = Math.Round(proc.TotalProcessorTime.TotalSeconds, 1); } catch { dict["cpu"] = null; }
+        return dict;
+    }
+
+    private static Dictionary<string, object?> ProjectPSDrive(PSObject obj)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["name"] = GetPropValue(obj, "Name"),
+            ["used"] = GetPropValue(obj, "Used"),
+            ["free"] = GetPropValue(obj, "Free"),
+            ["provider"] = GetPropValue(obj, "Provider")?.ToString()
+        };
+    }
+
+    /// <summary>
+    /// Fallback: enumerate non-PS properties, up to 10.
+    /// Handles PSCustomObject, Hashtable, and unknown types.
+    /// </summary>
+    private static Dictionary<string, object?> ProjectGeneric(PSObject obj)
+    {
+        var dict = new Dictionary<string, object?>();
+        int count = 0;
+        foreach (var prop in obj.Properties)
+        {
+            if (count >= 10) break;
+            // Skip PowerShell internal properties
+            if (prop.Name.StartsWith("PS") && prop.MemberType == PSMemberTypes.Property)
+                continue;
+            try { dict[prop.Name] = prop.Value; }
+            catch { dict[prop.Name] = null; }
+            count++;
+        }
+        return dict;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
