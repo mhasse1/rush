@@ -191,6 +191,11 @@ public static class AiCommand
             {
                 agent = true;
             }
+            else if (t.Equals("--verbose", StringComparison.OrdinalIgnoreCase)
+                  || t.Equals("--debug", StringComparison.OrdinalIgnoreCase))
+            {
+                // consumed by ExecuteAgentAsync, skip here
+            }
             else
             {
                 promptParts.Add(t);
