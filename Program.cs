@@ -4254,6 +4254,20 @@ static void RunNonInteractive(string command)
         return;
     }
 
+    // ── ls builtin (same dispatch as interactive REPL) ──
+    var trimmedCmd = command.TrimStart();
+    if ((trimmedCmd.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("ls ", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("ls\t", StringComparison.OrdinalIgnoreCase)) &&
+        !CommandTranslator.HasUnquotedPipe(trimmedCmd) &&
+        !CommandTranslator.HasUnquotedRedirection(trimmedCmd))
+    {
+        var lsArgs = trimmedCmd.Length > 2 ? trimmedCmd[2..].TrimStart() : "";
+        if (!FileListCommand.Execute(lsArgs))
+            Environment.ExitCode = 1;
+        return;
+    }
+
     // Full expansion pipeline (same order as interactive mode)
     command = ExpandBraces(command);
     command = ExpandTilde(command);
