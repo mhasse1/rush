@@ -25,6 +25,10 @@ args = args.Where(a => a is not "--login" and not "-l").ToArray();
 bool isResuming = args.Contains("--resume");
 args = args.Where(a => a != "--resume").ToArray();
 
+// ── LLM Mode Detection ─────────────────────────────────────────────
+bool llmMode = args.Contains("--llm");
+args = args.Where(a => a != "--llm").ToArray();
+
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
 {
@@ -41,6 +45,7 @@ if (args.Length > 0)
         Console.WriteLine("  rush                 Start interactive shell");
         Console.WriteLine("  rush script.rush     Execute Rush script file");
         Console.WriteLine("  rush -c 'command'    Execute command and exit");
+        Console.WriteLine("  rush --llm           LLM wire protocol mode (JSON I/O)");
         Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
@@ -58,6 +63,27 @@ if (args.Length > 0)
         RunScriptFile(args[0], args[1..]);
         return;
     }
+}
+
+// ── LLM Mode ────────────────────────────────────────────────────────
+// Machine-to-machine wire protocol: JSON context prompts, JSON result
+// envelopes, structured file reading, output spooling. No ANSI, no
+// line editor, no human prompts. See docs/llm-mode-design.md
+if (llmMode)
+{
+    var llmConfig = RushConfig.Load();
+    llmConfig.ShowHints = false;
+    llmConfig.ShowTips = false;
+    var ui = new RushHostUI();
+    var h = new RushHost(ui);
+    var ss = InitialSessionState.CreateDefault();
+    using var rs = RunspaceFactory.CreateRunspace(h, ss);
+    rs.Open();
+    var tr = new CommandTranslator();
+    var se = new ScriptEngine(tr);
+    var llm = new Rush.LlmMode(rs, se, tr, Version);
+    llm.Run();
+    return;
 }
 
 // ── Load Config ──────────────────────────────────────────────────────
@@ -2237,6 +2263,87 @@ static void SavePathToInit(string pathLine)
 }
 
 /// <summary>
+/// Save the full PATH (or other var) from path edit --save.
+/// Replaces the entire PATH section in init.rush with the new entries.
+/// </summary>
+static void SavePathEditToInit(string varName, List<string> entries)
+{
+    try
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var initPath = Path.Combine(home, ".config", "rush", "init.rush");
+        var nameFlag = varName != "PATH" ? $"--name={varName} " : "";
+
+        // Collapse home dir to ~ for cleaner init.rush
+        var pathLines = entries.Select(e =>
+        {
+            var display = e.StartsWith(home) ? "~" + e[home.Length..] : e;
+            return $"path add {nameFlag}{display}";
+        }).ToList();
+
+        if (!File.Exists(initPath))
+        {
+            File.WriteAllText(initPath,
+                "# ── PATH ─────────────────────────────────────────────────\n" +
+                string.Join("\n", pathLines) + "\n");
+            return;
+        }
+
+        var lines = File.ReadAllLines(initPath).ToList();
+        var pathSectionIdx = lines.FindIndex(l => l.TrimStart().StartsWith("# ── PATH"));
+
+        if (pathSectionIdx >= 0)
+        {
+            // Remove existing path add/export PATH lines in this section
+            var removeStart = pathSectionIdx + 1;
+            while (removeStart < lines.Count)
+            {
+                var trimmed = lines[removeStart].TrimStart();
+                if (trimmed.StartsWith("path add", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("path rm", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("# path add", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("export PATH", StringComparison.OrdinalIgnoreCase) ||
+                    trimmed.StartsWith("# export PATH", StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(trimmed))
+                {
+                    lines.RemoveAt(removeStart);
+                }
+                else break;
+            }
+
+            // Insert new entries after the header
+            for (int i = pathLines.Count - 1; i >= 0; i--)
+                lines.Insert(pathSectionIdx + 1, pathLines[i]);
+        }
+        else
+        {
+            // No PATH section — create at top
+            var insertAt = 0;
+            while (insertAt < lines.Count &&
+                   (lines[insertAt].TrimStart().StartsWith('#') || string.IsNullOrWhiteSpace(lines[insertAt])))
+            {
+                insertAt++;
+                if (insertAt > 0 && string.IsNullOrWhiteSpace(lines[insertAt - 1]) &&
+                    insertAt < lines.Count && !lines[insertAt].TrimStart().StartsWith('#'))
+                    break;
+            }
+            lines.Insert(insertAt, "");
+            foreach (var pl in pathLines)
+                lines.Insert(insertAt, pl);
+            lines.Insert(insertAt, "# ── PATH ─────────────────────────────────────────────────");
+        }
+
+        File.WriteAllLines(initPath, lines);
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"  save failed: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
+/// <summary>
 /// Save an "export KEY=value" line into init.rush's Environment section.
 /// Idempotent: replaces existing export for the same variable.
 /// </summary>
@@ -2577,9 +2684,12 @@ static bool HandlePathCommand(string args, Runspace runspace)
         return false;
     }
 
-    // ── path edit — open in $EDITOR ─────────────────────────────────
-    if (args.Equals("edit", StringComparison.OrdinalIgnoreCase))
+    // ── path edit [--save] — open in $EDITOR ────────────────────────
+    if (args.Equals("edit", StringComparison.OrdinalIgnoreCase) ||
+        args.Equals("edit --save", StringComparison.OrdinalIgnoreCase) ||
+        args.Equals("--save edit", StringComparison.OrdinalIgnoreCase))
     {
+        bool save = args.Contains("--save", StringComparison.OrdinalIgnoreCase);
         var editor = Environment.GetEnvironmentVariable("EDITOR") ?? "vi";
         string? tempFile = null;
 
@@ -2623,6 +2733,16 @@ static bool HandlePathCommand(string args, Runspace runspace)
             Console.ForegroundColor = Theme.Current.Muted;
             Console.WriteLine($"  {varName} updated ({newEntries.Count} entries)");
             Console.ResetColor();
+
+            // Save to init.rush if --save
+            if (save)
+            {
+                SavePathEditToInit(varName, newEntries);
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+                Console.ResetColor();
+            }
+
             return false;
         }
         catch (Exception ex)

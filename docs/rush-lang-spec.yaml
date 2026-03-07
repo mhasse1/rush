@@ -1239,6 +1239,71 @@ time_duration:
   note: "Transpiles to [TimeSpan]::FromHours/Minutes/Seconds/Days and [DateTime]::Now/UtcNow/Today"
 
 # ============================================================================
+# LLM MODE (rush --llm)
+# ============================================================================
+# Machine-to-machine wire protocol. All I/O is JSON lines.
+# No ANSI colors, no decorations, no human prompts.
+
+llm_mode:
+  description: |
+    LLM mode (rush --llm) replaces the human shell interface with a structured
+    JSON wire protocol. Every prompt is a JSON context line. Every command result
+    is a JSON envelope. Designed for LLM agents driving the shell programmatically.
+  activation: "rush --llm"
+  wire_protocol:
+    context_prompt:
+      description: "Emitted before each command. Provides host, user, cwd, git state."
+      example: '{"ready":true,"host":"server","user":"mark","cwd":"/home/mark","git_branch":"main","git_dirty":false,"last_exit_code":0,"shell":"rush","version":"1.2.54"}'
+    result_envelope:
+      description: "Emitted after each command execution."
+      example: '{"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"...","stderr":"","duration_ms":12}'
+      status_values:
+        - { value: "success", meaning: "Command completed successfully" }
+        - { value: "error", meaning: "Command failed (check exit_code and stderr)" }
+        - { value: "syntax_error", meaning: "Rush code failed to parse (errors field has details)" }
+        - { value: "output_limit", meaning: "Output exceeded 4KB limit — use spool to retrieve" }
+    input_format:
+      description: "Commands sent as plain text or JSON-quoted strings for multi-line input"
+      examples:
+        - { input: "ls", note: "Plain text for simple commands" }
+        - { input: '"if true\\n  puts 42\\nend"', note: "JSON string for multi-line Rush blocks" }
+  builtins:
+    lcat:
+      description: "Read files with metadata and encoding for transport"
+      usage: "lcat <path>"
+      note: "Text files return utf8 content. Binary files return base64-encoded content. Includes mime type, size, line count."
+      examples:
+        - { cmd: "lcat config.yaml", returns: "UTF-8 content with mime=text/yaml" }
+        - { cmd: "lcat image.png", returns: "base64 content with mime=image/png" }
+    spool:
+      description: "Sliding window into captured output from last command that exceeded 4KB limit"
+      usage: "spool <offset>:<count> | spool --head=N | spool --tail=N | spool --grep=<pattern> | spool --all"
+      note: "Returns spool_position and spool_total so you always know where you are in the buffer."
+      examples:
+        - { cmd: "spool 0:10", note: "First 10 lines" }
+        - { cmd: "spool 500:20", note: "Lines 500-519" }
+        - { cmd: "spool --tail=50", note: "Last 50 lines" }
+        - { cmd: "spool --grep=ERROR", note: "Matching lines with line numbers" }
+  output_limit:
+    threshold: "4KB"
+    preview_size: "512 bytes"
+    behavior: |
+      When command output exceeds 4KB, it is spooled internally instead of
+      returned in stdout. The result envelope has status=output_limit with a
+      512-byte preview, total line/byte counts, and a hint about using spool.
+  tty_commands_unavailable:
+    description: "These commands require a TTY and cannot run in LLM mode. Use the alternatives."
+    commands:
+      - { cmd: "vim, vi, nano, emacs", use_instead: "lcat to read, File.write() to write" }
+      - { cmd: "less, more", use_instead: "lcat or cat (output captured automatically)" }
+      - { cmd: "top, htop", use_instead: "ps aux" }
+      - { cmd: "ssh (interactive)", use_instead: "ssh host 'rush --llm' for structured remote access" }
+  ssh_usage:
+    description: "Rush on both ends for structured remote access"
+    example: "ssh server 'rush --llm'"
+    note: "Requires Rush installed on the remote host. The JSON protocol flows over SSH transparently. Context prompt includes host so you always know which machine you're on."
+
+# ============================================================================
 # EXAMPLE SCRIPTS
 # ============================================================================
 # These examples define the target experience — what Rush code SHOULD
