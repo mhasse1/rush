@@ -19,7 +19,7 @@ public class CommandTranslatorTests
     [InlineData("cat file.txt", "Get-Content file.txt")]
     [InlineData("pwd", "Get-Location")]
     [InlineData("ps", "Get-Process")]
-    [InlineData("echo hello", "Write-Output 'hello'")]
+    [InlineData("echo hello", "Write-Output \"hello\"")]
     [InlineData("env", "Get-ChildItem Env:")]
     [InlineData("which dotnet", "Get-Command dotnet")]
     [InlineData("clear", "Clear-Host")]
@@ -257,16 +257,47 @@ public class CommandTranslatorTests
     public void Echo_QuotesPositionalArgs()
     {
         var result = _translator.Translate("echo hello world");
-        // echo combines args into single quoted output
-        Assert.Equal("Write-Output 'hello world'", result);
+        // echo combines args into double-quoted output for variable expansion
+        Assert.Equal("Write-Output \"hello world\"", result);
     }
 
     [Fact]
-    public void Echo_PreservesExistingQuotes()
+    public void Echo_StripsAndRewrapsQuotedArgs()
     {
         var result = _translator.Translate("echo 'hello world'");
-        // Pre-quoted args get wrapped again by quoting logic
-        Assert.Equal("Write-Output ''hello world''", result);
+        // Outer quotes stripped, re-wrapped in double quotes
+        Assert.Equal("Write-Output \"hello world\"", result);
+    }
+
+    [Fact]
+    public void Echo_ExpandsVariableReference()
+    {
+        var result = _translator.Translate("echo $x");
+        // Double quotes allow PowerShell to expand $x
+        Assert.Equal("Write-Output \"$x\"", result);
+    }
+
+    [Fact]
+    public void Echo_MixedTextAndVariable()
+    {
+        var result = _translator.Translate("echo hello $x world");
+        Assert.Equal("Write-Output \"hello $x world\"", result);
+    }
+
+    [Fact]
+    public void Echo_DoubleQuotedInput()
+    {
+        var result = _translator.Translate("echo \"hello world\"");
+        // Outer double quotes stripped, re-wrapped
+        Assert.Equal("Write-Output \"hello world\"", result);
+    }
+
+    [Fact]
+    public void Find_NotTranslated_RunsNatively()
+    {
+        // find should pass through to native execution (not translated to PS)
+        var result = _translator.Translate("find . -iname '*.txt'");
+        Assert.Null(result);
     }
 
     // ── Tee ─────────────────────────────────────────────────────────────

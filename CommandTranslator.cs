@@ -361,12 +361,9 @@ public class CommandTranslator
         // Shell
         Register("clear", "Clear-Host");
 
-        // File search
-        Register("find", "Get-ChildItem -Recurse", new Dictionary<string, string>
-        {
-            ["-name"] = "-Filter",
-            ["-type"] = "",  // handled specially
-        });
+        // find: NOT translated — runs natively via PATH.
+        // Native find supports -iname, -mtime, -exec, -perm, etc. that
+        // don't map cleanly to Get-ChildItem.
 
         // Pipe shorthands (also register for standalone use / tab completion)
         Register("where", "Where-Object");
@@ -640,9 +637,18 @@ public class CommandMapping
 
         if (QuotePositionalArgs && positionalArgs.Count > 0)
         {
-            // Join all positional args into a single quoted string
-            var joined = string.Join(' ', positionalArgs);
-            parts.Add($"'{joined}'");
+            // Join positional args into a double-quoted string so PowerShell
+            // expands $variables: echo $x → Write-Output "$x"
+            // Strip outer quotes from individual args to avoid double-wrapping
+            var processed = positionalArgs.Select(a =>
+            {
+                if (a.Length >= 2 &&
+                    ((a[0] == '\'' && a[^1] == '\'') || (a[0] == '"' && a[^1] == '"')))
+                    return a[1..^1];
+                return a;
+            });
+            var joined = string.Join(' ', processed);
+            parts.Add($"\"{joined}\"");
         }
         else
         {
