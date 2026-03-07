@@ -475,7 +475,8 @@ public class LlmMode
         // so they use the .NET process PATH — which includes paths added by init.rush.
         // PowerShell's command discovery caches PATH at runspace open and doesn't refresh.
         bool hasPipe = CommandTranslator.HasUnquotedPipe(input);
-        if (translated == null && !hasPipe)
+        bool hasRedirect = CommandTranslator.HasUnquotedRedirection(input);
+        if (translated == null && !hasPipe && !hasRedirect)
             return ExecuteNativeCommand(input, cwd, sw, timeoutMs);
 
         return ExecutePowerShell(translated ?? input, cwd, sw, timeoutMs);

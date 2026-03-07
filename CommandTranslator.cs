@@ -466,6 +466,27 @@ public class CommandTranslator
     /// </summary>
     public static bool HasUnquotedPipe(string input) => SplitOnPipe(input).Length > 1;
 
+    /// <summary>
+    /// Check if a command contains unquoted shell redirection operators (>, >>).
+    /// Used to determine whether PowerShell is needed for redirection.
+    /// </summary>
+    public static bool HasUnquotedRedirection(string input)
+    {
+        bool inSingleQuote = false;
+        bool inDoubleQuote = false;
+        for (int i = 0; i < input.Length; i++)
+        {
+            var ch = input[i];
+            if (ch == '\'' && !inDoubleQuote)
+                inSingleQuote = !inSingleQuote;
+            else if (ch == '"' && !inSingleQuote)
+                inDoubleQuote = !inDoubleQuote;
+            else if (ch == '>' && !inSingleQuote && !inDoubleQuote)
+                return true;
+        }
+        return false;
+    }
+
     internal static string[] SplitOnPipe(string input)
     {
         var segments = new List<string>();
