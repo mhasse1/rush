@@ -1004,7 +1004,7 @@ public class RushTranspiler
             "read_csv" => $"@(Import-Csv {TranspileExpression(node.Args[0])})",
             "write" => $"Set-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
             "append" => $"Add-Content -Path {TranspileExpression(node.Args[0])} -Value {TranspileExpression(node.Args[1])}",
-            "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])})",
+            "exist?" or "exists" => $"(Test-Path {TranspileExpression(node.Args[0])})",
             "delete" => $"Remove-Item {TranspileExpression(node.Args[0])}",
             "size" => $"(Get-Item {TranspileExpression(node.Args[0])}).Length",
             _ => TranspileDefaultMethod(TranspileExpression(node.Receiver), node)
@@ -1019,8 +1019,9 @@ public class RushTranspiler
             "dirs" => node.Args.Count > 0
                 ? $"Get-ChildItem {TranspileExpression(node.Args[0])} -Directory"
                 : "Get-ChildItem -Directory",
-            "exist?" => $"(Test-Path {TranspileExpression(node.Args[0])} -PathType Container)",
+            "exist?" or "exists" => $"(Test-Path {TranspileExpression(node.Args[0])} -PathType Container)",
             "mkdir" => $"$null = New-Item -ItemType Directory -Force -Path {TranspileExpression(node.Args[0])}",
+            "rmdir" => $"Remove-Item -Recurse -Force {TranspileExpression(node.Args[0])}",
             _ => TranspileDefaultMethod(TranspileExpression(node.Receiver), node)
         };
     }

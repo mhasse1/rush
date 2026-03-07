@@ -3345,12 +3345,26 @@ static string ExecuteSubstitution(string innerCommand, CommandTranslator transla
         // Recursively expand nested substitutions
         innerCommand = ExpandCommandSubstitution(innerCommand, translator, runspace);
 
-        // Translate through Rush's Unix→PS translator
-        var translated = translator.Translate(innerCommand) ?? innerCommand;
+        // If inner command is Rush syntax (e.g., File.read(), Dir.exists()),
+        // transpile to PowerShell before executing
+        var se = new ScriptEngine(translator);
+        if (se.IsRushSyntax(innerCommand))
+        {
+            var transpiled = se.TranspileFile(innerCommand);
+            if (transpiled != null)
+                innerCommand = transpiled;
+        }
+        else
+        {
+            // Translate through Rush's Unix→PS translator
+            var translated = translator.Translate(innerCommand);
+            if (translated != null)
+                innerCommand = translated;
+        }
 
         using var ps = PowerShell.Create();
         ps.Runspace = runspace;
-        ps.AddScript(translated);
+        ps.AddScript(innerCommand);
         var results = ps.Invoke();
 
         // Join results with spaces (standard shell behavior)
@@ -4247,6 +4261,7 @@ static void RunNonInteractive(string command)
     command = ExpandArithmetic(command, rs);
     var (procExpanded, procTempFiles) = ExpandProcessSubstitution(command, tr, rs);
     command = procExpanded;
+    command = ExpandCommandSubstitution(command, tr, rs);
 
     // Parse redirections before translation
     var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(command);
