@@ -541,37 +541,39 @@ public static class FileListCommand
     private static readonly Dictionary<uint, string> UidNameCache = new();
     private static readonly Dictionary<uint, string> GidNameCache = new();
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StatBuf
+    // Linux x86_64 stat struct: 144 bytes total
+    // dev(8) ino(8) nlink(8) mode(4) uid(4) gid(4) pad(4) rdev(8) size(8) ...
+    [StructLayout(LayoutKind.Explicit, Size = 144)]
+    private struct LinuxX64StatBuf
     {
-        public uint st_dev;
-        public ushort st_mode;
-        public ushort st_nlink;
-        public uint st_ino;
-        public uint st_uid;
-        public uint st_gid;
-        public uint st_rdev;
-        // We don't need the rest — just enough to get uid/gid
+        [FieldOffset(28)] public uint st_uid;
+        [FieldOffset(32)] public uint st_gid;
     }
 
-    // macOS arm64: stat struct starts differently, use lstat for portability
-    [DllImport("libc", SetLastError = true, EntryPoint = "lstat")]
-    private static extern int lstat_linux(string path, out StatBuf buf);
+    // Linux arm64 stat struct: 128 bytes total
+    // dev(8) ino(8) mode(4) nlink(4) uid(4) gid(4) ...
+    [StructLayout(LayoutKind.Explicit, Size = 128)]
+    private struct LinuxArm64StatBuf
+    {
+        [FieldOffset(24)] public uint st_uid;
+        [FieldOffset(28)] public uint st_gid;
+    }
 
-    // macOS uses lstat$INODE64 on arm64
+    [DllImport("libc", SetLastError = true, EntryPoint = "lstat")]
+    private static extern int lstat_linux_x64(string path, out LinuxX64StatBuf buf);
+
+    [DllImport("libc", SetLastError = true, EntryPoint = "lstat")]
+    private static extern int lstat_linux_arm64(string path, out LinuxArm64StatBuf buf);
+
+    // macOS arm64 stat: dev(4) mode(2) nlink(2) ino(8) uid(4) gid(4) ...
     [DllImport("libc", SetLastError = true, EntryPoint = "lstat$INODE64")]
     private static extern int lstat_macos(string path, out MacStatBuf buf);
 
-    [StructLayout(LayoutKind.Sequential)]
+    [StructLayout(LayoutKind.Explicit, Size = 144)]
     private struct MacStatBuf
     {
-        public int st_dev;
-        public ushort st_mode;
-        public ushort st_nlink;
-        public ulong st_ino;
-        public uint st_uid;
-        public uint st_gid;
-        // ... rest not needed
+        [FieldOffset(12)] public uint st_uid;
+        [FieldOffset(16)] public uint st_gid;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -615,12 +617,19 @@ public static class FileListCommand
                 uid = macBuf.st_uid;
                 gid = macBuf.st_gid;
             }
+            else if (RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
+            {
+                if (lstat_linux_arm64(entry.FullName, out var armBuf) != 0)
+                    return (Environment.UserName, Environment.UserName);
+                uid = armBuf.st_uid;
+                gid = armBuf.st_gid;
+            }
             else
             {
-                if (lstat_linux(entry.FullName, out var linuxBuf) != 0)
+                if (lstat_linux_x64(entry.FullName, out var x64Buf) != 0)
                     return (Environment.UserName, Environment.UserName);
-                uid = linuxBuf.st_uid;
-                gid = linuxBuf.st_gid;
+                uid = x64Buf.st_uid;
+                gid = x64Buf.st_gid;
             }
 
             // Resolve uid → username
