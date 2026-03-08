@@ -53,9 +53,24 @@ if (args.Length > 0)
         Console.WriteLine("  rush --llm           LLM wire protocol mode (JSON I/O)");
         Console.WriteLine("  rush --llm --inherit <state.json>  LLM mode with parent session state");
         Console.WriteLine("  rush --mcp           MCP server mode (JSON-RPC over stdio)");
+        Console.WriteLine("  rush install mcp --claude  Install MCP server into Claude");
         Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
+        return;
+    }
+    // ── install subcommand ───────────────────────────────────────────
+    if (args[0] == "install")
+    {
+        if (args.Length >= 2 && args[1] == "mcp" && args.Contains("--claude"))
+        {
+            Rush.McpInstaller.InstallClaude(Version);
+            return;
+        }
+        Console.WriteLine("Usage: rush install mcp --claude");
+        Console.WriteLine();
+        Console.WriteLine("  Registers rush as an MCP server in Claude Code and Claude Desktop.");
+        Console.WriteLine("  Adds rush MCP tools to the Claude Code permissions allow list.");
         return;
     }
     if (args[0] == "-c" && args.Length > 1)
