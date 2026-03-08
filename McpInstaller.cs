@@ -4,7 +4,7 @@ using System.Text.Json.Nodes;
 namespace Rush;
 
 /// <summary>
-/// Installs rush as an MCP server into Claude Code and Claude Desktop.
+/// Installs rush MCP servers (rush-local + rush-ssh) into Claude Code and Claude Desktop.
 /// Follows the same pattern as engram's `e2 install` command.
 ///
 /// Updates three files:
@@ -14,31 +14,36 @@ namespace Rush;
 /// </summary>
 public static class McpInstaller
 {
-    private const string ServerName = "rush";
+    private const string LocalServerName = "rush-local";
+    private const string SshServerName = "rush-ssh";
 
     private static readonly string[] AllowedTools =
     {
-        "mcp__rush__rush_execute",
-        "mcp__rush__rush_read_file",
-        "mcp__rush__rush_context",
+        // rush-local tools
+        "mcp__rush-local__rush_execute",
+        "mcp__rush-local__rush_read_file",
+        "mcp__rush-local__rush_context",
+        // rush-ssh tools
+        "mcp__rush-ssh__rush_execute",
+        "mcp__rush-ssh__rush_read_file",
+        "mcp__rush-ssh__rush_context",
     };
 
     public static void InstallClaude(string version)
     {
-        Console.WriteLine($"Installing Rush MCP server v{version} into Claude...");
+        Console.WriteLine($"Installing Rush MCP servers v{version} into Claude...");
         Console.WriteLine();
 
-        // Resolve the full path to the rush binary (follows symlinks)
         var rushPath = GetRushBinaryPath();
 
         // 1. Claude Code — ~/.claude/mcp.json
         var claudeCodePath = GetClaudeCodeConfigPath();
-        UpdateMcpConfig(claudeCodePath, "rush", rushPath, "Claude Code");
+        UpdateMcpConfig(claudeCodePath, "rush", "Claude Code");
 
         // 2. Claude Desktop — platform-specific config path
         var desktopPath = GetClaudeDesktopConfigPath();
         if (desktopPath != null)
-            UpdateMcpConfig(desktopPath, rushPath, rushPath, "Claude Desktop");
+            UpdateMcpConfig(desktopPath, rushPath, "Claude Desktop");
         else
             Console.WriteLine("   - Claude Desktop config not found (skipped)");
 
@@ -47,19 +52,17 @@ public static class McpInstaller
         UpdateClaudeSettings(settingsPath);
 
         Console.WriteLine();
-        Console.WriteLine("Done! Rush MCP server installed.");
-        Console.WriteLine($"   Binary: {rushPath}");
-        Console.WriteLine($"   Server: {ServerName}");
+        Console.WriteLine("Done! Rush MCP servers installed.");
+        Console.WriteLine($"   Binary:  {rushPath}");
+        Console.WriteLine($"   Servers: {LocalServerName} (persistent local), {SshServerName} (SSH gateway)");
         Console.WriteLine();
-        Console.WriteLine("Restart Claude Code / Claude Desktop to pick up the new server.");
+        Console.WriteLine("Restart Claude Code / Claude Desktop to pick up the new servers.");
     }
 
     // ── Config file locations ──────────────────────────────────────────
 
     private static string GetRushBinaryPath()
     {
-        // Environment.ProcessPath gives the actual binary path.
-        // Resolve symlinks so Claude Desktop gets the real location.
         var procPath = Environment.ProcessPath
             ?? throw new InvalidOperationException("Cannot determine rush binary path");
 
@@ -97,7 +100,6 @@ public static class McpInstaller
         }
         else
         {
-            // Linux: ~/.config/Claude/claude_desktop_config.json
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             path = Path.Combine(home, ".config", "Claude", "claude_desktop_config.json");
         }
@@ -115,11 +117,6 @@ public static class McpInstaller
 
     // ── JSON helper ─────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Write a JsonNode as pretty-printed JSON string.
-    /// Uses JsonWriterOptions directly to avoid the .NET 8 TypeInfoResolver issue
-    /// that occurs when passing JsonSerializerOptions to ToJsonString().
-    /// </summary>
     private static string WritePrettyJson(JsonNode root)
     {
         using var ms = new System.IO.MemoryStream();
@@ -132,9 +129,12 @@ public static class McpInstaller
 
     // ── Config file updaters ───────────────────────────────────────────
 
-    private static void UpdateMcpConfig(string configPath, string command, string rushPath, string label)
+    /// <summary>
+    /// Register both rush-local and rush-ssh in an MCP config file.
+    /// Cleans up the old "rush" entry from previous installs.
+    /// </summary>
+    private static void UpdateMcpConfig(string configPath, string command, string label)
     {
-        // Read existing config or start fresh
         JsonNode root;
         if (File.Exists(configPath))
         {
@@ -146,28 +146,36 @@ public static class McpInstaller
             root = new JsonObject();
         }
 
-        // Ensure mcpServers object exists
         if (root["mcpServers"] == null)
             root.AsObject().Add("mcpServers", new JsonObject());
 
-        // Set the rush server entry.
-        // For Claude Code: command = "rush" (in PATH), for Desktop: full path.
-        root["mcpServers"]!.AsObject().Remove(ServerName);
-        root["mcpServers"]!.AsObject().Add(ServerName, new JsonObject
+        var servers = root["mcpServers"]!.AsObject();
+
+        // Clean up old "rush" entry from previous install (migration)
+        servers.Remove("rush");
+
+        // Register rush-local: rush --mcp
+        servers.Remove(LocalServerName);
+        servers.Add(LocalServerName, new JsonObject
         {
-            ["command"] = command,
+            ["command"] = (JsonNode)command,
             ["args"] = new JsonArray { "--mcp" }
         });
 
-        // Write back with indentation
-        File.WriteAllText(configPath, WritePrettyJson(root));
+        // Register rush-ssh: rush --mcp-ssh
+        servers.Remove(SshServerName);
+        servers.Add(SshServerName, new JsonObject
+        {
+            ["command"] = (JsonNode)command,
+            ["args"] = new JsonArray { "--mcp-ssh" }
+        });
 
+        File.WriteAllText(configPath, WritePrettyJson(root));
         Console.WriteLine($"   + {label}: {configPath}");
     }
 
     private static void UpdateClaudeSettings(string settingsPath)
     {
-        // Read existing settings or start fresh
         JsonNode root;
         if (File.Exists(settingsPath))
         {
@@ -179,7 +187,6 @@ public static class McpInstaller
             root = new JsonObject();
         }
 
-        // Ensure permissions.allow array exists
         if (root["permissions"] == null)
             root.AsObject().Add("permissions", new JsonObject());
         if (root["permissions"]!["allow"] == null)
@@ -187,12 +194,24 @@ public static class McpInstaller
 
         var allowList = root["permissions"]!["allow"]!.AsArray();
 
-        // Collect existing entries as strings for dedup
+        // Collect existing entries for dedup
         var existing = new HashSet<string>();
         foreach (var item in allowList)
         {
             if (item != null)
                 existing.Add(item.GetValue<string>());
+        }
+
+        // Clean up old "rush" permissions (migration)
+        var oldPermissions = new[] { "mcp__rush__rush_execute", "mcp__rush__rush_read_file", "mcp__rush__rush_context" };
+        for (int i = allowList.Count - 1; i >= 0; i--)
+        {
+            var val = allowList[i]?.GetValue<string>();
+            if (val != null && oldPermissions.Contains(val))
+            {
+                allowList.RemoveAt(i);
+                existing.Remove(val);
+            }
         }
 
         // Add each tool if not already present
@@ -206,7 +225,6 @@ public static class McpInstaller
             }
         }
 
-        // Write back with indentation
         File.WriteAllText(settingsPath, WritePrettyJson(root));
 
         if (added > 0)

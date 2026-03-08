@@ -1,4 +1,5 @@
 using System.Management.Automation.Runspaces;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -6,15 +7,12 @@ namespace Rush;
 
 /// <summary>
 /// MCP (Model Context Protocol) server mode — JSON-RPC 2.0 over stdio.
-/// Exposes rush_execute, rush_read_file, rush_context as persistent tools.
-/// State (variables, cwd, env) survives across tool calls.
+/// Server name: rush-local. Persistent session: variables, cwd, env survive.
 ///
-/// Hand-rolled protocol: no NuGet dependency. The MCP protocol is trivial —
-/// just three RPC methods (initialize, tools/list, tools/call).
+/// Hand-rolled protocol: no NuGet dependency.
 ///
 /// Usage:
 ///   rush --mcp                              # local MCP server
-///   ssh trinity "rush --mcp"                # remote MCP via SSH stdio pipe
 ///   claude mcp add rush-local -- rush --mcp # register with Claude Code
 /// </summary>
 public class McpMode
@@ -91,6 +89,12 @@ public class McpMode
                     case "tools/call":
                         HandleToolsCall(id, msg["params"]);
                         break;
+                    case "resources/list":
+                        McpResources.HandleResourcesList(id);
+                        break;
+                    case "resources/read":
+                        McpResources.HandleResourcesRead(id, msg["params"]);
+                        break;
                     default:
                         WriteError(id, -32601, $"Method not found: {method}");
                         break;
@@ -115,13 +119,15 @@ public class McpMode
             ["protocolVersion"] = "2024-11-05",
             ["capabilities"] = new JsonObject
             {
-                ["tools"] = new JsonObject()
+                ["tools"] = new JsonObject(),
+                ["resources"] = new JsonObject()
             },
             ["serverInfo"] = new JsonObject
             {
-                ["name"] = "rush",
+                ["name"] = "rush-local",
                 ["version"] = _version
-            }
+            },
+            ["instructions"] = McpResources.Instructions
         };
 
         WriteResult(id, result);
@@ -259,41 +265,11 @@ public class McpMode
         WriteResult(id, result);
     }
 
-    // ── JSON-RPC helpers ───────────────────────────────────────────────
-
+    // Delegate to shared helpers
     private static JsonObject MakeTool(string name, string description, JsonObject inputSchema)
-    {
-        return new JsonObject
-        {
-            ["name"] = name,
-            ["description"] = description,
-            ["inputSchema"] = inputSchema
-        };
-    }
-
+        => McpJsonRpc.MakeTool(name, description, inputSchema);
     private static void WriteResult(JsonNode id, JsonNode result)
-    {
-        var response = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id.DeepClone(),
-            ["result"] = result
-        };
-        Console.WriteLine(response.ToJsonString());
-    }
-
+        => McpJsonRpc.WriteResult(id, result);
     private static void WriteError(JsonNode? id, int code, string message)
-    {
-        var response = new JsonObject
-        {
-            ["jsonrpc"] = "2.0",
-            ["id"] = id?.DeepClone(),
-            ["error"] = new JsonObject
-            {
-                ["code"] = code,
-                ["message"] = message
-            }
-        };
-        Console.WriteLine(response.ToJsonString());
-    }
+        => McpJsonRpc.WriteError(id, code, message);
 }

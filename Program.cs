@@ -28,11 +28,12 @@ args = args.Where(a => a != "--resume").ToArray();
 // ── LLM / MCP Mode Detection ──────────────────────────────────────
 bool llmMode = args.Contains("--llm");
 bool mcpMode = args.Contains("--mcp");
+bool mcpSshMode = args.Contains("--mcp-ssh");
 string? inheritPath = null;
 var inheritIdx = Array.IndexOf(args, "--inherit");
 if (inheritIdx >= 0 && inheritIdx + 1 < args.Length)
     inheritPath = args[inheritIdx + 1];
-args = args.Where(a => a != "--llm" && a != "--mcp" && a != "--inherit" && a != inheritPath).ToArray();
+args = args.Where(a => a != "--llm" && a != "--mcp" && a != "--mcp-ssh" && a != "--inherit" && a != inheritPath).ToArray();
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -53,7 +54,8 @@ if (args.Length > 0)
         Console.WriteLine("  rush --llm           LLM wire protocol mode (JSON I/O)");
         Console.WriteLine("  rush --llm --inherit <state.json>  LLM mode with parent session state");
         Console.WriteLine("  rush --mcp           MCP server mode (JSON-RPC over stdio)");
-        Console.WriteLine("  rush install mcp --claude  Install MCP server into Claude");
+        Console.WriteLine("  rush --mcp-ssh       MCP SSH gateway (dynamic multi-host)");
+        Console.WriteLine("  rush install mcp --claude  Install MCP servers into Claude");
         Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
@@ -110,6 +112,16 @@ if (mcpMode)
 
     var mcp = new Rush.McpMode(rs, se, tr, Version);
     mcp.Run();
+    return;
+}
+
+// ── MCP SSH Gateway Mode ────────────────────────────────────────────
+// Dynamic multi-host SSH gateway — no PowerShell runspace needed.
+// Tools take a `host` parameter; each call runs ssh <host> <command>.
+if (mcpSshMode)
+{
+    var sshMcp = new Rush.McpSshMode(Version);
+    sshMcp.Run();
     return;
 }
 
