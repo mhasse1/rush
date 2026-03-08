@@ -251,6 +251,7 @@ ReloadState.CaptureBaseline(runspace);
 string? previousDirectory = null;
 var dirStack = new Stack<string>();
 PowerShell? runningPs = null;
+var builtinCts = new CancellationTokenSource(); // Ctrl+C for .NET builtins
 var traps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 bool setE = cfgStopOnError;   // set -e: exit on error (from config or set -e)
 bool setX = cfgTrace;         // set -x: trace commands (from config or set -x)
@@ -288,6 +289,7 @@ Console.CancelKeyPress += (_, e) =>
         try { runningPs.Stop(); } // Interrupt running PowerShell pipeline
         catch { }
     }
+    try { builtinCts.Cancel(); } catch { } // Signal .NET builtins (cat, read, native procs)
     // If at the prompt (runningPs == null), LineEditor already handles Ctrl+C
 };
 
@@ -599,6 +601,13 @@ while (true)
     {
         var segment = chainSegments[ci].Trim();
         if (string.IsNullOrEmpty(segment)) continue;
+
+        // Reset Ctrl+C token for this segment (previous cancellation shouldn't bleed)
+        if (builtinCts.IsCancellationRequested)
+        {
+            builtinCts.Dispose();
+            builtinCts = new CancellationTokenSource();
+        }
 
         // Chain logic: && skips on failure, || skips on success, ; always runs
         if (ci > 0)
@@ -1299,7 +1308,13 @@ while (true)
             }
 
             if (readPrompt != null) Console.Write(readPrompt);
-            var value = Console.ReadLine() ?? "";
+            var value = CatCommand.ReadLineInterruptible(builtinCts.Token) ?? "";
+            if (builtinCts.IsCancellationRequested)
+            {
+                lastSegmentFailed = true;
+                lastExitCode = 130;
+                continue;
+            }
 
             using var readPs = PowerShell.Create();
             readPs.Runspace = runspace;
@@ -1681,7 +1696,7 @@ while (true)
                 }
             }
             var catArgs = catCmd.Length > 3 ? catCmd[3..].TrimStart() : "";
-            lastSegmentFailed = !CatCommand.Execute(catArgs, catRedirect, catStdinContent);
+            lastSegmentFailed = !CatCommand.Execute(catArgs, catRedirect, catStdinContent, builtinCts.Token);
             lastExitCode = lastSegmentFailed ? 1 : 0;
             continue;
         }
@@ -1783,7 +1798,7 @@ while (true)
         if (!needsPowerShell)
         {
             var sw2 = Stopwatch.StartNew();
-            var nativeExitCode = RunInteractive(commandToRun, translator);
+            var nativeExitCode = RunInteractive(commandToRun, translator, builtinCts.Token);
             lastSegmentFailed = nativeExitCode != 0;
             lastExitCode = nativeExitCode;
             sw2.Stop();
@@ -2151,7 +2166,8 @@ static void RunScriptFile(string path, string[] scriptArgs)
 /// Used for all native commands — gives them real TTY access for
 /// interactive programs, shells, TUIs, and regular CLI tools alike.
 /// </summary>
-static int RunInteractive(string command, CommandTranslator? translator = null)
+static int RunInteractive(string command, CommandTranslator? translator = null,
+    CancellationToken cancelToken = default)
 {
     try
     {
@@ -2167,7 +2183,23 @@ static int RunInteractive(string command, CommandTranslator? translator = null)
         var proc = Process.Start(psi);
         if (proc == null) return 1;
 
-        proc.WaitForExit();
+        // Poll with cancellation so Ctrl+C can kill hung processes
+        if (cancelToken != default)
+        {
+            while (!proc.WaitForExit(200))
+            {
+                if (cancelToken.IsCancellationRequested)
+                {
+                    try { proc.Kill(); } catch { }
+                    proc.Dispose();
+                    return 130; // Standard Ctrl+C exit code
+                }
+            }
+        }
+        else
+        {
+            proc.WaitForExit();
+        }
         var exitCode = proc.ExitCode;
         proc.Dispose();
         return exitCode;

@@ -17,7 +17,8 @@ public static class CatCommand
     /// <param name="redirect">Stdout redirection info (> or >>), or null</param>
     /// <param name="stdinContent">Content from stdin redirection (&lt; file), or null</param>
     /// <returns>true on success, false on any error</returns>
-    public static bool Execute(string argsStr, RedirectInfo? redirect, string? stdinContent)
+    public static bool Execute(string argsStr, RedirectInfo? redirect, string? stdinContent,
+        CancellationToken token = default)
     {
         var (numberLines, paths) = ParseArgs(argsStr);
 
@@ -45,7 +46,7 @@ public static class CatCommand
             if (paths.Count == 0 && stdinContent == null)
             {
                 // No files, no stdin redirect → read from console stdin
-                ReadStdin(output, numberLines, ref lineNum);
+                ReadStdin(output, numberLines, ref lineNum, token);
             }
             else
             {
@@ -64,7 +65,7 @@ public static class CatCommand
                         if (stdinContent != null)
                             WriteContent(output, stdinContent, numberLines, ref lineNum);
                         else
-                            ReadStdin(output, numberLines, ref lineNum);
+                            ReadStdin(output, numberLines, ref lineNum, token);
                         continue;
                     }
 
@@ -133,11 +134,14 @@ public static class CatCommand
         }
     }
 
-    private static void ReadStdin(TextWriter output, bool numberLines, ref int lineNum)
+    private static void ReadStdin(TextWriter output, bool numberLines, ref int lineNum,
+        CancellationToken token)
     {
-        // Read from console stdin until EOF (Ctrl+D on Unix, Ctrl+Z on Windows)
+        // Read stdin character-by-character via KeyAvailable/ReadKey.
+        // This avoids orphaned Console.In.ReadLine() threads that compete
+        // with LineEditor for stdin after Ctrl+C cancellation.
         string? line;
-        while ((line = Console.In.ReadLine()) != null)
+        while ((line = ReadLineInterruptible(token)) != null)
         {
             if (numberLines)
             {
@@ -149,6 +153,63 @@ public static class CatCommand
                 output.WriteLine(line);
             }
         }
+    }
+
+    /// <summary>
+    /// Read a line from console stdin, interruptible by CancellationToken.
+    /// Returns null on EOF (Ctrl+D) or cancellation (Ctrl+C).
+    /// </summary>
+    internal static string? ReadLineInterruptible(CancellationToken token)
+    {
+        var sb = new System.Text.StringBuilder();
+        while (!token.IsCancellationRequested)
+        {
+            if (!Console.KeyAvailable)
+            {
+                Thread.Sleep(20);
+                continue;
+            }
+            var key = Console.ReadKey(intercept: true);
+
+            // Ctrl+D = EOF
+            if (key.Key == ConsoleKey.D && key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                if (sb.Length == 0)
+                {
+                    Console.WriteLine();
+                    return null;
+                }
+                // Ctrl+D with content: flush current line (like bash)
+                Console.WriteLine();
+                return sb.ToString();
+            }
+
+            // Enter = complete line
+            if (key.Key == ConsoleKey.Enter)
+            {
+                Console.WriteLine();
+                return sb.ToString();
+            }
+
+            // Backspace
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (sb.Length > 0)
+                {
+                    sb.Remove(sb.Length - 1, 1);
+                    Console.Write("\b \b");
+                }
+                continue;
+            }
+
+            // Regular character
+            if (key.KeyChar != '\0')
+            {
+                sb.Append(key.KeyChar);
+                Console.Write(key.KeyChar);
+            }
+        }
+        return null; // Cancelled
     }
 
     private static (bool numberLines, List<string> paths) ParseArgs(string argsStr)
