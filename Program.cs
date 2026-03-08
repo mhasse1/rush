@@ -25,13 +25,14 @@ args = args.Where(a => a is not "--login" and not "-l").ToArray();
 bool isResuming = args.Contains("--resume");
 args = args.Where(a => a != "--resume").ToArray();
 
-// ── LLM Mode Detection ─────────────────────────────────────────────
+// ── LLM / MCP Mode Detection ──────────────────────────────────────
 bool llmMode = args.Contains("--llm");
+bool mcpMode = args.Contains("--mcp");
 string? inheritPath = null;
 var inheritIdx = Array.IndexOf(args, "--inherit");
 if (inheritIdx >= 0 && inheritIdx + 1 < args.Length)
     inheritPath = args[inheritIdx + 1];
-args = args.Where(a => a != "--llm" && a != "--inherit" && a != inheritPath).ToArray();
+args = args.Where(a => a != "--llm" && a != "--mcp" && a != "--inherit" && a != inheritPath).ToArray();
 
 // ── CLI Arguments ────────────────────────────────────────────────────
 if (args.Length > 0)
@@ -51,6 +52,7 @@ if (args.Length > 0)
         Console.WriteLine("  rush -c 'command'    Execute command and exit");
         Console.WriteLine("  rush --llm           LLM wire protocol mode (JSON I/O)");
         Console.WriteLine("  rush --llm --inherit <state.json>  LLM mode with parent session state");
+        Console.WriteLine("  rush --mcp           MCP server mode (JSON-RPC over stdio)");
         Console.WriteLine("  rush --login         Start as login shell");
         Console.WriteLine("  rush --version       Show version");
         Console.WriteLine("  rush --help          Show this help");
@@ -68,6 +70,32 @@ if (args.Length > 0)
         RunScriptFile(args[0], args[1..]);
         return;
     }
+}
+
+// ── MCP Server Mode ──────────────────────────────────────────────────
+// Model Context Protocol server — JSON-RPC over stdio for Claude Code.
+// Exposes rush_execute, rush_read_file, rush_context as MCP tools.
+// Persistent session: variables, cwd, env survive across tool calls.
+if (mcpMode)
+{
+    var mcpConfig = RushConfig.Load();
+    mcpConfig.ShowHints = false;
+    mcpConfig.ShowTips = false;
+    var ui = new RushHostUI();
+    var h = new RushHost(ui);
+    var ss = InitialSessionState.CreateDefault();
+    using var rs = RunspaceFactory.CreateRunspace(h, ss);
+    rs.Open();
+    var tr = new CommandTranslator();
+    var se = new ScriptEngine(tr);
+    mcpConfig.Apply(null, tr);
+    InjectRushEnvVars(rs, Version, isLoginShell);
+    RunStartupScripts(rs, se);
+    ReloadState.CaptureBaseline(rs);
+
+    var mcp = new Rush.McpMode(rs, se, tr, Version);
+    mcp.Run();
+    return;
 }
 
 // ── LLM Mode ────────────────────────────────────────────────────────
