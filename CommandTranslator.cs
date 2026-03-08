@@ -307,7 +307,7 @@ public class CommandTranslator
             ["-R"] = "-Recurse",
         });
 
-        Register("cat", "Get-Content");
+        // cat: handled as .NET builtin (CatCommand.cs); piped falls through to native /bin/cat
         Register("pwd", "Get-Location");
         Register("cd", "Set-Location");
         Register("cp", "Copy-Item", new Dictionary<string, string>

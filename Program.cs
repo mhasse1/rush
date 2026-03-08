@@ -1658,6 +1658,34 @@ while (true)
             continue;
         }
 
+        // ── cat builtin (when not piped) ────────────────────────
+        // Direct .NET file I/O — supports stdin, concatenation, -n.
+        // When piped (cat file | grep), falls through to native /bin/cat.
+        if ((segment.Equals("cat", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("cat ", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("cat\t", StringComparison.OrdinalIgnoreCase)) &&
+            !segment.Contains('|') &&
+            !segment.Contains("<("))
+        {
+            var (catCmd, catRedirect, catStdin) = RedirectionParser.Parse(segment);
+            string? catStdinContent = null;
+            if (catStdin != null)
+            {
+                try { catStdinContent = File.ReadAllText(catStdin.FilePath); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"cat: {ex.Message}");
+                    lastSegmentFailed = true;
+                    lastExitCode = 1;
+                    continue;
+                }
+            }
+            var catArgs = catCmd.Length > 3 ? catCmd[3..].TrimStart() : "";
+            lastSegmentFailed = !CatCommand.Execute(catArgs, catRedirect, catStdinContent);
+            lastExitCode = lastSegmentFailed ? 1 : 0;
+            continue;
+        }
+
         // ── set -x trace ─────────────────────────────────────────
         if (setX)
         {
@@ -4319,6 +4347,33 @@ static void RunNonInteractive(string command)
     {
         var lsArgs = trimmedCmd.Length > 2 ? trimmedCmd[2..].TrimStart() : "";
         if (!FileListCommand.Execute(lsArgs))
+            Environment.ExitCode = 1;
+        return;
+    }
+
+    // ── cat builtin (same dispatch as interactive REPL) ──
+    // Allow redirection (cat > file is a core use case), only fall through on pipe.
+    // Also fall through for process substitution <(...) which needs expansion first.
+    if ((trimmedCmd.Equals("cat", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("cat ", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("cat\t", StringComparison.OrdinalIgnoreCase)) &&
+        !CommandTranslator.HasUnquotedPipe(trimmedCmd) &&
+        !trimmedCmd.Contains("<("))
+    {
+        var (catCmd, catRedirect, catStdin) = RedirectionParser.Parse(trimmedCmd);
+        string? catStdinContent = null;
+        if (catStdin != null)
+        {
+            try { catStdinContent = File.ReadAllText(catStdin.FilePath); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"cat: {ex.Message}");
+                Environment.ExitCode = 1;
+                return;
+            }
+        }
+        var catArgs = catCmd.Length > 3 ? catCmd[3..].TrimStart() : "";
+        if (!CatCommand.Execute(catArgs, catRedirect, catStdinContent))
             Environment.ExitCode = 1;
         return;
     }

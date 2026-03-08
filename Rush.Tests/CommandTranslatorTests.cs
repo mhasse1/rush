@@ -16,7 +16,7 @@ public class CommandTranslatorTests
 
     [Theory]
     [InlineData("ls", "Get-ChildItem")]
-    [InlineData("cat file.txt", "Get-Content file.txt")]
+    // cat is now a .NET builtin (CatCommand.cs), no longer translated
     [InlineData("pwd", "Get-Location")]
     [InlineData("ps", "Get-Process")]
     [InlineData("echo hello", "Write-Output \"hello\"")]
@@ -201,7 +201,7 @@ public class CommandTranslatorTests
         var names = _translator.GetCommandNames().ToList();
         Assert.Contains("ls", names);
         Assert.Contains("grep", names);
-        Assert.Contains("cat", names);
+        // cat is now a .NET builtin, not in CommandTranslator
         Assert.Contains("rm", names);
     }
 
