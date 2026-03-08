@@ -1,6 +1,6 @@
 # Rush User Manual
 
-> **Version 0.2.0 (alpha)** — A modern shell with clean, readable syntax on PowerShell 7
+> **Version 0.3.0 (alpha)** — A modern shell with clean, readable syntax on PowerShell 7
 
 ---
 
@@ -15,10 +15,12 @@
 7. [Standard Library](#standard-library)
 8. [Built-in Commands](#built-in-commands)
 9. [The `ls` Builtin](#the-ls-builtin)
-10. [Command Translations](#command-translations)
-11. [Built-in Variables](#built-in-variables)
-12. [LLM Mode](#llm-mode)
-13. [Tips & Tricks](#tips--tricks)
+10. [The `cat` Builtin](#the-cat-builtin)
+11. [Command Translations](#command-translations)
+12. [Built-in Variables](#built-in-variables)
+13. [LLM Mode](#llm-mode)
+14. [MCP Server Mode](#mcp-server-mode)
+15. [Tips & Tricks](#tips--tricks)
 
 ---
 
@@ -73,6 +75,9 @@ rush                     Start interactive shell
 rush script.rush         Execute a Rush script
 rush -c 'command'        Execute command and exit
 rush --llm               LLM agent mode (JSON wire protocol)
+rush --mcp               MCP server mode (local stdio)
+rush --mcp-ssh           MCP server mode (SSH gateway)
+rush install mcp --claude  Register Rush MCP server in Claude Code
 rush --version (-v)      Show version
 rush --help (-h)         Show help
 ```
@@ -88,7 +93,9 @@ All configuration lives in `~/.config/rush/`:
 | File | Purpose |
 |------|---------|
 | `config.json` | Settings (edit mode, aliases, theme, history size) |
+| `config.rush` | Rush-syntax config (loaded after config.json) |
 | `init.rush` | Startup script — transpiled through Rush engine |
+| `secrets.rush` | API keys and tokens (not synced) |
 | `history` | Persistent command history |
 | `sync.json` | Config sync settings |
 
@@ -287,10 +294,12 @@ Rush highlights your input as you type: keywords, strings, numbers, operators, c
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+C` | Cancel current line (prints `^C`, new prompt) |
-| `Ctrl+D` | Exit Rush (on empty line) |
+| `Ctrl+C` | Cancel current line, interrupt running commands |
+| `Ctrl+D` | Exit Rush (on empty line), EOF for stdin reading |
 | `Ctrl+R` | Reverse incremental search |
 | `\` (trailing) | Line continuation |
+
+`Ctrl+C` works for all command types: builtins (`cat`, `read`), native commands (`sleep`, `curl`), and PowerShell pipelines. Running processes are killed and Rush returns to the prompt.
 
 ---
 
@@ -1390,6 +1399,43 @@ Sizes are always human-readable: bytes, K, M, G.
 
 ---
 
+## The `cat` Builtin
+
+Rush includes a native `cat` implementation built on .NET (not PowerShell's `Get-Content`). It provides Unix-compatible behavior for file reading, concatenation, and stdin.
+
+### Basic Usage
+
+```rush
+cat file.txt                # Print file contents
+cat file1.txt file2.txt     # Concatenate multiple files
+cat -n file.txt             # Print with line numbers
+cat --number file.txt       # Same as -n
+```
+
+### Stdin Reading
+
+```rush
+cat                         # Read from stdin (type lines, Ctrl+D to end)
+cat > output.txt            # Read stdin, write to file
+cat >> output.txt           # Read stdin, append to file
+```
+
+Press **Ctrl+D** on an empty line to signal EOF (end of input). Press **Ctrl+C** to cancel.
+
+### Redirection
+
+```rush
+cat file.txt > copy.txt     # Copy file contents
+cat file.txt >> log.txt     # Append to file
+cat < input.txt             # Read via stdin redirection
+```
+
+### Pipeline Fallthrough
+
+When `cat` is used in a pipeline (`cat file | grep pattern`) or with process substitution (`cat <(cmd)`), Rush falls through to the native `/bin/cat` so pipeline semantics work naturally.
+
+---
+
 ## Command Translations
 
 Rush translates common Unix commands to PowerShell equivalents. Native commands (git, docker, ssh, etc.) pass through directly.
@@ -1399,7 +1445,7 @@ Rush translates common Unix commands to PowerShell equivalents. Native commands 
 | Unix | PowerShell | Notes |
 |------|-----------|-------|
 | `ls` | Custom builtin | See [ls builtin](#the-ls-builtin) |
-| `cat file` | `Get-Content` | |
+| `cat` | Custom builtin | See [cat builtin](#the-cat-builtin) |
 | `cp src dst` | `Copy-Item` | `-r` → `-Recurse` |
 | `mv src dst` | `Move-Item` | |
 | `rm file` | `Remove-Item` | `-r` → `-Recurse`, `-rf` → `-Recurse -Force` |
@@ -1639,6 +1685,69 @@ ssh server "rush --llm"   # JSON in, JSON out
 ```
 
 For full protocol details, see `docs/llm-mode-design.md`.
+
+---
+
+## MCP Server Mode
+
+Rush provides two MCP (Model Context Protocol) servers for integration with Claude Code and Claude Desktop. Both use JSON-RPC 2.0 over stdio.
+
+### Installation
+
+```rush
+rush install mcp --claude
+```
+
+This registers both servers in:
+- **Claude Code** (`~/.claude/mcp.json`) — server entries
+- **Claude Desktop** (`~/Library/Application Support/Claude/claude_desktop_config.json`) — server entries
+- **Claude Code permissions** (`~/.claude/settings.json`) — auto-allows all 6 tools
+
+Restart Claude Code / Claude Desktop after installing.
+
+### rush --mcp (Local Persistent Session)
+
+Server name: `rush-local`
+
+A stateful MCP server with a persistent PowerShell runspace. Variables, working directory, and environment changes survive across tool calls.
+
+**Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `rush_execute` | Execute Rush syntax, Unix commands, or PowerShell. State persists. |
+| `rush_read_file` | Read a file with MIME detection. Text as UTF-8, binary as base64. |
+| `rush_context` | Get current context: hostname, cwd, git branch/dirty, last exit code. |
+
+The session loads `init.rush` and `secrets.rush` at startup, so Claude gets the user's PATH, aliases, and environment.
+
+### rush --mcp-ssh (SSH Gateway)
+
+Server name: `rush-ssh`
+
+A stateless SSH gateway for remote execution. Each tool call runs an independent SSH session. All tools require a `host` parameter.
+
+**Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `rush_execute` | Execute a command on `host` via SSH. |
+| `rush_read_file` | Read a file from `host` via SSH. |
+| `rush_context` | Get hostname, cwd, git status from `host` via SSH. |
+
+Designed for parallel execution across multiple hosts — Claude can target different servers simultaneously.
+
+### Local vs SSH
+
+| Aspect | rush-local | rush-ssh |
+|--------|-----------|----------|
+| State | Persistent (vars, cwd, env survive) | Stateless per call |
+| Hosts | Local machine | Any SSH-accessible host |
+| Use case | Multi-step scripts, interactive workflows | Quick commands, multi-host admin |
+
+### Resources
+
+Both servers provide a `rush://lang-spec` resource containing the Rush language specification (YAML), so Claude understands Rush syntax.
 
 ---
 

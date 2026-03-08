@@ -14,7 +14,7 @@
 # ============================================================================
 
 meta:
-  version: "0.2.0"
+  version: "0.3.0"
   status: "alpha"  # design → alpha → beta → stable
   engine: "PowerShell 7 via Microsoft.PowerShell.SDK"
   runtime: ".NET 8"
@@ -1257,6 +1257,25 @@ builtin_functions:
 # SHELL BUILTINS (REPL commands — not transpiled, handled directly)
 # ============================================================================
 shell_builtins:
+  - name: "ls"
+    description: "List files — custom .NET builtin (not PowerShell Get-ChildItem)"
+    examples:
+      - { rush: 'ls', note: "List current directory" }
+      - { rush: 'ls -la', note: "Long format, show hidden" }
+      - { rush: 'ls -ltS', note: "Long, sort by time then size" }
+      - { rush: 'ls -R src/', note: "Recursive listing" }
+    note: "Supports -l, -a/-A, -R, -r, -t, -S, -1, -d, -F, -G, -h. Color-coded by file type."
+
+  - name: "cat"
+    description: "Read/concatenate files — custom .NET builtin (not PowerShell Get-Content)"
+    examples:
+      - { rush: 'cat file.txt', note: "Print file contents" }
+      - { rush: 'cat -n file.txt', note: "Print with line numbers" }
+      - { rush: 'cat file1.txt file2.txt', note: "Concatenate multiple files" }
+      - { rush: 'cat > output.txt', note: "Read stdin, write to file (Ctrl+D to end)" }
+      - { rush: 'cat < input.txt', note: "Read via stdin redirection" }
+    note: "Falls through to native /bin/cat when piped (cat file | grep). Supports -n/--number, stdin, redirection."
+
   - name: "export"
     description: "Set environment variable"
     examples:
