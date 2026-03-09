@@ -148,7 +148,7 @@ def rush_prompt()
 end
 ```
 
-A commented default is created on first run.
+A commented default is created on first run. Custom prompts have access to context variables: `$exit_code`, `$exit_failed`, `$is_ssh`, `$is_root`, and `$needs_reload` (true when the binary has been updated since startup).
 
 ### Reloading
 
@@ -180,6 +180,7 @@ Components (left to right):
 - **User@host**: highlights differently when connected via SSH
 - **Path**: shortened to last 2 directory levels (`~` for home)
 - **Git branch**: with `*` suffix if there are uncommitted changes
+- **Stale indicator**: `[stale]` in yellow when the binary has been updated — run `reload --hard` to restart
 
 ### Vi Mode (Default)
 
@@ -1326,6 +1327,12 @@ The agent:
 
 `reload --hard` serializes your session (variables, env, cwd, aliases, flags) to a temp file, restarts the Rush binary, and restores everything. Use this after updating the Rush binary with `install.sh`.
 
+When the binary is updated while Rush is running, a yellow `[stale]` indicator appears in the prompt. A one-time hint message explains what to do:
+
+```
+  binary updated — run 'reload --hard' to restart
+```
+
 ### Signals
 
 | Command | Description |
@@ -1571,6 +1578,7 @@ ls | tee -a log.txt             # Append mode
 | `hostname` | Machine name |
 | `rush_version` | Rush version string |
 | `is_login_shell` | True if launched as login shell |
+| `needs_reload` | True if binary updated since startup (prompt context) |
 
 ---
 

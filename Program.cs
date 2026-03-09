@@ -213,7 +213,8 @@ var jobManager = new Rush.JobManager(iss, host);
 var translator = new CommandTranslator();
 var scriptEngine = new ScriptEngine(translator);
 var lineEditor = new LineEditor();
-var prompt = new Prompt();
+var binaryWatcher = new BinaryWatcher();
+var prompt = new Prompt(binaryWatcher);
 var tabCompleter = new TabCompleter(runspace, translator, config);
 var highlighter = new SyntaxHighlighter(translator);
 

@@ -1120,6 +1120,7 @@ builtin_variables:
     note: "Lowercase `env` — clean and readable. Transpiles to PowerShell $env: provider"
   - { name: "__FILE__", description: "Current script path" }
   - { name: "__DIR__", description: "Current script directory" }
+  - { name: "needs_reload", description: "True if binary updated since startup (available in rush_prompt)" }
 
 # ============================================================================
 # BUILT-IN FUNCTIONS

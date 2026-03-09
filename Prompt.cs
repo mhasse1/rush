@@ -20,12 +20,18 @@ public class Prompt
 {
     private bool _lastCommandFailed;
     private int _lastExitCode;
+    private readonly BinaryWatcher? _binaryWatcher;
 
     /// <summary>Continuation prompt string — 4 spaces for clean multi-line input.</summary>
     public const string Continuation = "    ";
 
     /// <summary>Input line prefix — 2 spaces for clean copy-paste.</summary>
     public const string InputPrefix = "  ";
+
+    public Prompt(BinaryWatcher? binaryWatcher = null)
+    {
+        _binaryWatcher = binaryWatcher;
+    }
 
     public void SetLastCommandFailed(bool failed, int exitCode = 1)
     {
@@ -38,6 +44,14 @@ public class Prompt
     /// </summary>
     public void Render(Runspace runspace)
     {
+        // ── One-time stale binary hint ──────────────────────────────
+        if (_binaryWatcher?.ShouldShowHint() == true)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  binary updated — run 'reload --hard' to restart");
+            Console.ResetColor();
+        }
+
         // ── Blank line separator ──────────────────────────────────────
         Console.WriteLine();
 
@@ -134,6 +148,14 @@ public class Prompt
             }
         }
 
+        // Stale binary indicator
+        if (_binaryWatcher?.IsStale == true)
+        {
+            Console.Write("  ");
+            Console.ForegroundColor = Theme.Current.Warning;
+            Console.Write("[stale]");
+        }
+
         Console.ResetColor();
     }
 
@@ -156,13 +178,15 @@ public class Prompt
             if (exists.Count == 0) return false;
 
             // Set context variables the prompt function can use
+            var needsReload = _binaryWatcher?.IsStale == true;
             using var setup = PowerShell.Create();
             setup.Runspace = runspace;
             setup.AddScript(
                 $"$exit_code = {_lastExitCode}; " +
                 $"$exit_failed = ${(_lastCommandFailed ? "true" : "false")}; " +
                 $"$is_ssh = ${(IsSshSession() ? "true" : "false")}; " +
-                $"$is_root = ${(IsRoot() ? "true" : "false")}");
+                $"$is_root = ${(IsRoot() ? "true" : "false")}; " +
+                $"$needs_reload = ${(needsReload ? "true" : "false")}");
             setup.Invoke();
 
             // Invoke the custom prompt function
