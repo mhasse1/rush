@@ -422,7 +422,8 @@ public class ScriptEngine
             || word.Equals("read", StringComparison.OrdinalIgnoreCase)
             || word.Equals("exec", StringComparison.OrdinalIgnoreCase)
             || word.Equals("trap", StringComparison.OrdinalIgnoreCase)
-            || word.Equals("path", StringComparison.OrdinalIgnoreCase);
+            || word.Equals("path", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("sql", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -391,6 +391,10 @@ public class LlmMode
         if (firstWord == "timeout")
             return HandleTimeout(input, cwd, sw);
 
+        // sql — native database queries with structured JSON output
+        if (firstWord == "sql")
+            return SqlCommand.ExecuteForLlm(input.Trim(), cwd, sw);
+
         // ── TTY blocklist ─────────────────────────────────────────────
         var (blocked, ttyResult) = TtyBlocklist.Check(input, cwd);
         if (blocked)

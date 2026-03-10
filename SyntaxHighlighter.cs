@@ -31,7 +31,8 @@ public class SyntaxHighlighter
         "pushd", "popd", "dirs", // Directory stack
         "printf", "read", "exec", "trap", // Shell builtins
         "path", // PATH management
-        "ai" // AI assistant
+        "ai", // AI assistant
+        "sql" // Database queries
     };
 
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)

@@ -806,7 +806,7 @@ while (true)
                     "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
                     "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
                     "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
-                    "path", "ai", "set", "which", "type"
+                    "path", "ai", "sql", "set", "which", "type"
                 };
 
                 if (rushBuiltins.Contains(whichCmd))
@@ -1657,6 +1657,20 @@ while (true)
             var syncArgs = segment.Length > 4 ? segment[4..].Trim() : "";
             ConfigSync.HandleSync(syncArgs);
             lastSegmentFailed = false;
+            continue;
+        }
+
+        // ── sql builtin (when not piped) ────────────────────────
+        // Native database queries with table/JSON/CSV output.
+        // When piped (sql @db "query" | grep), falls through to stdout.
+        if ((segment.Equals("sql", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("sql ", StringComparison.OrdinalIgnoreCase) ||
+             segment.StartsWith("sql\t", StringComparison.OrdinalIgnoreCase)) &&
+            !segment.Contains('|'))
+        {
+            var sqlArgs = segment.Length > 3 ? segment[3..].TrimStart() : "";
+            lastSegmentFailed = !SqlCommand.Execute(sqlArgs);
+            lastExitCode = lastSegmentFailed ? 1 : 0;
             continue;
         }
 
@@ -4268,6 +4282,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  unset      — remove env var: unset FOO");
     Console.WriteLine("  path       — manage PATH: path [add [--front] [--save] <dir> | rm [--save] <dir> | edit] (--name=VAR for other vars)");
     Console.WriteLine("  ai         — AI assistant: ai \"prompt\"  cat log | ai \"what went wrong?\"");
+    Console.WriteLine("  sql        — query databases: sql @name \"SELECT ...\"  sql list | test | add");
     Console.WriteLine("  alias x=y  — define alias: alias ll='ls -la'");
     Console.WriteLine("  source     — run rush script: source file.rush");
     Console.WriteLine("  $(cmd)     — command substitution: echo $(ls | count)");
@@ -4380,6 +4395,18 @@ static void RunNonInteractive(string command)
     {
         var lsArgs = trimmedCmd.Length > 2 ? trimmedCmd[2..].TrimStart() : "";
         if (!FileListCommand.Execute(lsArgs))
+            Environment.ExitCode = 1;
+        return;
+    }
+
+    // ── sql builtin (same dispatch as interactive REPL) ──
+    if ((trimmedCmd.Equals("sql", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("sql ", StringComparison.OrdinalIgnoreCase) ||
+         trimmedCmd.StartsWith("sql\t", StringComparison.OrdinalIgnoreCase)) &&
+        !CommandTranslator.HasUnquotedPipe(trimmedCmd))
+    {
+        var sqlArgs = trimmedCmd.Length > 3 ? trimmedCmd[3..].TrimStart() : "";
+        if (!SqlCommand.Execute(sqlArgs))
             Environment.ExitCode = 1;
         return;
     }
