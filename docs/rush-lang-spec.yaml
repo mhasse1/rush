@@ -1277,6 +1277,19 @@ shell_builtins:
       - { rush: 'cat < input.txt', note: "Read via stdin redirection" }
     note: "Falls through to native /bin/cat when piped (cat file | grep). Supports -n/--number, stdin, redirection."
 
+  - name: "sql"
+    description: "Query databases with table/JSON/CSV output. Drivers: SQLite, PostgreSQL, ODBC."
+    examples:
+      - { rush: 'sql @mydb "SELECT * FROM users"', note: "Named connection" }
+      - { rush: 'sql sqlite:///path/to/db "SELECT 1"', note: "Inline SQLite URI" }
+      - { rush: 'sql postgres://user:pass@host/db "SELECT ..."', note: "Inline Postgres URI" }
+      - { rush: 'sql @db "SELECT ..." --json', note: "JSON output" }
+      - { rush: 'sql @db "SELECT ..." --csv', note: "CSV output" }
+      - { rush: 'sql add @name --driver sqlite --path ~/data.db', note: "Add named connection" }
+      - { rush: 'sql list', note: "List connections" }
+      - { rush: 'sql test @name', note: "Test connectivity" }
+    note: "Config: ~/.config/rush/databases.json. Default 1000-row limit (--no-limit to disable). Auto-JSON in LLM mode."
+
   - name: "export"
     description: "Set environment variable"
     examples:

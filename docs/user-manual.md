@@ -16,11 +16,12 @@
 8. [Built-in Commands](#built-in-commands)
 9. [The `ls` Builtin](#the-ls-builtin)
 10. [The `cat` Builtin](#the-cat-builtin)
-11. [Command Translations](#command-translations)
-12. [Built-in Variables](#built-in-variables)
-13. [LLM Mode](#llm-mode)
-14. [MCP Server Mode](#mcp-server-mode)
-15. [Tips & Tricks](#tips--tricks)
+11. [The `sql` Command](#the-sql-command)
+12. [Command Translations](#command-translations)
+13. [Built-in Variables](#built-in-variables)
+14. [LLM Mode](#llm-mode)
+15. [MCP Server Mode](#mcp-server-mode)
+16. [Tips & Tricks](#tips--tricks)
 
 ---
 
@@ -1440,6 +1441,68 @@ cat < input.txt             # Read via stdin redirection
 ### Pipeline Fallthrough
 
 When `cat` is used in a pipeline (`cat file | grep pattern`) or with process substitution (`cat <(cmd)`), Rush falls through to the native `/bin/cat` so pipeline semantics work naturally.
+
+---
+
+## The `sql` Command
+
+Rush includes a native `sql` command for querying databases directly from the shell. Results are formatted as aligned tables for human consumption, or as structured JSON for AI agents.
+
+### Querying
+
+```rush
+# Inline URI (ad-hoc)
+sql sqlite:///path/to/data.db "SELECT * FROM users"
+sql postgres://user:pass@host/dbname "SELECT count(*) FROM orders"
+sql odbc://DSN=MyAccess "SELECT * FROM Customers"
+
+# Named connection (configured in databases.json)
+sql @mydb "SELECT * FROM users WHERE active = true"
+```
+
+### Output Modes
+
+```rush
+sql @db "SELECT ..." --json       # JSON array of objects
+sql @db "SELECT ..." --csv        # RFC 4180 CSV
+sql @db "SELECT ..." --limit 50   # Limit rows (default: 1000)
+sql @db "SELECT ..." --no-limit   # No row limit
+sql @db "SELECT ..." --timeout 30 # Query timeout in seconds
+```
+
+Default output is an aligned table with colored headers:
+
+```
+name     email                created_at
+───────  ───────────────────  ───────────────────
+Alice    alice@example.com    2024-01-15 09:30:00
+Bob      bob@example.com      2024-02-20 14:15:00
+
+2 row(s) (12ms)
+```
+
+In LLM mode (`rush --llm`), output is automatically JSON in the `LlmResult` envelope with `stdout_type: "json/rows"`.
+
+### Connection Management
+
+```rush
+sql add @mydb --driver sqlite --path ~/data/app.db
+sql add @prod --driver postgres --host db.example.com --database myapp --user admin
+sql add @legacy --driver odbc --dsn "MyAccessDB"
+sql list                         # Show all named connections
+sql test @mydb                   # Test connectivity
+sql remove @mydb                 # Remove a connection
+```
+
+Connections are stored in `~/.config/rush/databases.json`. Passwords are never stored directly — use `--password-env VAR` to reference an environment variable set in `secrets.rush`.
+
+### Supported Drivers
+
+| Driver | Scheme | Notes |
+|--------|--------|-------|
+| SQLite | `sqlite://` | Built-in, no server required |
+| PostgreSQL | `postgres://` | Built-in, requires server |
+| ODBC | `odbc://` | Built-in, uses system ODBC drivers |
 
 ---
 
