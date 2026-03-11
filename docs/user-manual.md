@@ -12,16 +12,17 @@
 4. [The REPL](#the-repl)
 5. [Shell Features](#shell-features)
 6. [Scripting Language](#scripting-language)
-7. [Standard Library](#standard-library)
-8. [Built-in Commands](#built-in-commands)
-9. [The `ls` Builtin](#the-ls-builtin)
-10. [The `cat` Builtin](#the-cat-builtin)
-11. [The `sql` Command](#the-sql-command)
-12. [Command Translations](#command-translations)
-13. [Built-in Variables](#built-in-variables)
-14. [LLM Mode](#llm-mode)
-15. [MCP Server Mode](#mcp-server-mode)
-16. [Tips & Tricks](#tips--tricks)
+7. [Platform Blocks](#platform-blocks)
+8. [Standard Library](#standard-library)
+9. [Built-in Commands](#built-in-commands)
+10. [The `ls` Builtin](#the-ls-builtin)
+11. [The `cat` Builtin](#the-cat-builtin)
+12. [The `sql` Command](#the-sql-command)
+13. [Command Translations](#command-translations)
+14. [Built-in Variables](#built-in-variables)
+15. [LLM Mode](#llm-mode)
+16. [MCP Server Mode](#mcp-server-mode)
+17. [Tips & Tricks](#tips--tricks)
 
 ---
 
@@ -1038,6 +1039,78 @@ mode = :verbose
 
 ---
 
+## Platform Blocks
+
+Platform-specific blocks execute code only on the matching operating system. They act as implicit `if $os` conditionals with clean syntax.
+
+### Basic Platform Blocks
+
+```rush
+macos
+  puts "Running on macOS"
+end
+
+linux
+  puts "Running on Linux"
+end
+
+win64
+  puts "Running on Windows (64-bit PS 7)"
+end
+```
+
+Non-matching blocks are silently skipped — no error, no output.
+
+### Property Conditions
+
+Add `.arch` or `.version` conditions for fine-grained platform targeting:
+
+```rush
+macos.arch == "arm64"
+  puts "Apple Silicon"
+end
+
+linux.arch == "x64"
+  puts "64-bit Linux"
+end
+
+macos.version >= "25.0"
+  puts "Darwin 25 or later"
+end
+```
+
+**Available properties:**
+
+| Property   | Values                         | Source                              |
+|------------|--------------------------------|-------------------------------------|
+| `.arch`    | `x64`, `arm64`, `x86`         | CPU architecture                    |
+| `.version` | `25.3.0`, `6.8.0`, `10.0.22631` | OS version (Darwin/kernel/Windows) |
+
+Version comparisons use numeric ordering, so `"25.3.0" >= "6.8.0"` works correctly.
+
+### win32 — 32-bit PowerShell Escape Hatch
+
+The `win32` block is special: its body is **raw PowerShell 5.1** (not Rush syntax) and executes in the 32-bit PowerShell process. This is needed for 32-bit ODBC/OLEDB drivers like ACE and BC that cannot load in 64-bit processes.
+
+```rush
+win32
+  # Raw PowerShell 5.1 — runs in C:\Windows\SysWOW64\...\powershell.exe
+  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;...")
+  $conn.Open()
+  $cmd = $conn.CreateCommand()
+  $cmd.CommandText = "SELECT * FROM [Sheet1$]"
+  $reader = $cmd.ExecuteReader()
+  while ($reader.Read()) {
+    Write-Output "$($reader[0]) | $($reader[1])"
+  }
+  $conn.Close()
+end
+```
+
+**Important:** win32 blocks only run on Windows. On macOS/Linux they are silently skipped. Rush variables from the current session are automatically injected into the 32-bit process as a preamble.
+
+---
+
 ## Standard Library
 
 Receivers are case-insensitive: `Dir.files()` and `dir.files()` both work.
@@ -1642,6 +1715,8 @@ ls | tee -a log.txt             # Append mode
 | `rush_version` | Rush version string |
 | `is_login_shell` | True if launched as login shell |
 | `needs_reload` | True if binary updated since startup (prompt context) |
+| `__rush_arch` | CPU architecture: `x64`, `arm64`, `x86` |
+| `__rush_os_version` | OS version string (Darwin/kernel/Windows) |
 
 ---
 

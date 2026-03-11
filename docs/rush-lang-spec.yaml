@@ -428,6 +428,51 @@ loops:
       }
     note: "'match' avoids bash case/esac baggage. 'case' also works as alias."
 
+  platform_blocks:
+    description: |
+      OS-conditional blocks that execute only on the matching platform.
+      Optional property conditions for architecture and version checks.
+      win32 blocks execute raw PowerShell 5.1 in 32-bit mode.
+    keywords: [macos, win64, win32, linux]
+    properties:
+      - { name: ".arch", values: ["x64", "arm64"], source: "RuntimeInformation.OSArchitecture" }
+      - { name: ".version", values: ["25.3.0 (Darwin)", "6.8.0 (Linux)", "10.0.22631 (Windows)"], source: "Environment.OSVersion.Version" }
+    examples:
+      - rush: |
+          macos
+            puts "running on macOS"
+          end
+        transpiles_to: |
+          if ($os -eq 'macos') { Write-Output "running on macOS" }
+        note: "Basic platform block"
+      - rush: |
+          linux.arch == "x64"
+            puts "64-bit Linux"
+          end
+        transpiles_to: |
+          if ($os -eq 'linux' -and $__rush_arch -eq 'x64') { Write-Output "64-bit Linux" }
+        note: "Platform block with architecture condition"
+      - rush: |
+          macos.version >= "25.0"
+            puts "Darwin 25+"
+          end
+        transpiles_to: |
+          if ($os -eq 'macos' -and [version]$__rush_os_version -ge [version]'25.0') { ... }
+        note: "Version comparison uses [version] cast for correct numeric ordering"
+      - rush: |
+          win32
+            $conn = New-Object System.Data.OleDb.OleDbConnection($connStr)
+            $conn.Open()
+            $cmd = $conn.CreateCommand()
+            $cmd.CommandText = "SELECT * FROM Customers"
+          end
+        note: "win32 body is raw PowerShell 5.1 — shells out to 32-bit powershell.exe"
+      - rush: |
+          win64
+            sql @mydb "SELECT * FROM orders"
+          end
+        note: "win64 runs normal Rush code on 64-bit Windows (PS 7)"
+
 # ============================================================================
 # FUNCTIONS
 # ============================================================================
@@ -1121,6 +1166,8 @@ builtin_variables:
   - { name: "__FILE__", description: "Current script path" }
   - { name: "__DIR__", description: "Current script directory" }
   - { name: "needs_reload", description: "True if binary updated since startup (available in rush_prompt)" }
+  - { name: "__rush_arch", description: "CPU architecture: x64, arm64, x86" }
+  - { name: "__rush_os_version", description: "OS version string (Darwin/kernel/Windows version)" }
 
 # ============================================================================
 # BUILT-IN FUNCTIONS
