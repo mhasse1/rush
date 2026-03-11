@@ -1077,6 +1077,10 @@ end
 macos.version >= "25.0"
   puts "Darwin 25 or later"
 end
+
+win64.version >= "10.0.22000"
+  puts "Windows 11 or later"
+end
 ```
 
 **Available properties:**
@@ -1088,17 +1092,42 @@ end
 
 Version comparisons use numeric ordering, so `"25.3.0" >= "6.8.0"` works correctly.
 
+### win64 — Windows with PowerShell 7
+
+`win64` blocks run normal Rush code on 64-bit Windows. Since Rush runs on PowerShell 7 (which is 64-bit only), `win64` is the standard Windows block. Use it for Windows-specific paths, commands, and 64-bit driver access:
+
+```rush
+win64
+  # Windows-specific paths and commands
+  export TEMP="C:\\Temp"
+  sql @sqlserver "SELECT * FROM orders WHERE status = 'pending'"
+  puts "Processed on Windows"
+end
+```
+
+`win64` also supports property conditions:
+
+```rush
+win64.arch == "arm64"
+  puts "Windows on ARM (Surface Pro X, Snapdragon)"
+end
+
+win64.version >= "10.0.22000"
+  puts "Windows 11+"
+end
+```
+
 ### win32 — 32-bit PowerShell Escape Hatch
 
-The `win32` block is special: its body is **raw PowerShell 5.1** (not Rush syntax) and executes in the 32-bit PowerShell process. This is needed for 32-bit ODBC/OLEDB drivers like ACE and BC that cannot load in 64-bit processes.
+The `win32` block is special: its body is **raw PowerShell 5.1** (not Rush syntax) and executes in the 32-bit PowerShell process at `C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`. This is needed for 32-bit ODBC/OLEDB drivers like ACE and BC that cannot load in 64-bit processes.
 
 ```rush
 win32
-  # Raw PowerShell 5.1 — runs in C:\Windows\SysWOW64\...\powershell.exe
-  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;...")
+  # Raw PowerShell 5.1 — runs in 32-bit powershell.exe
+  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\Data\customers.accdb")
   $conn.Open()
   $cmd = $conn.CreateCommand()
-  $cmd.CommandText = "SELECT * FROM [Sheet1$]"
+  $cmd.CommandText = "SELECT * FROM Customers"
   $reader = $cmd.ExecuteReader()
   while ($reader.Read()) {
     Write-Output "$($reader[0]) | $($reader[1])"
@@ -1107,7 +1136,44 @@ win32
 end
 ```
 
-**Important:** win32 blocks only run on Windows. On macOS/Linux they are silently skipped. Rush variables from the current session are automatically injected into the 32-bit process as a preamble.
+**Key differences from other platform blocks:**
+
+- Body is **raw PowerShell 5.1**, not Rush syntax
+- Executes in a **32-bit process** (SysWOW64 path)
+- Rush variables are automatically injected as `$var = 'value'` preamble
+- On macOS/Linux, win32 blocks are silently skipped
+
+### Cross-Platform Scripts
+
+Combine platform blocks for scripts that run everywhere:
+
+```rush
+# Common setup
+db_name = "production"
+
+macos
+  export ODBC_DRIVER="/usr/local/lib/libmyodbc8a.so"
+end
+
+linux
+  export ODBC_DRIVER="/usr/lib/x86_64-linux-gnu/odbc/libmyodbc8a.so"
+end
+
+win64
+  export ODBC_DRIVER="{MySQL ODBC 8.0 Unicode Driver}"
+end
+
+win32
+  # 32-bit Access database via ACE driver
+  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\legacy\data.accdb")
+  $conn.Open()
+  # ... query legacy data ...
+  $conn.Close()
+end
+
+# Common code runs on all platforms
+puts "Database: #{db_name}"
+```
 
 ---
 

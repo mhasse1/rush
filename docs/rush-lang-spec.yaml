@@ -432,11 +432,18 @@ loops:
     description: |
       OS-conditional blocks that execute only on the matching platform.
       Optional property conditions for architecture and version checks.
-      win32 blocks execute raw PowerShell 5.1 in 32-bit mode.
+      macos/linux/win64 blocks contain normal Rush code.
+      win32 blocks contain raw PowerShell 5.1 and execute in 32-bit mode.
     keywords: [macos, win64, win32, linux]
     properties:
-      - { name: ".arch", values: ["x64", "arm64"], source: "RuntimeInformation.OSArchitecture" }
+      - { name: ".arch", values: ["x64", "arm64", "x86"], source: "RuntimeInformation.OSArchitecture" }
       - { name: ".version", values: ["25.3.0 (Darwin)", "6.8.0 (Linux)", "10.0.22631 (Windows)"], source: "Environment.OSVersion.Version" }
+    notes:
+      - "win64 maps to $os -eq 'windows' — PS 7 is 64-bit only, so win64 is the standard Windows block"
+      - "win32 shells out to C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe (32-bit PS 5.1)"
+      - "win32 body is raw PowerShell, not Rush syntax — needed for 32-bit OLEDB/ODBC drivers"
+      - "Rush variables are auto-injected into win32 blocks as $var = 'value' preamble"
+      - "Non-matching platform blocks are silently skipped"
     examples:
       - rush: |
           macos
@@ -444,14 +451,44 @@ loops:
           end
         transpiles_to: |
           if ($os -eq 'macos') { Write-Output "running on macOS" }
-        note: "Basic platform block"
+        note: "Basic platform block — body is normal Rush code"
+      - rush: |
+          linux
+            export LD_LIBRARY_PATH="/usr/local/lib"
+            puts "Linux configured"
+          end
+        transpiles_to: |
+          if ($os -eq 'linux') { $env:LD_LIBRARY_PATH = '/usr/local/lib'; Write-Output "Linux configured" }
+        note: "Linux block with environment setup"
+      - rush: |
+          win64
+            sql @sqlserver "SELECT * FROM orders"
+            puts "Queried on Windows"
+          end
+        transpiles_to: |
+          if ($os -eq 'windows') { ... }
+        note: "win64 runs normal Rush code on 64-bit Windows (PS 7)"
+      - rush: |
+          win64.version >= "10.0.22000"
+            puts "Windows 11 or later"
+          end
+        transpiles_to: |
+          if ($os -eq 'windows' -and [version]$__rush_os_version -ge [version]'10.0.22000') { ... }
+        note: "win64 with version condition — Windows 11 detection"
+      - rush: |
+          win64.arch == "arm64"
+            puts "Windows on ARM"
+          end
+        transpiles_to: |
+          if ($os -eq 'windows' -and $__rush_arch -eq 'arm64') { ... }
+        note: "win64 with architecture condition — Surface Pro X, Snapdragon laptops"
       - rush: |
           linux.arch == "x64"
             puts "64-bit Linux"
           end
         transpiles_to: |
           if ($os -eq 'linux' -and $__rush_arch -eq 'x64') { Write-Output "64-bit Linux" }
-        note: "Platform block with architecture condition"
+        note: "Linux with architecture condition"
       - rush: |
           macos.version >= "25.0"
             puts "Darwin 25+"
@@ -461,17 +498,27 @@ loops:
         note: "Version comparison uses [version] cast for correct numeric ordering"
       - rush: |
           win32
-            $conn = New-Object System.Data.OleDb.OleDbConnection($connStr)
+            $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\data.accdb")
             $conn.Open()
             $cmd = $conn.CreateCommand()
             $cmd.CommandText = "SELECT * FROM Customers"
+            $reader = $cmd.ExecuteReader()
+            while ($reader.Read()) { Write-Output "$($reader[0]) | $($reader[1])" }
+            $conn.Close()
           end
-        note: "win32 body is raw PowerShell 5.1 — shells out to 32-bit powershell.exe"
+        note: "win32 body is raw PowerShell 5.1 — shells out to 32-bit powershell.exe for ACE OLEDB"
       - rush: |
-          win64
-            sql @mydb "SELECT * FROM orders"
+          win32
+            # BC ODBC 32-bit DSN query
+            $conn = New-Object System.Data.Odbc.OdbcConnection("DSN=BC_Production;UID=user;PWD=pass")
+            $conn.Open()
+            $cmd = $conn.CreateCommand()
+            $cmd.CommandText = "SELECT No_, Name FROM [Customer]"
+            $reader = $cmd.ExecuteReader()
+            while ($reader.Read()) { Write-Output "$($reader['No_'])`t$($reader['Name'])" }
+            $conn.Close()
           end
-        note: "win64 runs normal Rush code on 64-bit Windows (PS 7)"
+        note: "win32 with Business Central ODBC DSN — requires 32-bit driver"
 
 # ============================================================================
 # FUNCTIONS
