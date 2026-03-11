@@ -46,7 +46,8 @@ public class SyntaxHighlighter
         "true", "false", "nil",
         "next", "continue", "break",
         "class", "attr", "self", "super", "enum",
-        "macos", "win64", "win32", "linux"
+        "macos", "win64", "win32", "linux",
+        "objectify", "columns"
     };
 
     public SyntaxHighlighter(CommandTranslator translator)

@@ -103,7 +103,8 @@ if (mcpMode)
     var ss = InitialSessionState.CreateDefault();
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
-    var tr = new CommandTranslator();
+    var mcpObjConfig = ObjectifyConfig.Load();
+    var tr = new CommandTranslator(mcpObjConfig);
     var se = new ScriptEngine(tr);
     mcpConfig.Apply(null, tr);
     InjectRushEnvVars(rs, Version, isLoginShell);
@@ -139,7 +140,8 @@ if (llmMode)
     var ss = InitialSessionState.CreateDefault();
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
-    var tr = new CommandTranslator();
+    var llmObjConfig = ObjectifyConfig.Load();
+    var tr = new CommandTranslator(llmObjConfig);
     var se = new ScriptEngine(tr);
 
     // Apply config aliases to translator (null editor — no LineEditor in LLM mode)
@@ -210,7 +212,8 @@ runspace.Open();
 
 // ── Initialize Components ────────────────────────────────────────────
 var jobManager = new Rush.JobManager(iss, host);
-var translator = new CommandTranslator();
+var objectifyConfig = ObjectifyConfig.Load();
+var translator = new CommandTranslator(objectifyConfig);
 var scriptEngine = new ScriptEngine(translator);
 var lineEditor = new LineEditor();
 var binaryWatcher = new BinaryWatcher();
@@ -2252,7 +2255,8 @@ static void RunScriptFile(string path, string[] scriptArgs)
             scriptPs.Invoke();
         }
 
-        var translator = new CommandTranslator();
+        var objConfig = ObjectifyConfig.Load();
+        var translator = new CommandTranslator(objConfig);
         var engine = new ScriptEngine(translator);
         var psCode = engine.TranspileFile(source);
 
@@ -4439,7 +4443,8 @@ static void RunNonInteractive(string command)
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
     InjectRushEnvVars(rs, RushVersion.Full, false);
-    var tr = new CommandTranslator();
+    var objConfig = ObjectifyConfig.Load();
+    var tr = new CommandTranslator(objConfig);
     var scriptEngine = new ScriptEngine(tr);
 
     // Check if the command contains Rush scripting syntax (multi-line blocks,

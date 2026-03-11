@@ -11,18 +11,19 @@
 3. [Configuration](#configuration)
 4. [The REPL](#the-repl)
 5. [Shell Features](#shell-features)
-6. [Scripting Language](#scripting-language)
-7. [Platform Blocks](#platform-blocks)
-8. [Standard Library](#standard-library)
-9. [Built-in Commands](#built-in-commands)
-10. [The `ls` Builtin](#the-ls-builtin)
-11. [The `cat` Builtin](#the-cat-builtin)
-12. [The `sql` Command](#the-sql-command)
-13. [Command Translations](#command-translations)
-14. [Built-in Variables](#built-in-variables)
-15. [LLM Mode](#llm-mode)
-16. [MCP Server Mode](#mcp-server-mode)
-17. [Tips & Tricks](#tips--tricks)
+6. [Objectify & Auto-Objectify](#objectify--auto-objectify)
+7. [Scripting Language](#scripting-language)
+8. [Platform Blocks](#platform-blocks)
+9. [Standard Library](#standard-library)
+10. [Built-in Commands](#built-in-commands)
+11. [The `ls` Builtin](#the-ls-builtin)
+12. [The `cat` Builtin](#the-cat-builtin)
+13. [The `sql` Command](#the-sql-command)
+14. [Command Translations](#command-translations)
+15. [Built-in Variables](#built-in-variables)
+16. [LLM Mode](#llm-mode)
+17. [MCP Server Mode](#mcp-server-mode)
+18. [Tips & Tricks](#tips--tricks)
 
 ---
 
@@ -406,6 +407,95 @@ Access object properties directly in pipeline:
 ```rush
 ps | .ProcessName       # Extract property
 json config.json | .settings.theme
+```
+
+---
+
+## Objectify & Auto-Objectify
+
+Native commands like `netstat`, `docker ps`, and `lsof` produce text tables. The `objectify` pipe converts text output into PowerShell objects so they can participate in the object pipeline (`where`, `select`, `sort`, `as json`, etc.).
+
+### Explicit Objectify
+
+Use `objectify` as a pipe to convert text table output into objects:
+
+```rush
+# Whitespace-delimited with header row (default)
+my-tool | objectify | as json
+
+# Fixed-width columns (auto-detect from header positions)
+my-tool | objectify --fixed | where Status == "Active"
+
+# Custom delimiter
+my-tool | objectify --delim "," | select name,value
+
+# Skip header lines
+free | objectify --skip 1 | as json
+
+# Manual column names
+my-tool | objectify --cols "pid,name,cpu" | where cpu > 10
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--delim REGEX` | Field delimiter regex (default: `\s+`) |
+| `--fixed` | Fixed-width parsing using header character positions |
+| `--fixed 6,13,20` | Fixed-width with explicit column boundary positions |
+| `--no-header` | First line is data; auto-generate col1, col2, ... |
+| `--cols name,pid` | Manual column names (implies `--no-header`) |
+| `--skip N` | Skip first N lines before header |
+| `--save` | Persist flags to `~/.config/rush/objectify.rush` |
+
+Numbers are automatically parsed as integers when the value matches `^\d+$`.
+
+### Auto-Objectify
+
+Known commands auto-inject objectify when piped. You don't need to type `objectify` for commands Rush already knows about:
+
+```rush
+# These just work — objectify is injected transparently
+netstat | where State == "ESTABLISHED" | as json
+docker ps | where Status ~ "Up" | select Names
+lsof | where COMMAND == "nginx" | columns 1,2,9
+
+# Standalone commands show raw text (no objectify injected)
+netstat
+docker ps
+```
+
+### Config Hierarchy
+
+Auto-objectify hints come from three layers (later overrides earlier):
+
+1. **Built-in defaults** (ships with Rush): `netstat`, `ss`, `lsof`, `free`, `docker ps`, `docker images`, `kubectl get`, `mount`
+2. **System config**: `/etc/rush/objectify.rush`
+3. **User config**: `~/.config/rush/objectify.rush`
+
+Config file format (command and flags separated by 2+ spaces or tab):
+
+```
+# ~/.config/rush/objectify.rush
+netstat       --fixed
+docker ps     --delim "\s{2,}"
+my-tool       --fixed 0,10,20
+```
+
+Use `--save` to persist a custom hint:
+
+```rush
+my-tool | objectify --fixed --save
+# Future runs: my-tool | where ... just works
+```
+
+### Columns Pipe
+
+Index-based column selection (1-based, like awk). Complements `select` which uses property names:
+
+```rush
+my-tool | objectify | columns 1,3,5
+netstat | columns 1 4 6          # space-separated indices also work
 ```
 
 ---

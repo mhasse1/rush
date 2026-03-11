@@ -636,6 +636,72 @@ pipelines:
     - rush: 'cat server.log | grep "ERROR" | wc -l'
       note: "Mixed — shell commands translated by CommandTranslator"
 
+  pipe_transforms:
+    description: |
+      Rush provides pipe transforms that convert text output to PowerShell objects
+      and select columns by index. These compose with existing transforms like
+      where, select, sort, and as json.
+
+    objectify:
+      description: |
+        Converts text table output (from native commands) into PowerShell objects.
+        Parses a header line and data rows, emitting [PSCustomObject] per row.
+        Numbers are auto-parsed as [long]. Composes with all downstream transforms.
+      flags:
+        - { name: "--delim REGEX", description: "Field delimiter regex (default: \\s+)" }
+        - { name: "--no-header", description: "First line is data — auto-generate col1, col2, ..." }
+        - { name: "--cols name,pid,status", description: "Manual column names (implies --no-header)" }
+        - { name: "--fixed", description: "Fixed-width parsing — detect column boundaries from header positions" }
+        - { name: "--fixed 6,13,20", description: "Fixed-width with explicit column boundary positions" }
+        - { name: "--skip N", description: "Skip first N lines before header" }
+        - { name: "--save", description: "Persist flags to ~/.config/rush/objectify.rush for auto-objectify" }
+      examples:
+        - rush: 'echo "NAME PID\nfoo 123\nbar 456" | objectify | as json'
+          note: "Explicit objectify — text to objects to JSON"
+        - rush: 'my-tool | objectify --fixed | where col1 > 5'
+          note: "Fixed-width parsing for commands with aligned columns"
+        - rush: 'my-tool | objectify --delim "," | select name,value'
+          note: "CSV-like delimiter"
+        - rush: 'my-tool | objectify --fixed --save'
+          note: "Save parse hint to ~/.config/rush/objectify.rush for future auto-objectify"
+
+    auto_objectify:
+      description: |
+        Known commands auto-inject objectify when piped — no explicit objectify needed.
+        Config hierarchy: built-in defaults < /etc/rush/objectify.rush < ~/.config/rush/objectify.rush.
+        Only triggers when the command has downstream pipes; standalone commands show raw text.
+      built_in_commands:
+        - { command: "netstat", flags: "--fixed" }
+        - { command: "ss", flags: "" }
+        - { command: "lsof", flags: "--fixed" }
+        - { command: "free", flags: "--skip 1" }
+        - { command: "docker ps", flags: '--delim "\\s{2,}"' }
+        - { command: "docker images", flags: '--delim "\\s{2,}"' }
+        - { command: "kubectl get", flags: "" }
+        - { command: "mount", flags: "" }
+      config_format: |
+        # ~/.config/rush/objectify.rush
+        # command     flags
+        netstat       --fixed
+        docker ps     --delim "\s{2,}"
+        my-tool       --fixed 0,10,20
+      examples:
+        - rush: 'netstat | where State == "ESTABLISHED" | as json'
+          note: "Auto-objectify — netstat is a known command with --fixed hint"
+        - rush: 'docker ps | where Status ~ "Up" | select Names'
+          note: "Auto-objectify — 2-word command match (docker ps)"
+        - rush: 'netstat'
+          note: "No pipes — shows raw text output, no objectify injected"
+
+    columns:
+      description: |
+        Index-based column selection (1-based, like awk). Complements select (which uses names).
+      examples:
+        - rush: 'echo "a b c d e" | objectify | columns 1,3,5'
+          note: "Select columns 1, 3, 5 by index"
+        - rush: 'netstat | columns 1 4 6'
+          note: "Space-separated indices also work (with auto-objectify)"
+
 # ============================================================================
 # REGULAR EXPRESSIONS
 # ============================================================================

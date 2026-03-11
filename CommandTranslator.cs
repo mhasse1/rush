@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Rush;
 
 /// <summary>
@@ -7,9 +9,14 @@ namespace Rush;
 public class CommandTranslator
 {
     private readonly Dictionary<string, CommandMapping> _commands = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ObjectifyConfig? _objectifyConfig;
 
-    public CommandTranslator()
+    /// <summary>Track the first segment's command for --save support.</summary>
+    private string? _lastPipelineFirstCommand;
+
+    public CommandTranslator(ObjectifyConfig? objectifyConfig = null)
     {
+        _objectifyConfig = objectifyConfig;
         RegisterDefaults();
     }
 
@@ -32,6 +39,9 @@ public class CommandTranslator
         // Multi-segment pipeline: translate each part
         var translated = new List<string>();
         bool anyTranslated = false;
+
+        // Track first command for objectify --save support
+        _lastPipelineFirstCommand = SplitCommandLine(segments[0].Trim()).FirstOrDefault();
 
         for (int i = 0; i < segments.Length; i++)
         {
@@ -59,6 +69,23 @@ public class CommandTranslator
                 }
                 anyTranslated = true;
                 continue;
+            }
+
+            // Auto-objectify: if first segment is a known tabular command and has
+            // downstream pipe consumers, inject objectify block transparently.
+            // This makes "netstat | where State == LISTEN" just work.
+            if (i == 0 && segments.Length > 1 && _objectifyConfig != null)
+            {
+                var cmdLine = segment;
+                if (_objectifyConfig.TryGetHint(cmdLine, out var hintFlags))
+                {
+                    // Add the original command, then inject objectify block
+                    var cmdResult = TranslateSegment(segment, isAfterPipe: false);
+                    translated.Add(cmdResult ?? segment);
+                    translated.Add(GenerateObjectify(hintFlags));
+                    anyTranslated = true;
+                    continue;
+                }
             }
 
             var result = TranslateSegment(segment, isAfterPipe: i > 0);
@@ -277,6 +304,43 @@ public class CommandTranslator
             }
         }
 
+        // Special: objectify after a pipe → parse text lines into PSCustomObjects
+        // Syntax: command | objectify [--fixed] [--delim REGEX] [--cols a,b,c] [--no-header] [--skip N] [--save]
+        if (isAfterPipe && command.Equals("objectify", StringComparison.OrdinalIgnoreCase))
+        {
+            // Handle --save: persist hint to user config, then objectify as usual
+            if (args.Contains("--save") && _objectifyConfig != null && _lastPipelineFirstCommand != null)
+            {
+                var flagsWithoutSave = args.Where(a => a != "--save").ToArray();
+                _objectifyConfig.SaveUserHint(_lastPipelineFirstCommand, flagsWithoutSave);
+            }
+            var objectifyArgs = args.Where(a => a != "--save").ToArray();
+            return GenerateObjectify(objectifyArgs);
+        }
+
+        // Special: columns after a pipe → select properties by 1-based index
+        // Syntax: command | objectify | columns 1,2,5
+        if (isAfterPipe && command.Equals("columns", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 0)
+            {
+                try
+                {
+                    var indices = string.Join(',', args)
+                        .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(s => int.Parse(s.Trim()) - 1) // 1-based → 0-based
+                        .ToArray();
+                    var selectExprs = string.Join("; ", indices.Select(idx => $"$__p[{idx}]"));
+                    return $"ForEach-Object {{ $__p = @($_.PSObject.Properties.Name); $_ | Select-Object @({selectExprs}) }}";
+                }
+                catch (FormatException)
+                {
+                    // Invalid index — fall through to standard translation
+                }
+            }
+            return null;
+        }
+
         // Special: json — read and parse JSON files
         if (!isAfterPipe && command.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
@@ -380,6 +444,169 @@ public class CommandTranslator
         Register("min", null);   // Special handling
         Register("max", null);   // Special handling
         Register("json", null);  // Special handling in TranslateSegment
+        Register("objectify", null); // Special handling — text → PSCustomObjects
+        Register("columns", null);  // Special handling — index-based column selection
+    }
+
+    // ── Objectify PS Code Generation ────────────────────────────────────
+
+    /// <summary>
+    /// Generate a PowerShell ForEach-Object script block that converts text lines
+    /// into PSCustomObjects. Supports whitespace-delimited, fixed-width, and
+    /// custom delimiter modes.
+    /// </summary>
+    internal static string GenerateObjectify(string[] args)
+    {
+        // Parse flags
+        string? delimiter = null;
+        bool noHeader = false;
+        bool fixedWidth = false;
+        string? fixedPositions = null;
+        string? columnNames = null;
+        int skipLines = 0;
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i].ToLowerInvariant())
+            {
+                case "--delim" when i + 1 < args.Length:
+                    delimiter = args[++i];
+                    break;
+                case "--no-header":
+                    noHeader = true;
+                    break;
+                case "--fixed":
+                    fixedWidth = true;
+                    // Check if next arg is column positions (e.g., "6,13,20")
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                        fixedPositions = args[++i];
+                    break;
+                case "--cols" when i + 1 < args.Length:
+                    columnNames = args[++i];
+                    noHeader = true; // --cols implies --no-header
+                    break;
+                case "--skip" when i + 1 < args.Length:
+                    int.TryParse(args[++i], out skipLines);
+                    break;
+            }
+        }
+
+        if (fixedWidth)
+            return GenerateFixedWidthObjectify(fixedPositions, columnNames, skipLines);
+
+        return GenerateDelimitedObjectify(delimiter ?? @"\s+", noHeader, columnNames, skipLines);
+    }
+
+    /// <summary>Generate objectify for delimited text (whitespace, comma, tab, etc.).</summary>
+    private static string GenerateDelimitedObjectify(string delimiter, bool noHeader, string? columnNames, int skipLines)
+    {
+        // Escape single quotes in delimiter for PS string
+        var psDelim = delimiter.Replace("'", "''");
+
+        var headerSetup = noHeader
+            ? (columnNames != null
+                ? $"$__hdr = @('{string.Join("','", columnNames.Split(',').Select(c => c.Trim().Replace("'", "''")))}')"
+                : "$__hdr = @(); for ($__n = 0; $__n -lt (($__oLines[$__ds] -split '{psDelim}').Where({{ $_ -ne '' }}).Count); $__n++) {{ $__hdr += \"col$($__n + 1)\" }}")
+            : $"$__hdr = @(($__oLines[$__ds] -split '{psDelim}').Where({{ $_ -ne '' }}))";
+
+        var dataStart = noHeader ? "$__ds" : "($__ds + 1)";
+
+        return "ForEach-Object -Begin { $__oLines = [System.Collections.ArrayList]@() } " +
+               "-Process { [void]$__oLines.Add($_.ToString()) } " +
+               "-End { " +
+               $"$__ds = {skipLines}; " +
+               $"if ($__oLines.Count -le $__ds) {{ return }}; " +
+               $"{headerSetup}; " +
+               $"for ($__i = {dataStart}; $__i -lt $__oLines.Count; $__i++) {{ " +
+               $"if ($__oLines[$__i].Trim() -eq '') {{ continue }}; " +
+               $"$__v = @(($__oLines[$__i] -split '{psDelim}').Where({{ $_ -ne '' }})); " +
+               "$__o = [ordered]@{}; " +
+               "for ($__j = 0; $__j -lt $__hdr.Count; $__j++) { " +
+               "$__val = if ($__j -lt $__v.Count) { $__v[$__j] } else { $null }; " +
+               "if ($null -ne $__val -and $__val -match '^\\d+$') { $__val = [long]$__val }; " +
+               "$__o[$__hdr[$__j]] = $__val " +
+               "}; " +
+               "[PSCustomObject]$__o " +
+               "} " +
+               "}";
+    }
+
+    /// <summary>Generate objectify for fixed-width column text.</summary>
+    private static string GenerateFixedWidthObjectify(string? positions, string? columnNames, int skipLines)
+    {
+        if (positions != null)
+        {
+            // Explicit column positions: --fixed 6,13,20
+            var posArray = positions.Split(',').Select(p => p.Trim()).ToArray();
+            var posStr = string.Join(',', posArray);
+
+            return "ForEach-Object -Begin { $__oLines = [System.Collections.ArrayList]@() } " +
+                   "-Process { [void]$__oLines.Add($_.ToString()) } " +
+                   "-End { " +
+                   $"$__ds = {skipLines}; " +
+                   $"if ($__oLines.Count -le $__ds) {{ return }}; " +
+                   $"$__starts = @({posStr}); " +
+                   // Detect header names from fixed positions
+                   (columnNames != null
+                       ? $"$__names = @('{string.Join("','", columnNames.Split(',').Select(c => c.Trim().Replace("'", "''")))}')"
+                       : "$__names = @(); for ($__c = 0; $__c -lt $__starts.Count; $__c++) { " +
+                         "$__end = if ($__c + 1 -lt $__starts.Count) { $__starts[$__c + 1] } else { $__oLines[$__ds].Length }; " +
+                         "$__nm = $__oLines[$__ds].Substring($__starts[$__c], [Math]::Max(0, $__end - $__starts[$__c])).Trim(); " +
+                         "if ($__nm -eq '') { $__nm = \"col$($__c + 1)\" }; " +
+                         "$__names += $__nm }") +
+                   "; " +
+                   $"for ($__i = {(columnNames != null ? "$__ds" : "($__ds + 1)")}; $__i -lt $__oLines.Count; $__i++) {{ " +
+                   "if ($__oLines[$__i].Trim() -eq '') { continue }; " +
+                   "$__line = $__oLines[$__i]; " +
+                   "$__o = [ordered]@{}; " +
+                   "for ($__c = 0; $__c -lt $__starts.Count; $__c++) { " +
+                   "if ($__starts[$__c] -ge $__line.Length) { $__o[$__names[$__c]] = $null; continue }; " +
+                   "$__end = if ($__c + 1 -lt $__starts.Count) { [Math]::Min($__starts[$__c + 1], $__line.Length) } else { $__line.Length }; " +
+                   "$__val = $__line.Substring($__starts[$__c], $__end - $__starts[$__c]).Trim(); " +
+                   "if ($__val -match '^\\d+$') { $__val = [long]$__val }; " +
+                   "if ($__val -eq '') { $__val = $null }; " +
+                   "$__o[$__names[$__c]] = $__val " +
+                   "}; " +
+                   "[PSCustomObject]$__o " +
+                   "} " +
+                   "}";
+        }
+
+        // Auto-detect fixed-width columns from header character positions
+        return "ForEach-Object -Begin { $__oLines = [System.Collections.ArrayList]@() } " +
+               "-Process { [void]$__oLines.Add($_.ToString()) } " +
+               "-End { " +
+               $"$__ds = {skipLines}; " +
+               $"if ($__oLines.Count -le $__ds) {{ return }}; " +
+               "$__hdr = $__oLines[$__ds]; " +
+               // Detect column start positions from header word boundaries
+               "$__starts = [System.Collections.ArrayList]@(); " +
+               "$__names = [System.Collections.ArrayList]@(); " +
+               "$__inWord = $false; " +
+               "for ($__c = 0; $__c -lt $__hdr.Length; $__c++) { " +
+               "if ($__hdr[$__c] -ne ' ' -and -not $__inWord) { " +
+               "[void]$__starts.Add($__c); $__inWord = $true " +
+               "} elseif ($__hdr[$__c] -eq ' ' -and $__inWord) { " +
+               "[void]$__names.Add($__hdr.Substring($__starts[$__starts.Count-1], $__c - $__starts[$__starts.Count-1]).Trim()); " +
+               "$__inWord = $false " +
+               "} }; " +
+               "if ($__inWord) { [void]$__names.Add($__hdr.Substring($__starts[$__starts.Count-1]).Trim()) }; " +
+               // Parse data rows using detected positions
+               "for ($__i = ($__ds + 1); $__i -lt $__oLines.Count; $__i++) { " +
+               "if ($__oLines[$__i].Trim() -eq '') { continue }; " +
+               "$__line = $__oLines[$__i]; " +
+               "$__o = [ordered]@{}; " +
+               "for ($__c = 0; $__c -lt $__starts.Count; $__c++) { " +
+               "if ($__starts[$__c] -ge $__line.Length) { $__o[$__names[$__c]] = $null; continue }; " +
+               "$__end = if ($__c + 1 -lt $__starts.Count) { [Math]::Min($__starts[$__c + 1], $__line.Length) } else { $__line.Length }; " +
+               "$__val = $__line.Substring($__starts[$__c], $__end - $__starts[$__c]).Trim(); " +
+               "if ($__val -match '^\\d+$') { $__val = [long]$__val }; " +
+               "if ($__val -eq '') { $__val = $null }; " +
+               "$__o[$__names[$__c]] = $__val " +
+               "}; " +
+               "[PSCustomObject]$__o " +
+               "} " +
+               "}";
     }
 
     // ── Where Operator Translation ──────────────────────────────────────
