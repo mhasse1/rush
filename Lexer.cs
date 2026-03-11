@@ -16,6 +16,7 @@ public enum RushTokenType
     Do, And, Or, Not, True, False, Nil,
     Next, Continue, Break, Begin,
     Class, Attr, Self, Super, Enum,
+    Macos, Win64, Win32, Linux,
 
     // Operators
     Assign,         // =
@@ -116,6 +117,10 @@ public class Lexer
         ["self"] = RushTokenType.Self,
         ["super"] = RushTokenType.Super,
         ["enum"] = RushTokenType.Enum,
+        ["macos"] = RushTokenType.Macos,
+        ["win64"] = RushTokenType.Win64,
+        ["win32"] = RushTokenType.Win32,
+        ["linux"] = RushTokenType.Linux,
     };
 
     private readonly string _source;

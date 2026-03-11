@@ -16,7 +16,8 @@ public class ScriptEngine
     private static readonly HashSet<string> BlockStartKeywords = new(StringComparer.OrdinalIgnoreCase)
     {
         "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
-        "begin", "match", "class", "enum"
+        "begin", "match", "class", "enum",
+        "macos", "win64", "win32", "linux"
     };
 
     /// <summary>
@@ -32,7 +33,8 @@ public class ScriptEngine
         "do", "and", "or", "not",
         "true", "false", "nil",
         "next", "continue", "break",
-        "class", "attr", "self", "super", "enum"
+        "class", "attr", "self", "super", "enum",
+        "macos", "win64", "win32", "linux"
     };
 
     /// <summary>
@@ -104,8 +106,11 @@ public class ScriptEngine
         var firstSpace = trimmed.IndexOfAny(new[] { ' ', '\t', '(' });
         var firstWord = firstSpace >= 0 ? trimmed[..firstSpace] : trimmed;
 
-        // Rule 1: Block-start keywords
+        // Rule 1: Block-start keywords (also check base word before '.' for platform.property syntax)
         if (BlockStartKeywords.Contains(firstWord))
+            return true;
+        var dotIdx = firstWord.IndexOf('.');
+        if (dotIdx > 0 && BlockStartKeywords.Contains(firstWord[..dotIdx]))
             return true;
 
         // Rule 4: 'end' keyword (closing a block in REPL)
@@ -459,6 +464,10 @@ public class ScriptEngine
                     case RushTokenType.Do:
                     case RushTokenType.Class:
                     case RushTokenType.Enum:
+                    case RushTokenType.Macos:
+                    case RushTokenType.Win64:
+                    case RushTokenType.Win32:
+                    case RushTokenType.Linux:
                         depth++;
                         break;
                     case RushTokenType.End:
@@ -486,7 +495,7 @@ public class ScriptEngine
         {
             var lexer = new Lexer(input);
             var tokens = lexer.Tokenize();
-            var parser = new Parser(tokens);
+            var parser = new Parser(tokens, input);
             var statements = parser.Parse();
 
             if (statements.Count == 0)

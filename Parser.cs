@@ -345,6 +345,32 @@ public class EnumDefNode : RushNode
     }
 }
 
+/// <summary>Platform-specific block: macos/win64/linux (parsed body) or win32 (raw PS 5.1 body).</summary>
+public class PlatformBlockNode : RushNode
+{
+    public string Platform { get; }           // "macos", "win64", "win32", "linux"
+    public List<RushNode>? Body { get; }      // parsed body (macos/win64/linux)
+    public string? RawBody { get; }           // raw PS 5.1 text (win32 only)
+    public string? Property { get; }          // "version", "arch", or null
+    public string? Operator { get; }          // "==", ">=", ">", etc., or null
+    public string? PropertyValue { get; }     // "25.0", "x64", etc., or null
+    public bool IsRaw => RawBody != null;
+
+    /// <summary>Constructor for parsed platform blocks (macos, win64, linux).</summary>
+    public PlatformBlockNode(string platform, List<RushNode> body,
+        string? property = null, string? op = null, string? propertyValue = null)
+    {
+        Platform = platform; Body = body;
+        Property = property; Operator = op; PropertyValue = propertyValue;
+    }
+
+    /// <summary>Constructor for raw platform blocks (win32).</summary>
+    public PlatformBlockNode(string platform, string rawBody)
+    {
+        Platform = platform; RawBody = rawBody;
+    }
+}
+
 /// <summary>Property assignment: receiver.property = expr (e.g., self.name = value)</summary>
 public class PropertyAssignmentNode : RushNode
 {
@@ -377,11 +403,13 @@ public class Parser
     };
 
     private readonly List<RushToken> _tokens;
+    private readonly string? _source;
     private int _pos;
 
-    public Parser(List<RushToken> tokens)
+    public Parser(List<RushToken> tokens, string? source = null)
     {
         _tokens = tokens;
+        _source = source;
         _pos = 0;
     }
 
@@ -464,11 +492,103 @@ public class Parser
             RushTokenType.Try => ParseTry(),
             RushTokenType.Begin => ParseTry(),        // begin is identical to try
             RushTokenType.Case => ParseCase(),
+            RushTokenType.Macos => ParsePlatformBlock(),
+            RushTokenType.Win64 => ParsePlatformBlock(),
+            RushTokenType.Win32 => ParseWin32Block(),
+            RushTokenType.Linux => ParsePlatformBlock(),
             RushTokenType.Next => ParseLoopControl(),
             RushTokenType.Continue => ParseLoopControl(),
             RushTokenType.Break => ParseLoopControl(),
             _ => ParseExpressionStatement()
         };
+    }
+
+    /// <summary>
+    /// Parse a platform block: macos/win64/linux [.property op value] ... end
+    /// Body is normal Rush code, parsed via ParseBody.
+    /// </summary>
+    private PlatformBlockNode ParsePlatformBlock()
+    {
+        var keyword = Advance(); // skip platform keyword
+        var platform = keyword.Value.ToLowerInvariant();
+
+        // Check for optional property condition: .arch == "x64", .version >= "25.0"
+        string? property = null, op = null, propValue = null;
+        if (Current.Type == RushTokenType.Dot)
+        {
+            Advance(); // skip '.'
+            property = Expect(RushTokenType.Identifier).Value.ToLowerInvariant();
+
+            // Read comparison operator
+            op = Current.Type switch
+            {
+                RushTokenType.Equals => Advance().Value,       // ==
+                RushTokenType.NotEquals => Advance().Value,     // !=
+                RushTokenType.GreaterThan => Advance().Value,   // >
+                RushTokenType.GreaterEqual => Advance().Value,  // >=
+                RushTokenType.LessThan => Advance().Value,      // <
+                RushTokenType.LessEqual => Advance().Value,     // <=
+                _ => throw new RushParseException($"Expected comparison operator after {platform}.{property}")
+            };
+
+            // Read value (string literal or identifier)
+            if (Current.Type == RushTokenType.StringLiteral)
+            {
+                var raw = Advance().Value;
+                // Strip surrounding quotes from string literal
+                propValue = raw.Trim('"', '\'');
+            }
+            else if (Current.Type == RushTokenType.Identifier)
+                propValue = Advance().Value;
+            else
+                throw new RushParseException($"Expected value after {platform}.{property} {op}");
+        }
+
+        SkipNewlines();
+        var body = ParseBody(RushTokenType.End);
+        Expect(RushTokenType.End);
+        return new PlatformBlockNode(platform, body, property, op, propValue);
+    }
+
+    /// <summary>
+    /// Parse a win32 block: win32 ... end
+    /// Body is raw PowerShell 5.1 text, NOT parsed as Rush.
+    /// </summary>
+    private PlatformBlockNode ParseWin32Block()
+    {
+        Advance(); // skip 'win32'
+        SkipNewlines();
+
+        // Capture raw body text from source using token positions
+        if (_source != null && Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+        {
+            int startPos = Current.Position;
+            // Scan forward to find the End token
+            while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+                Advance();
+            int endPos = Current.Position;
+            var rawBody = _source[startPos..endPos].Trim();
+            Expect(RushTokenType.End);
+            return new PlatformBlockNode("win32", rawBody);
+        }
+        else
+        {
+            // Fallback: reconstruct from token values
+            var sb = new System.Text.StringBuilder();
+            while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+            {
+                if (Current.Type == RushTokenType.Newline)
+                    sb.AppendLine();
+                else
+                {
+                    if (sb.Length > 0 && sb[^1] != '\n') sb.Append(' ');
+                    sb.Append(Current.Value);
+                }
+                Advance();
+            }
+            Expect(RushTokenType.End);
+            return new PlatformBlockNode("win32", sb.ToString().Trim());
+        }
     }
 
     /// <summary>

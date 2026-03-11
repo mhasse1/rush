@@ -45,7 +45,8 @@ public class SyntaxHighlighter
         "do", "and", "or", "not",
         "true", "false", "nil",
         "next", "continue", "break",
-        "class", "attr", "self", "super", "enum"
+        "class", "attr", "self", "super", "enum",
+        "macos", "win64", "win32", "linux"
     };
 
     public SyntaxHighlighter(CommandTranslator translator)

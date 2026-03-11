@@ -75,6 +75,7 @@ public class RushTranspiler
         ShellPassthroughNode s => TranspileShellPassthrough(s),
         ClassDefNode cls => TranspileClassDef(cls),
         EnumDefNode en => TranspileEnumDef(en),
+        PlatformBlockNode pb => TranspilePlatformBlock(pb),
         PropertyAssignmentNode pa => TranspilePropertyAssignment(pa),
         _ => TranspileExpression(node)
     };
@@ -370,6 +371,76 @@ public class RushTranspiler
                 sb.AppendLine($"  {capitalizedName}");
         }
         sb.Append('}');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Transpile a platform-specific block to PowerShell.
+    /// macos/win64/linux: if ($os -eq 'platform') { body }
+    /// win32: if ($os -eq 'windows') { __rush_win32 'base64-body' }
+    /// </summary>
+    private string TranspilePlatformBlock(PlatformBlockNode node)
+    {
+        var sb = new StringBuilder();
+
+        if (node.IsRaw)
+        {
+            // win32: encode raw PS 5.1 body as base64 and call the injected helper
+            var encoded = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes(node.RawBody!));
+            sb.AppendLine("if ($os -eq 'windows') {");
+            sb.AppendLine($"  __rush_win32 '{encoded}'");
+            sb.Append('}');
+        }
+        else
+        {
+            // Map platform keyword to $os value
+            var osValue = node.Platform switch
+            {
+                "macos" => "macos",
+                "win64" => "windows",
+                "linux" => "linux",
+                _ => node.Platform
+            };
+
+            // Build condition
+            var condition = $"$os -eq '{osValue}'";
+
+            // Add property condition if present
+            if (node.Property != null && node.Operator != null && node.PropertyValue != null)
+            {
+                var psVar = node.Property switch
+                {
+                    "arch" => "$__rush_arch",
+                    "version" => "$__rush_os_version",
+                    _ => throw new InvalidOperationException(
+                        $"Unknown platform property: {node.Property}")
+                };
+
+                var psOp = node.Operator switch
+                {
+                    "==" => "-eq",
+                    "!=" => "-ne",
+                    ">" => "-gt",
+                    ">=" => "-ge",
+                    "<" => "-lt",
+                    "<=" => "-le",
+                    _ => "-eq"
+                };
+
+                // Use [version] cast for version comparisons so "25.3.0" > "6.8.0"
+                // works numerically, not lexicographically
+                if (node.Property == "version")
+                    condition += $" -and [version]{psVar} {psOp} [version]'{node.PropertyValue}'";
+                else
+                    condition += $" -and {psVar} {psOp} '{node.PropertyValue}'";
+            }
+
+            sb.AppendLine($"if ({condition}) {{");
+            sb.Append(TranspileBody(node.Body!));
+            sb.Append('}');
+        }
+
         return sb.ToString();
     }
 
