@@ -245,6 +245,26 @@ InjectRushEnvVars(runspace, Version, isLoginShell);
 // ── Run Startup Scripts ─────────────────────────────────────────────
 RunStartupScripts(runspace, scriptEngine);
 
+// ── Sync .NET Working Directory ──────────────────────────────────────
+// PowerShell's runspace may have a different working directory than
+// Environment.CurrentDirectory (which child processes inherit).
+// Ensure they match so that launching zsh, claude, etc. starts in the
+// correct directory — not stuck at ~ or wherever the process launched from.
+try
+{
+    using var locPs = PowerShell.Create();
+    locPs.Runspace = runspace;
+    locPs.AddCommand("Get-Location");
+    var loc = locPs.Invoke();
+    if (loc.Count > 0)
+    {
+        var psDir = loc[0].ToString();
+        if (psDir != null)
+            Environment.CurrentDirectory = psDir;
+    }
+}
+catch { /* best-effort — don't crash startup */ }
+
 // ── Capture State Baseline (for reload --hard) ──────────────────────
 ReloadState.CaptureBaseline(runspace);
 
@@ -1996,6 +2016,20 @@ while (true)
     }
 
     prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
+
+    // Sync .NET CWD from PowerShell after every command.
+    // Catches cases where a script or function calls Set-Location
+    // without going through HandleCd (which normally does this sync).
+    // Without this, child processes (zsh, claude, etc.) inherit the
+    // wrong working directory.
+    try
+    {
+        var psDir = GetRunspaceDir(runspace);
+        if (psDir != null && psDir != Environment.CurrentDirectory)
+            Environment.CurrentDirectory = psDir;
+    }
+    catch { /* best-effort */ }
+
     lineEditor.SaveHistory();
 }
 
@@ -2098,8 +2132,73 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     var osName = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "macos" :
         RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "linux" : "windows";
     var loginVal = isLoginShell ? "$true" : "$false";
-    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}");
+    var archName = RuntimeInformation.OSArchitecture switch
+    {
+        Architecture.X64 => "x64",
+        Architecture.Arm64 => "arm64",
+        Architecture.X86 => "x86",
+        _ => RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
+    };
+    var osVersion = Environment.OSVersion.Version.ToString();
+    ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
     ps.Invoke();
+
+    // Inject __rush_win32 helper function for win32 platform blocks
+    using var ps2 = PowerShell.Create();
+    ps2.Runspace = runspace;
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        ps2.AddScript(@"
+function __rush_win32 {
+    param([string]$EncodedBody)
+    $body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedBody))
+
+    # Inject current scope variables as a preamble
+    $preamble = ''
+    Get-Variable -Scope 1 -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -notin @('PSCommandPath','PSScriptRoot','MyInvocation','_','args','input',
+                         'null','true','false','PSBoundParameters','PSDefaultParameterValues',
+                         'ErrorActionPreference','WarningPreference','InformationPreference',
+                         'DebugPreference','VerbosePreference','ConfirmPreference','WhatIfPreference',
+                         'EncodedBody','body','preamble')
+    } | ForEach-Object {
+        $val = $_.Value
+        if ($null -ne $val -and $val -is [string]) {
+            $escaped = $val -replace ""'"", ""''""
+            $preamble += ""`$($_.Name) = '$escaped'`n""
+        }
+        elseif ($null -ne $val -and ($val -is [int] -or $val -is [long] -or $val -is [double])) {
+            $preamble += ""`$($_.Name) = $val`n""
+        }
+        elseif ($null -ne $val -and $val -is [bool]) {
+            $boolVal = if ($val) { '$true' } else { '$false' }
+            $preamble += ""`$($_.Name) = $boolVal`n""
+        }
+    }
+
+    $fullScript = $preamble + $body
+    $ps32 = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $ps32)) {
+        Write-Error 'win32: 32-bit PowerShell not found at SysWOW64 path'
+        return
+    }
+
+    & $ps32 -NoProfile -NonInteractive -Command $fullScript 2>&1
+}
+");
+    }
+    else
+    {
+        // Non-Windows: no-op (win32 blocks are gated by $os check, but define
+        // the function anyway so TranspileFile output doesn't error)
+        ps2.AddScript(@"
+function __rush_win32 {
+    param([string]$EncodedBody)
+    # No-op on non-Windows platforms
+}
+");
+    }
+    ps2.Invoke();
 }
 
 // ── Script File Execution ──────────────────────────────────────────
@@ -2130,7 +2229,15 @@ static void RunScriptFile(string path, string[] scriptArgs)
                 System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
                 System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
                 System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{RushVersion.Full}'");
+            var archName = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
+            {
+                System.Runtime.InteropServices.Architecture.X64 => "x64",
+                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+                System.Runtime.InteropServices.Architecture.X86 => "x86",
+                _ => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
+            };
+            var osVersion = Environment.OSVersion.Version.ToString();
+            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{RushVersion.Full}'; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
             initPs.Invoke();
         }
 
@@ -4331,6 +4438,7 @@ static void RunNonInteractive(string command)
     var ss = InitialSessionState.CreateDefault();
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
+    InjectRushEnvVars(rs, RushVersion.Full, false);
     var tr = new CommandTranslator();
     var scriptEngine = new ScriptEngine(tr);
 
