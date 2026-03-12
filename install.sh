@@ -80,7 +80,7 @@ else
 fi
 
 # ── Windows builds: cross-compile and stage for transfer ──────────
-WIN_STAGING="$HOME/Resilion/cio/tmp"
+WIN_STAGING="$HOME/Resilio/coi/src/rush-tests"
 mkdir -p "$WIN_STAGING"
 
 echo "  → Building Windows ARM64..."
