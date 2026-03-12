@@ -4177,67 +4177,67 @@ static string GetStartupTip(RushConfig config)
     var tips = new[]
     {
         // ── Navigation ──
-        "cd -  ← jump back to previous directory",
-        "pushd /tmp && popd  ← directory stack: push, then pop back",
-        "cd ~/proj  ← tilde expands to home directory everywhere",
+        "cd -  -- jump back to previous directory",
+        "pushd /tmp && popd  -- directory stack: push, then pop back",
+        "cd ~/proj  -- tilde expands to home directory everywhere",
 
         // ── History ──
-        "!!  ← repeat the last command",
-        "!$  ← reuse the last argument from previous command",
-        "!42  ← re-run command #42 from history",
-        "Ctrl+R  ← search command history interactively",
+        "!!  -- repeat the last command",
+        "!$  -- reuse the last argument from previous command",
+        "!42  -- re-run command #42 from history",
+        "Ctrl+R  -- search command history interactively",
 
         // ── Pipes & Filters ──
-        "ps | where CPU > 10  ← filter objects by property",
-        "ps | select ProcessName, CPU  ← pick specific columns",
-        "ls | count  ← count items (also: sum, avg, min, max)",
-        "ls | first 5  ← slice results (also: last, skip)",
-        "ls | distinct  ← unique values (works on unsorted data)",
-        "ps | .ProcessName  ← dot-notation extracts a single property",
-        "ls | as json  ← format output as JSON (also: csv, table, list)",
-        "cat data.json | from json  ← parse JSON input into objects",
-        "ls | tee files.txt | count  ← save and pass through",
+        "ps | where CPU > 10  -- filter objects by property",
+        "ps | select ProcessName, CPU  -- pick specific columns",
+        "ls | count  -- count items (also: sum, avg, min, max)",
+        "ls | first 5  -- slice results (also: last, skip)",
+        "ls | distinct  -- unique values (works on unsorted data)",
+        "ps | .ProcessName  -- dot-notation extracts a single property",
+        "ls | as json  -- format output as JSON (also: csv, table, list)",
+        "cat data.json | from json  -- parse JSON input into objects",
+        "ls | tee files.txt | count  -- save and pass through",
 
         // ── PATH Management ──
-        "path  ← list all PATH entries with existence check (✓/✗)",
-        "path add ~/bin  ← add directory to PATH for this session",
-        "path add --save --front /opt/bin  ← prepend to PATH and persist",
-        "path edit  ← edit PATH in your $EDITOR (one entry per line)",
-        "path rm /old/dir  ← remove a directory from PATH",
+        "path  -- list all PATH entries with existence check",
+        "path add ~/bin  -- add directory to PATH for this session",
+        "path add --save --front /opt/bin  -- prepend to PATH and persist",
+        "path edit  -- edit PATH in your $EDITOR (one entry per line)",
+        "path rm /old/dir  -- remove a directory from PATH",
 
         // ── Settings ──
-        "set  ← show all settings with descriptions and current values",
-        "set --save editMode emacs  ← change a setting and persist it",
-        "set -x  ← trace commands (shows + command before execution)",
-        "set -e  ← stop on first error (like bash strict mode)",
+        "set  -- show all settings with descriptions and current values",
+        "set --save editMode emacs  -- change a setting and persist it",
+        "set -x  -- trace commands (shows + command before execution)",
+        "set -e  -- stop on first error (like bash strict mode)",
 
         // ── Vi Mode ──
-        "/pattern  ← search history forward (vi normal mode)",
-        "?pattern  ← search history backward (vi normal mode)",
-        "n/N  ← repeat last search forward/backward",
+        "/pattern  -- search history forward (vi normal mode)",
+        "?pattern  -- search history backward (vi normal mode)",
+        "n/N  -- repeat last search forward/backward",
 
         // ── Completion ──
-        "Tab  ← complete paths, commands, and flags",
-        "Tab Tab  ← show all available completions",
+        "Tab  -- complete paths, commands, and flags",
+        "Tab Tab  -- show all available completions",
         // ── Scripting ──
-        "source file.rush  ← run a Rush script in current session",
-        "$(ls | count)  ← command substitution: embed output inline",
-        "export FOO=bar  ← set environment variable",
-        "alias ll='ls -la'  ← define a command shortcut",
+        "source file.rush  -- run a Rush script in current session",
+        "$(ls | count)  -- command substitution: embed output inline",
+        "export FOO=bar  -- set environment variable",
+        "alias ll='ls -la'  -- define a command shortcut",
 
         // ── Output ──
-        "ls > files.txt  ← redirect output to file",
-        "ls >> log.txt  ← append output to file",
-        "cmd1 && cmd2  ← run cmd2 only if cmd1 succeeds",
-        "cmd1 || echo 'failed'  ← run on failure only",
-        "sleep 10 &  ← run in background (jobs/fg to manage)",
+        "ls > files.txt  -- redirect output to file",
+        "ls >> log.txt  -- append output to file",
+        "cmd1 && cmd2  -- run cmd2 only if cmd1 succeeds",
+        "cmd1 || echo 'failed'  -- run on failure only",
+        "sleep 10 &  -- run in background (jobs/fg to manage)",
 
         // ── Config ──
-        "~/.config/rush/config.json  ← all settings, commented with descriptions",
-        "init  ← edit startup script in $EDITOR and reload",
-        "~/.config/rush/secrets.rush  ← API keys & tokens (never synced)",
-        "reload  ← reload config without restarting",
-        "set --save showTips false  ← disable these startup tips",
+        "~/.config/rush/config.json  -- all settings, commented with descriptions",
+        "init  -- edit startup script in $EDITOR and reload",
+        "~/.config/rush/secrets.rush  -- API keys & tokens (never synced)",
+        "reload  -- reload config without restarting",
+        "set --save showTips false  -- disable these startup tips",
     };
 
     // Rotate through tips based on day — each day shows a new tip
