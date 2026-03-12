@@ -79,6 +79,21 @@ else
     echo "  → $SHELLS_FILE (already registered)"
 fi
 
+# ── Windows builds: cross-compile and stage for transfer ──────────
+WIN_STAGING="$HOME/Resilion/cio/tmp"
+mkdir -p "$WIN_STAGING"
+
+echo "  → Building Windows ARM64..."
+dotnet publish -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true "$SCRIPT_DIR" > /dev/null
+cp "$SCRIPT_DIR/bin/Release/net8.0/win-arm64/publish/rush.exe" "$WIN_STAGING/rush.exe"
+echo "  → $WIN_STAGING/rush.exe"
+
+echo "  → Copying docs..."
+cp "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$WIN_STAGING/"
+cp "$SCRIPT_DIR/docs/user-manual.md" "$WIN_STAGING/"
+echo "  → $WIN_STAGING/rush-lang-spec.yaml"
+echo "  → $WIN_STAGING/user-manual.md"
+
 echo ""
 echo "Installed: $(rush --version)"
 echo ""
