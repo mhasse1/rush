@@ -1353,7 +1353,8 @@ public class RushTranspiler
     private string TranspileToFilesize(string receiver)
     {
         // Human-readable file size using PowerShell logic
-        return $"& {{ $s = {receiver}; if ($s -ge 1gb) {{ '{0:N1} GB' -f ($s/1gb) }} elseif ($s -ge 1mb) {{ '{0:N1} MB' -f ($s/1mb) }} elseif ($s -ge 1kb) {{ '{0:N1} KB' -f ($s/1kb) }} else {{ \"$s B\" }} }}";
+        // NOTE: {{0:N1}} is needed — {0:N1} gets consumed by C# interpolation
+        return $"& {{ $s = {receiver}; if ($s -ge 1gb) {{ '{{0:N1}} GB' -f ($s/1gb) }} elseif ($s -ge 1mb) {{ '{{0:N1}} MB' -f ($s/1mb) }} elseif ($s -ge 1kb) {{ '{{0:N1}} KB' -f ($s/1kb) }} else {{ \"$s B\" }} }}";
     }
 
     private string TranspileToPercent(string receiver, List<RushNode> args)

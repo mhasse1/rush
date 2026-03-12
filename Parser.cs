@@ -1481,21 +1481,30 @@ public class Parser
     /// </summary>
     private RushNode ParseIdentifierExpr()
     {
-        var name = Advance().Value;
+        var nameToken = Advance();
+        var name = nameToken.Value;
 
         // Function call with parens: name(args)
+        // For builtins (puts, warn, die), space before ( means grouping, not function call:
+        //   puts(-42)     → function call with arg -42
+        //   puts (-42).abs → builtin: parse (-42).abs as one expression
         if (Current.Type == RushTokenType.LParen)
         {
-            var args = ParseArgList();
-            // Check for block after function call
-            BlockLiteral? block = null;
-            if (Current.Type == RushTokenType.LBrace && IsBlockStart())
-                block = ParseBlock();
-            else if (Current.Type == RushTokenType.Do)
-                block = ParseDoBlock();
-            if (block != null)
-                return new MethodCallNode(new FunctionCallNode(name, args), "block", new List<RushNode>(), block);
-            return new FunctionCallNode(name, args);
+            var isAdjacentParen = Current.Position == nameToken.Position + nameToken.Value.Length;
+            if (isAdjacentParen || !BuiltinFunctions.Contains(name))
+            {
+                var args = ParseArgList();
+                // Check for block after function call
+                BlockLiteral? block = null;
+                if (Current.Type == RushTokenType.LBrace && IsBlockStart())
+                    block = ParseBlock();
+                else if (Current.Type == RushTokenType.Do)
+                    block = ParseDoBlock();
+                if (block != null)
+                    return new MethodCallNode(new FunctionCallNode(name, args), "block", new List<RushNode>(), block);
+                return new FunctionCallNode(name, args);
+            }
+            // Fall through to builtin branch — space before ( means treat as grouping expression
         }
 
         // Builtin function call without parens: puts "hello", warn "error", die "msg"

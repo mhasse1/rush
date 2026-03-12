@@ -473,6 +473,13 @@ public class ScriptEngine
                     case RushTokenType.End:
                         depth--;
                         break;
+                    // Brace blocks: { |x| ... } for .times, .each, etc.
+                    case RushTokenType.LBrace:
+                        depth++;
+                        break;
+                    case RushTokenType.RBrace:
+                        depth--;
+                        break;
                 }
             }
         }
