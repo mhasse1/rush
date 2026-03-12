@@ -435,14 +435,36 @@ public class LineEditor
 
             case ConsoleKey.UpArrow:
                 HistoryUp();
+                // In vi normal mode, cursor must be ON last char, not past it
+                if (_buffer.Count > 0 && _cursor >= _buffer.Count)
+                    _cursor = _buffer.Count - 1;
+                SetCursorPos();
                 return null;
             case ConsoleKey.DownArrow:
                 HistoryDown();
+                if (_buffer.Count > 0 && _cursor >= _buffer.Count)
+                    _cursor = _buffer.Count - 1;
+                SetCursorPos();
                 return null;
 
             case ConsoleKey.RightArrow:
                 if (_cursor < _buffer.Count - 1) _cursor++;
                 SetCursorPos();
+                return null;
+
+            // Backspace in normal mode: enter insert mode and delete char before cursor.
+            // Standard vi uses h (move left) or X (delete left), but Backspace as
+            // "delete-and-edit" matches shell user expectations after history recall.
+            case ConsoleKey.Backspace:
+                if (_cursor > 0)
+                {
+                    PushUndo();
+                    _buffer.RemoveAt(_cursor - 1);
+                    _cursor--;
+                    _viMode = ViMode.Insert;
+                    SetCursorShape(insert: true);
+                    Redraw();
+                }
                 return null;
 
             case ConsoleKey.D when key.Modifiers.HasFlag(ConsoleModifiers.Control):
@@ -454,8 +476,22 @@ public class LineEditor
         }
 
         // j/k for history in normal mode
-        if (key.KeyChar == 'j') { HistoryDown(); return null; }
-        if (key.KeyChar == 'k') { HistoryUp(); return null; }
+        if (key.KeyChar == 'j')
+        {
+            HistoryDown();
+            if (_buffer.Count > 0 && _cursor >= _buffer.Count)
+                _cursor = _buffer.Count - 1;
+            SetCursorPos();
+            return null;
+        }
+        if (key.KeyChar == 'k')
+        {
+            HistoryUp();
+            if (_buffer.Count > 0 && _cursor >= _buffer.Count)
+                _cursor = _buffer.Count - 1;
+            SetCursorPos();
+            return null;
+        }
 
         return null;
     }
