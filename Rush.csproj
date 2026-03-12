@@ -9,9 +9,11 @@
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
     <SelfContained>true</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
-    <!-- Do NOT use PublishSingleFile — PowerShell SDK 7.4 resolves PSHOME from
-         Assembly.Location which is empty for single-file, causing a crash.
-         Deploy the full publish directory instead (see install.sh). -->
+    <!-- PowerShell SDK 7.4 resolves PSHOME from Assembly.Location, which is
+         empty for single-file publish. IncludeAllContentForSelfExtract makes
+         the binary self-extract to ~/.net/rush/ on first run, restoring a
+         real Assembly.Location. Required for single-file on all platforms. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
     <RushMajorMinor>1.2</RushMajorMinor>
