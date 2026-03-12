@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Rush.Tests;
@@ -29,44 +28,6 @@ public class PlatformBlockTests
         var parser = new Parser(tokens, rushCode);
         var nodes = parser.Parse();
         return nodes.First();
-    }
-
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-        return (stdout.TrimEnd(), stderr.TrimEnd(), proc.ExitCode);
     }
 
     // ── Lexer Tests ─────────────────────────────────────────────────────
@@ -248,7 +209,7 @@ public class PlatformBlockTests
         var platform = OperatingSystem.IsMacOS() ? "macos" :
             OperatingSystem.IsLinux() ? "linux" : "win64";
 
-        var (stdout, _, exitCode) = RunRush($"{platform}\n  puts \"platform_ok\"\nend");
+        var (stdout, _, exitCode) = TestHelper.RunRush($"{platform}\n  puts \"platform_ok\"\nend");
         Assert.Equal(0, exitCode);
         Assert.Contains("platform_ok", stdout);
     }
@@ -260,7 +221,7 @@ public class PlatformBlockTests
         var platform = OperatingSystem.IsMacOS() ? "linux" :
             OperatingSystem.IsLinux() ? "macos" : "linux";
 
-        var (stdout, _, exitCode) = RunRush($"{platform}\n  puts \"should_not_appear\"\nend");
+        var (stdout, _, exitCode) = TestHelper.RunRush($"{platform}\n  puts \"should_not_appear\"\nend");
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("should_not_appear", stdout);
     }
@@ -270,7 +231,7 @@ public class PlatformBlockTests
     {
         if (OperatingSystem.IsWindows()) return; // skip on Windows
 
-        var (stdout, _, exitCode) = RunRush("win32\n  Write-Output 'should_not_appear'\nend");
+        var (stdout, _, exitCode) = TestHelper.RunRush("win32\n  Write-Output 'should_not_appear'\nend");
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("should_not_appear", stdout);
     }
@@ -283,7 +244,7 @@ public class PlatformBlockTests
         var arch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture ==
             System.Runtime.InteropServices.Architecture.Arm64 ? "arm64" : "x64";
 
-        var (stdout, _, exitCode) = RunRush(
+        var (stdout, _, exitCode) = TestHelper.RunRush(
             $"macos.arch == \"{arch}\"\n  puts \"arch_ok\"\nend");
         Assert.Equal(0, exitCode);
         Assert.Contains("arch_ok", stdout);
@@ -294,7 +255,7 @@ public class PlatformBlockTests
     {
         if (!OperatingSystem.IsMacOS()) return;
 
-        var (stdout, _, exitCode) = RunRush(
+        var (stdout, _, exitCode) = TestHelper.RunRush(
             "macos.arch == \"x86\"\n  puts \"should_not_appear\"\nend");
         Assert.Equal(0, exitCode);
         Assert.DoesNotContain("should_not_appear", stdout);

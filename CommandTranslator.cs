@@ -371,7 +371,7 @@ public class CommandTranslator
             ["-R"] = "-Recurse",
         });
 
-        // cat: handled as .NET builtin (CatCommand.cs); piped falls through to native /bin/cat
+        // cat: handled as .NET builtin (CatCommand.cs); piped falls through to native cat / PS alias
         Register("pwd", "Get-Location");
         Register("cd", "Set-Location");
         Register("cp", "Copy-Item", new Dictionary<string, string>

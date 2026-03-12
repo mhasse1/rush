@@ -38,7 +38,7 @@ internal static class SyncGitHub
         var fullRepo = $"{username}/{repoName}";
 
         // Check if repo already exists on GitHub
-        var repoCheck = ConfigSync.RunGh($"repo view {fullRepo} --json name 2>&1");
+        var repoCheck = ConfigSync.RunGh($"repo view {fullRepo} --json name");
         bool repoExists = repoCheck != null && repoCheck.Contains("\"name\"");
 
         if (!repoExists)
@@ -64,7 +64,7 @@ internal static class SyncGitHub
         }
 
         // Set remote
-        ConfigSync.RunGit("remote remove origin 2>/dev/null");
+        ConfigSync.RunGit("remote remove origin");
         ConfigSync.RunGit($"remote add origin git@github.com:{fullRepo}.git");
 
         // Create .gitignore for sensitive files
@@ -76,7 +76,7 @@ internal static class SyncGitHub
         }
 
         // Try to pull existing content first
-        ConfigSync.RunGit("pull origin main --allow-unrelated-histories 2>&1");
+        ConfigSync.RunGit("pull origin main --allow-unrelated-histories");
 
         // Stage existing config files
         foreach (var file in ConfigSync.SyncFiles)
@@ -93,8 +93,8 @@ internal static class SyncGitHub
         ConfigSync.SaveManifest(manifestPath, manifest);
 
         // Initial commit
-        ConfigSync.RunGit($"commit -m \"Initial rush config sync\" --allow-empty 2>&1");
-        ConfigSync.RunGit("push -u origin main 2>&1");
+        ConfigSync.RunGit($"commit -m \"Initial rush config sync\" --allow-empty");
+        ConfigSync.RunGit("push -u origin main");
 
         // Save sync metadata
         ConfigSync.SaveMeta(new SyncMeta
@@ -146,7 +146,7 @@ internal static class SyncGitHub
         ConfigSync.RunGit($"commit -m \"sync from {hostname} at {timestamp}\"");
 
         // Push (force if requested)
-        var pushCmd = force ? "push origin main --force 2>&1" : "push origin main 2>&1";
+        var pushCmd = force ? "push origin main --force" : "push origin main";
         var result = ConfigSync.RunGit(pushCmd);
         if (result != null && result.Contains("error") && !force)
         {
@@ -172,11 +172,11 @@ internal static class SyncGitHub
     {
         if (!EnsureReady()) return false;
 
-        var pullCmd = force ? "reset --hard origin/main 2>&1" : "pull origin main 2>&1";
+        var pullCmd = force ? "reset --hard origin/main" : "pull origin main";
         if (force)
         {
             // Fetch first, then reset
-            ConfigSync.RunGit("fetch origin main 2>&1");
+            ConfigSync.RunGit("fetch origin main");
         }
         var result = force ? ConfigSync.RunGit(pullCmd) : ConfigSync.RunGit(pullCmd);
 

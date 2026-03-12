@@ -11,53 +11,6 @@ namespace Rush.Tests;
 /// </summary>
 public class NewFeaturesIntegrationTests
 {
-    /// <summary>
-    /// Path to the rush binary built by dotnet build.
-    /// </summary>
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    /// <summary>
-    /// Run a rush command via `rush -c` and capture stdout + stderr.
-    /// Uses ArgumentList to pass args directly via execv, avoiding
-    /// shell interpretation of $, *, (, ), etc.
-    /// </summary>
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
-    }
-
     // ══════════════════════════════════════════════════════════════════
     // ── Brace Expansion ──────────────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════
@@ -68,7 +21,7 @@ public class NewFeaturesIntegrationTests
     [InlineData("echo pre{A,B}post", "preApost preBpost")]
     public void BraceExpansion_BasicPatterns(string command, string expected)
     {
-        var (stdout, _, exitCode) = RunRush(command);
+        var (stdout, _, exitCode) = TestHelper.RunRush(command);
         Assert.Equal(expected, stdout);
         Assert.Equal(0, exitCode);
     }
@@ -76,21 +29,21 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void BraceExpansion_PathPattern()
     {
-        var (stdout, _, _) = RunRush("echo src/{a,b,c}/main.rs");
+        var (stdout, _, _) = TestHelper.RunRush("echo src/{a,b,c}/main.rs");
         Assert.Equal("src/a/main.rs src/b/main.rs src/c/main.rs", stdout);
     }
 
     [Fact]
     public void BraceExpansion_NestedBraces()
     {
-        var (stdout, _, _) = RunRush("echo {a,{b,c}}");
+        var (stdout, _, _) = TestHelper.RunRush("echo {a,{b,c}}");
         Assert.Equal("a b c", stdout);
     }
 
     [Fact]
     public void BraceExpansion_NoBraces_PassThrough()
     {
-        var (stdout, _, _) = RunRush("echo hello world");
+        var (stdout, _, _) = TestHelper.RunRush("echo hello world");
         Assert.Equal("hello world", stdout);
     }
 
@@ -98,7 +51,7 @@ public class NewFeaturesIntegrationTests
     public void BraceExpansion_SingleItemNoBrace()
     {
         // Single item (no comma) should not expand
-        var (stdout, _, _) = RunRush("echo {solo}");
+        var (stdout, _, _) = TestHelper.RunRush("echo {solo}");
         Assert.Equal("{solo}", stdout);
     }
 
@@ -106,7 +59,7 @@ public class NewFeaturesIntegrationTests
     public void BraceExpansion_EmptyBraces_NoExpansion()
     {
         // Empty braces or braces without commas should pass through
-        var (stdout, _, _) = RunRush("echo {}");
+        var (stdout, _, _) = TestHelper.RunRush("echo {}");
         Assert.Equal("{}", stdout);
     }
 
@@ -117,7 +70,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Printf_StringFormat()
     {
-        var (stdout, _, exitCode) = RunRush("printf '%s' hello");
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf '%s' hello");
         Assert.Equal("hello", stdout);
         Assert.Equal(0, exitCode);
     }
@@ -125,42 +78,42 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Printf_IntegerFormat()
     {
-        var (stdout, _, _) = RunRush("printf '%d' 42");
+        var (stdout, _, _) = TestHelper.RunRush("printf '%d' 42");
         Assert.Equal("42", stdout);
     }
 
     [Fact]
     public void Printf_HexFormat()
     {
-        var (stdout, _, _) = RunRush("printf '%x' 255");
+        var (stdout, _, _) = TestHelper.RunRush("printf '%x' 255");
         Assert.Equal("ff", stdout);
     }
 
     [Fact]
     public void Printf_PercentLiteral()
     {
-        var (stdout, _, _) = RunRush("printf '100%%'");
+        var (stdout, _, _) = TestHelper.RunRush("printf '100%%'");
         Assert.Equal("100%", stdout);
     }
 
     [Fact]
     public void Printf_MultipleArgs()
     {
-        var (stdout, _, _) = RunRush("printf '%s is %d' name 42");
+        var (stdout, _, _) = TestHelper.RunRush("printf '%s is %d' name 42");
         Assert.Equal("name is 42", stdout);
     }
 
     [Fact]
     public void Printf_FloatFormat()
     {
-        var (stdout, _, _) = RunRush("printf '%f' 3.14");
+        var (stdout, _, _) = TestHelper.RunRush("printf '%f' 3.14");
         Assert.StartsWith("3.14", stdout);
     }
 
     [Fact]
     public void Printf_NewlineEscape()
     {
-        var (stdout, _, _) = RunRush("printf 'line1\\nline2'");
+        var (stdout, _, _) = TestHelper.RunRush("printf 'line1\\nline2'");
         Assert.Contains("line1", stdout);
         Assert.Contains("line2", stdout);
     }
@@ -168,7 +121,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Printf_TabEscape()
     {
-        var (stdout, _, _) = RunRush("printf 'a\\tb'");
+        var (stdout, _, _) = TestHelper.RunRush("printf 'a\\tb'");
         Assert.Contains("a\tb", stdout);
     }
 
@@ -184,7 +137,7 @@ public class NewFeaturesIntegrationTests
     [InlineData("echo $((17 % 5))", "2")]
     public void ArithmeticExpansion_BasicOperations(string command, string expected)
     {
-        var (stdout, _, exitCode) = RunRush(command);
+        var (stdout, _, exitCode) = TestHelper.RunRush(command);
         Assert.Equal(expected, stdout);
         Assert.Equal(0, exitCode);
     }
@@ -192,7 +145,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void ArithmeticExpansion_NestedParens()
     {
-        var (stdout, _, _) = RunRush("echo $(( (2 + 3) * 4 ))");
+        var (stdout, _, _) = TestHelper.RunRush("echo $(( (2 + 3) * 4 ))");
         Assert.Equal("20", stdout);
     }
 
@@ -200,14 +153,14 @@ public class NewFeaturesIntegrationTests
     public void ArithmeticExpansion_InContext()
     {
         // Arithmetic inside a larger string
-        var (stdout, _, _) = RunRush("echo result=$((5+5))");
+        var (stdout, _, _) = TestHelper.RunRush("echo result=$((5+5))");
         Assert.Equal("result=10", stdout);
     }
 
     [Fact]
     public void ArithmeticExpansion_NoArithmetic_PassThrough()
     {
-        var (stdout, _, _) = RunRush("echo no math here");
+        var (stdout, _, _) = TestHelper.RunRush("echo no math here");
         Assert.Equal("no math here", stdout);
     }
 
@@ -219,7 +172,7 @@ public class NewFeaturesIntegrationTests
     public void TildeExpansion_HomeDir()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var (stdout, _, _) = RunRush("echo ~");
+        var (stdout, _, _) = TestHelper.RunRush("echo ~");
         Assert.Equal(home, stdout);
     }
 
@@ -227,14 +180,14 @@ public class NewFeaturesIntegrationTests
     public void TildeExpansion_HomeSlashPath()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var (stdout, _, _) = RunRush("echo ~/Documents");
+        var (stdout, _, _) = TestHelper.RunRush("echo ~/Documents");
         Assert.Equal($"{home}/Documents", stdout);
     }
 
     [Fact]
     public void TildeExpansion_QuotedTilde_NoExpansion()
     {
-        var (stdout, _, _) = RunRush("echo '~'");
+        var (stdout, _, _) = TestHelper.RunRush("echo '~'");
         Assert.Equal("~", stdout);
     }
 
@@ -247,7 +200,7 @@ public class NewFeaturesIntegrationTests
         // Only test if the user's home directory exists at the expected path
         if (Directory.Exists(userHome))
         {
-            var (stdout, _, _) = RunRush($"echo ~{username}");
+            var (stdout, _, _) = TestHelper.RunRush($"echo ~{username}");
             Assert.Equal(userHome, stdout);
         }
     }
@@ -256,7 +209,7 @@ public class NewFeaturesIntegrationTests
     public void TildeUser_UnknownUser_PassThrough()
     {
         // A user that definitely doesn't exist
-        var (stdout, _, _) = RunRush("echo ~zzz_nonexistent_user_zzz");
+        var (stdout, _, _) = TestHelper.RunRush("echo ~zzz_nonexistent_user_zzz");
         Assert.Equal("~zzz_nonexistent_user_zzz", stdout);
     }
 
@@ -268,7 +221,7 @@ public class NewFeaturesIntegrationTests
     public void ProcessSubstitution_BasicCommand()
     {
         // <(echo hello) creates a temp file containing "hello", substitutes the path
-        var (stdout, _, exitCode) = RunRush("cat <(echo hello)");
+        var (stdout, _, exitCode) = TestHelper.RunRush("cat <(echo hello)");
         Assert.Equal("hello", stdout);
         Assert.Equal(0, exitCode);
     }
@@ -277,7 +230,7 @@ public class NewFeaturesIntegrationTests
     public void ProcessSubstitution_WithSort()
     {
         // Process substitution with a different command
-        var (stdout, _, _) = RunRush("cat <(echo sorted)");
+        var (stdout, _, _) = TestHelper.RunRush("cat <(echo sorted)");
         Assert.Equal("sorted", stdout);
     }
 
@@ -289,14 +242,14 @@ public class NewFeaturesIntegrationTests
     public void EnvVar_HOME_Expands()
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var (stdout, _, _) = RunRush("echo $HOME");
+        var (stdout, _, _) = TestHelper.RunRush("echo $HOME");
         Assert.Equal(home, stdout);
     }
 
     [Fact]
     public void EnvVar_PATH_Expands()
     {
-        var (stdout, _, _) = RunRush("echo $PATH");
+        var (stdout, _, _) = TestHelper.RunRush("echo $PATH");
         Assert.NotEmpty(stdout);
         // PATH should contain at least one path separator
         Assert.Contains(Path.PathSeparator.ToString(), stdout);
@@ -312,7 +265,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            RunRush($"echo {{alpha,beta}} > {tmpFile}");
+            TestHelper.RunRush($"echo {{alpha,beta}} > {tmpFile}");
             var content = File.ReadAllText(tmpFile).Trim();
             Assert.Equal("alpha beta", content);
         }
@@ -328,7 +281,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            RunRush($"echo $((6 * 7)) > {tmpFile}");
+            TestHelper.RunRush($"echo $((6 * 7)) > {tmpFile}");
             var content = File.ReadAllText(tmpFile).Trim();
             Assert.Equal("42", content);
         }
@@ -343,7 +296,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Loop_WithBreak_CountsToThree()
     {
-        var (stdout, _, exitCode) = RunRush("x = 0\nloop\n  x += 1\n  break if x >= 3\nend\nputs x");
+        var (stdout, _, exitCode) = TestHelper.RunRush("x = 0\nloop\n  x += 1\n  break if x >= 3\nend\nputs x");
         Assert.Equal("3", stdout);
         Assert.Equal(0, exitCode);
     }
@@ -351,7 +304,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Loop_WithNext_SkipsOddNumbers()
     {
-        var (stdout, _, _) = RunRush("result = \"\"\ni = 0\nloop\n  i += 1\n  break if i > 6\n  next if i % 2 != 0\n  result += i.to_s + \" \"\nend\nputs result.strip");
+        var (stdout, _, _) = TestHelper.RunRush("result = \"\"\ni = 0\nloop\n  i += 1\n  break if i > 6\n  next if i % 2 != 0\n  result += i.to_s + \" \"\nend\nputs result.strip");
         Assert.Equal("2 4 6", stdout);
     }
 
@@ -360,28 +313,28 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Duration_Hours_TotalMinutes()
     {
-        var (stdout, _, _) = RunRush("puts 2.hours.TotalMinutes");
+        var (stdout, _, _) = TestHelper.RunRush("puts 2.hours.TotalMinutes");
         Assert.Equal("120", stdout);
     }
 
     [Fact]
     public void Duration_Minutes_TotalSeconds()
     {
-        var (stdout, _, _) = RunRush("puts 5.minutes.TotalSeconds");
+        var (stdout, _, _) = TestHelper.RunRush("puts 5.minutes.TotalSeconds");
         Assert.Equal("300", stdout);
     }
 
     [Fact]
     public void Duration_Days_TotalHours()
     {
-        var (stdout, _, _) = RunRush("puts 3.days.TotalHours");
+        var (stdout, _, _) = TestHelper.RunRush("puts 3.days.TotalHours");
         Assert.Equal("72", stdout);
     }
 
     [Fact]
     public void Duration_Seconds_TotalMilliseconds()
     {
-        var (stdout, _, _) = RunRush("puts 10.seconds.TotalMilliseconds");
+        var (stdout, _, _) = TestHelper.RunRush("puts 10.seconds.TotalMilliseconds");
         Assert.Equal("10000", stdout);
     }
 
@@ -390,14 +343,14 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void TimeNow_ReturnsCurrentYear()
     {
-        var (stdout, _, _) = RunRush("puts Time.now.Year");
+        var (stdout, _, _) = TestHelper.RunRush("puts Time.now.Year");
         Assert.Equal(DateTime.Now.Year.ToString(), stdout);
     }
 
     [Fact]
     public void TimeToday_ReturnsDate()
     {
-        var (stdout, _, _) = RunRush("puts Time.today.Year");
+        var (stdout, _, _) = TestHelper.RunRush("puts Time.today.Year");
         Assert.Equal(DateTime.Today.Year.ToString(), stdout);
     }
 
@@ -416,7 +369,7 @@ public class NewFeaturesIntegrationTests
             File.WriteAllText(scriptPath, scriptContent);
             var psi = new ProcessStartInfo
             {
-                FileName = RushBinary,
+                FileName = TestHelper.RushBinary,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -479,7 +432,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Semicolons_LoopOneLiner()
     {
-        var (stdout, _, exitCode) = RunRush("x = 0; loop; x += 1; break if x >= 5; end; puts x");
+        var (stdout, _, exitCode) = TestHelper.RunRush("x = 0; loop; x += 1; break if x >= 5; end; puts x");
         Assert.Equal("5", stdout);
         Assert.Equal(0, exitCode);
     }
@@ -487,14 +440,14 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void Semicolons_DurationAssignment()
     {
-        var (stdout, _, _) = RunRush("h = 2.hours; puts h.TotalMinutes");
+        var (stdout, _, _) = TestHelper.RunRush("h = 2.hours; puts h.TotalMinutes");
         Assert.Equal("120", stdout);
     }
 
     [Fact]
     public void Semicolons_MultipleAssignments()
     {
-        var (stdout, _, _) = RunRush("a = 10; b = 20; puts a + b");
+        var (stdout, _, _) = TestHelper.RunRush("a = 10; b = 20; puts a + b");
         Assert.Equal("30", stdout);
     }
 
@@ -509,7 +462,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             var script = $"File.write(\"{tmpFile}\", \"hello rush\")\nputs File.read(\"{tmpFile}\")";
-            var (stdout, _, exitCode) = RunRush(script);
+            var (stdout, _, exitCode) = TestHelper.RunRush(script);
             Assert.Equal("hello rush", stdout);
             Assert.Equal(0, exitCode);
         }
@@ -523,7 +476,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             var script = $"File.write(\"{tmpFile}\", \"line1\")\nFile.append(\"{tmpFile}\", \"line2\")\nputs File.read(\"{tmpFile}\")";
-            var (stdout, _, _) = RunRush(script);
+            var (stdout, _, _) = TestHelper.RunRush(script);
             Assert.Contains("line1", stdout);
             Assert.Contains("line2", stdout);
         }
@@ -537,7 +490,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "alpha\nbeta\ngamma");
-            var (stdout, _, _) = RunRush($"lines = File.read_lines(\"{tmpFile}\")\nputs lines.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"lines = File.read_lines(\"{tmpFile}\")\nputs lines.Count");
             Assert.Equal("3", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -549,7 +502,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var (stdout, _, _) = RunRush($"puts File.exist?(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
             Assert.Equal("True", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -558,7 +511,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void File_Exist_False()
     {
-        var (stdout, _, _) = RunRush("puts File.exist?(\"/nonexistent_file_12345\")");
+        var (stdout, _, _) = TestHelper.RunRush("puts File.exist?(\"/nonexistent_file_12345\")");
         Assert.Equal("False", stdout);
     }
 
@@ -567,7 +520,7 @@ public class NewFeaturesIntegrationTests
     {
         var tmpFile = Path.GetTempFileName();
         var script = $"File.delete(\"{tmpFile}\")\nputs File.exist?(\"{tmpFile}\")";
-        var (stdout, _, _) = RunRush(script);
+        var (stdout, _, _) = TestHelper.RunRush(script);
         Assert.Equal("False", stdout);
         Assert.False(System.IO.File.Exists(tmpFile));
     }
@@ -579,7 +532,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "12345");
-            var (stdout, _, _) = RunRush($"puts File.size(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{tmpFile}\")");
             Assert.Equal("5", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -592,7 +545,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "{\"name\": \"rush\", \"version\": 2}");
-            var (stdout, _, _) = RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.name");
+            var (stdout, _, _) = TestHelper.RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.name");
             Assert.Equal("rush", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -605,7 +558,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "Name,Age\nAlice,30\nBob,25");
-            var (stdout, _, _) = RunRush($"rows = File.read_csv(\"{tmpFile}\")\nputs rows.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"rows = File.read_csv(\"{tmpFile}\")\nputs rows.Count");
             Assert.Equal("2", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -618,7 +571,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var (_, _, exitCode) = RunRush($"File.write(\"{tmpFile}\", \"standalone test\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"File.write(\"{tmpFile}\", \"standalone test\")");
             Assert.Equal(0, exitCode);
             Assert.Equal("standalone test", System.IO.File.ReadAllText(tmpFile).Trim());
         }
@@ -636,7 +589,7 @@ public class NewFeaturesIntegrationTests
         Directory.CreateDirectory(tmpDir);
         try
         {
-            var (stdout, _, _) = RunRush($"puts Dir.exist?(\"{tmpDir}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts Dir.exist?(\"{tmpDir}\")");
             Assert.Equal("True", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -648,7 +601,7 @@ public class NewFeaturesIntegrationTests
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (stdout, _, _) = RunRush($"Dir.mkdir(\"{tmpDir}\")\nputs Dir.exist?(\"{tmpDir}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")\nputs Dir.exist?(\"{tmpDir}\")");
             Assert.Equal("True", stdout);
             Assert.True(Directory.Exists(tmpDir));
         }
@@ -662,7 +615,7 @@ public class NewFeaturesIntegrationTests
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (_, _, exitCode) = RunRush($"Dir.mkdir(\"{tmpDir}\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")");
             Assert.Equal(0, exitCode);
             Assert.True(Directory.Exists(tmpDir));
         }
@@ -678,7 +631,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, _) = RunRush($"files = Dir.files(\"{tmpDir}\")\nputs files.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.files(\"{tmpDir}\")\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -694,7 +647,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
-            var (stdout, _, _) = RunRush($"files = Dir.files(\"{tmpDir}\", recursive: true)\nputs files.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.files(\"{tmpDir}\", recursive: true)\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -708,7 +661,7 @@ public class NewFeaturesIntegrationTests
         Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
         try
         {
-            var (stdout, _, _) = RunRush($"subdirs = Dir.dirs(\"{tmpDir}\")\nputs subdirs.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"subdirs = Dir.dirs(\"{tmpDir}\")\nputs subdirs.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -761,7 +714,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void MultiAssign_Integration()
     {
-        var (stdout, stderr, exitCode) = RunRush("a, b, c = 1, 2, 3\nputs a\nputs b\nputs c");
+        var (stdout, stderr, exitCode) = TestHelper.RunRush("a, b, c = 1, 2, 3\nputs a\nputs b\nputs c");
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("1\n2\n3", stdout);
         Assert.Equal(0, exitCode);
@@ -770,7 +723,7 @@ public class NewFeaturesIntegrationTests
     [Fact]
     public void MultiAssign_WithStrings()
     {
-        var (stdout, stderr, exitCode) = RunRush("first, last = \"Alice\", \"Smith\"\nputs first + \" \" + last");
+        var (stdout, stderr, exitCode) = TestHelper.RunRush("first, last = \"Alice\", \"Smith\"\nputs first + \" \" + last");
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Alice Smith", stdout);
         Assert.Equal(0, exitCode);
@@ -780,7 +733,7 @@ public class NewFeaturesIntegrationTests
     public void MultiAssign_FewerValues()
     {
         // More names than values — extras get $null
-        var (stdout, stderr, exitCode) = RunRush("a, b, c = 1, 2\nputs a\nputs b\nputs c");
+        var (stdout, stderr, exitCode) = TestHelper.RunRush("a, b, c = 1, 2\nputs a\nputs b\nputs c");
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         // c should be empty/null
         Assert.Contains("1", stdout);

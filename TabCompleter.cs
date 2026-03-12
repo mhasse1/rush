@@ -262,7 +262,7 @@ public class TabCompleter
         _cachedPath = pathEnv;
         var binaries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var dir in pathEnv.Split(':'))
+        foreach (var dir in pathEnv.Split(PathUtils.PathListSeparator))
         {
             if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
             try

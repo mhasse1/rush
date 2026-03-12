@@ -5,8 +5,8 @@ namespace Rush;
 /// .NET file I/O — supports concatenation, stdin reading, line numbering,
 /// and output redirection.
 ///
-/// When cat is piped (cat file | grep), it falls through to native /bin/cat
-/// so pipeline semantics work naturally.
+/// When cat is piped (cat file | grep), it falls through to native cat
+/// (Unix: /bin/cat, Windows: PowerShell's cat alias for Get-Content).
 /// </summary>
 public static class CatCommand
 {

@@ -320,50 +320,12 @@ public class ObjectifyTests
 
     // ── Integration tests (rush -c) ─────────────────────────────────────
 
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-
-        using var proc = System.Diagnostics.Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit();
-        return (stdout.TrimEnd(), stderr.TrimEnd(), proc.ExitCode);
-    }
-
     [Fact]
     public void Integration_Objectify_BasicPipeline()
     {
         // Test that objectify produces objects that can be piped through ConvertTo-Json
         // Use Write-Output with embedded newlines to simulate multi-line text
-        var (stdout, _, exitCode) = RunRush(
+        var (stdout, _, exitCode) = TestHelper.RunRush(
             "Write-Output \"NAME PID\" \"foo 123\" \"bar 456\" | objectify | ConvertTo-Json -Depth 5");
 
         Assert.Equal(0, exitCode);
@@ -376,7 +338,7 @@ public class ObjectifyTests
     public void Integration_Objectify_WhereFilter()
     {
         // objectify → where filter pipeline
-        var (stdout, _, exitCode) = RunRush(
+        var (stdout, _, exitCode) = TestHelper.RunRush(
             "Write-Output \"NAME VAL\" \"foo 100\" \"bar 200\" \"baz 50\" | objectify | Where-Object { [int]$_.VAL -gt 99 } | Select-Object -ExpandProperty NAME");
 
         Assert.Equal(0, exitCode);
@@ -389,7 +351,7 @@ public class ObjectifyTests
     public void Integration_Objectify_TypeInference()
     {
         // Numbers should be parsed as longs
-        var (stdout, _, exitCode) = RunRush(
+        var (stdout, _, exitCode) = TestHelper.RunRush(
             "Write-Output \"NAME COUNT\" \"foo 42\" | objectify | ForEach-Object { $_.COUNT.GetType().Name }");
 
         Assert.Equal(0, exitCode);

@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Rush.Tests;
@@ -29,43 +28,6 @@ public class ClassTests
         var parser = new Parser(tokens);
         var nodes = parser.Parse();
         return nodes.First();
-    }
-
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
     }
 
     // ── Lexer Tests ─────────────────────────────────────────────────────
@@ -243,7 +205,7 @@ end
 g = Greeter.new(""World"")
 puts g.greet()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.Equal("Hello, World", stdout);
         Assert.Equal(0, exitCode);
     }
@@ -267,7 +229,7 @@ end
 c = Counter.new()
 puts c.get_value()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("0", stdout);
         Assert.Equal(0, exitCode);
@@ -298,7 +260,7 @@ c.increment()
 c.increment()
 puts c.get_value()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("12", stdout);
         Assert.Equal(0, exitCode);
@@ -325,7 +287,7 @@ b = Box.new(""beta"")
 puts a.get_label()
 puts b.get_label()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.Contains("alpha", stdout);
         Assert.Contains("beta", stdout);
         Assert.Equal(0, exitCode);
@@ -447,7 +409,7 @@ end
 d = Dog.new(""Rex"")
 puts d.speak()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Rex says Woof!", stdout);
         Assert.Equal(0, exitCode);
@@ -478,7 +440,7 @@ end
 d = Dog.new(""Rex"", ""Labrador"")
 puts d.describe()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Rex the Labrador", stdout);
         Assert.Equal(0, exitCode);
@@ -503,7 +465,7 @@ end
 c = Child.new()
 puts c.value()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("15", stdout);
         Assert.Equal(0, exitCode);
@@ -585,7 +547,7 @@ end
 
 puts MathHelper.add(2, 3)";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("5", stdout);
         Assert.Equal(0, exitCode);
@@ -611,7 +573,7 @@ end
 c = Counter.create_at(42)
 puts c.get_value()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("42", stdout);
         Assert.Equal(0, exitCode);
@@ -705,7 +667,7 @@ end
 p = Person.new(""Alice"", 30)
 puts p.describe()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Alice is 30", stdout);
         Assert.Equal(0, exitCode);
@@ -745,7 +707,7 @@ end
 d = Dog.new(breed: ""Labrador"", name: ""Rex"")
 puts d.describe()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Rex the Labrador", stdout);
         Assert.Equal(0, exitCode);
@@ -772,7 +734,7 @@ c2 = Counter.new(start: 42)
 puts c1.get_value()
 puts c2.get_value()";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Contains("0", stdout);
         Assert.Contains("42", stdout);

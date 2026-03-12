@@ -27,7 +27,9 @@ public class ObjectifyConfig
         ".config", "rush");
 
     private static readonly string UserConfigPath = Path.Combine(UserConfigDir, "objectify.rush");
-    private const string SystemConfigPath = "/etc/rush/objectify.rush";
+    private static readonly string SystemConfigPath = OperatingSystem.IsWindows()
+        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "rush", "objectify.rush")
+        : "/etc/rush/objectify.rush";
 
     private ObjectifyConfig() { }
 

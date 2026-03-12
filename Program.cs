@@ -1713,7 +1713,8 @@ while (true)
 
         // ── cat builtin (when not piped) ────────────────────────
         // Direct .NET file I/O — supports stdin, concatenation, -n.
-        // When piped (cat file | grep), falls through to native /bin/cat.
+        // When piped (cat file | grep), falls through to native cat
+        // (Unix: /bin/cat, Windows: PowerShell's cat alias for Get-Content).
         if ((segment.Equals("cat", StringComparison.OrdinalIgnoreCase) ||
              segment.StartsWith("cat ", StringComparison.OrdinalIgnoreCase) ||
              segment.StartsWith("cat\t", StringComparison.OrdinalIgnoreCase)) &&
@@ -2822,7 +2823,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
     }
 
     var currentValue = Environment.GetEnvironmentVariable(varName) ?? "";
-    var entries = currentValue.Split(':').Where(e => !string.IsNullOrEmpty(e)).ToList();
+    var entries = currentValue.Split(PathUtils.PathListSeparator).Where(e => !string.IsNullOrEmpty(e)).ToList();
 
     // ── path / path check — list entries with existence indicators ──
     if (string.IsNullOrEmpty(args) || args.Equals("check", StringComparison.OrdinalIgnoreCase))
@@ -2885,7 +2886,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
         var expandedDir = ExpandTildePath(dir);
 
         // Normalize: strip trailing slash
-        expandedDir = expandedDir.TrimEnd('/');
+        expandedDir = expandedDir.TrimEnd('/', '\\');
 
         // Check for duplicates
         if (entries.Contains(expandedDir))
@@ -2907,11 +2908,11 @@ static bool HandlePathCommand(string args, Runspace runspace)
         string newValue;
         if (front)
         {
-            newValue = expandedDir + ":" + currentValue;
+            newValue = expandedDir + PathUtils.PathListSeparator + currentValue;
         }
         else
         {
-            newValue = currentValue + ":" + expandedDir;
+            newValue = currentValue + PathUtils.PathListSeparator + expandedDir;
         }
         SetEnvVar(varName, newValue, runspace);
 
@@ -2963,7 +2964,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
             return true;
         }
 
-        var newValue = string.Join(":", entries);
+        var newValue = string.Join(PathUtils.PathListSeparator.ToString(), entries);
         SetEnvVar(varName, newValue, runspace);
 
         Console.ForegroundColor = Theme.Current.Muted;
@@ -3020,7 +3021,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
                 .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith('#'))
                 .ToList();
 
-            var newValue = string.Join(":", newEntries);
+            var newValue = string.Join(PathUtils.PathListSeparator.ToString(), newEntries);
             SetEnvVar(varName, newValue, runspace);
 
             Console.ForegroundColor = Theme.Current.Muted;
@@ -4010,17 +4011,22 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         path = path == "~" ? home : Path.Combine(home, path[2..]);
     }
 
-    // ~user expansion (e.g., ~mark → /Users/mark or /home/mark)
+    // ~user expansion (e.g., ~mark → /Users/mark or /home/mark or C:\Users\mark)
     if (path.StartsWith('~') && path.Length > 1 && char.IsLetterOrDigit(path[1]))
     {
         int end = 1;
-        while (end < path.Length && path[end] is not '/' and not ' ') end++;
+        while (end < path.Length && path[end] is not '/' and not '\\' and not ' ') end++;
         var username = path[1..end];
         var rest = end < path.Length ? path[end..] : "";
-        var usersDir = OperatingSystem.IsMacOS() ? "/Users" : "/home";
-        var candidate = Path.Combine(usersDir, username);
-        if (Directory.Exists(candidate))
-            path = candidate + rest;
+        // Derive users directory from current user's home (works on all platforms)
+        var myHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var usersDir = Path.GetDirectoryName(myHome); // /Users, /home, or C:\Users
+        if (usersDir != null)
+        {
+            var candidate = Path.Combine(usersDir, username);
+            if (Directory.Exists(candidate))
+                path = candidate + rest;
+        }
     }
 
     // CDPATH: if path is relative and doesn't exist in cwd, search CDPATH
@@ -4030,7 +4036,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         if (cdpath != null)
         {
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            foreach (var rawDir in cdpath.Split(':'))
+            foreach (var rawDir in cdpath.Split(PathUtils.PathListSeparator))
             {
                 var dir = rawDir;
                 // Expand ~ in CDPATH entries

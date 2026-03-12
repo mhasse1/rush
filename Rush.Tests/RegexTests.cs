@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Rush.Tests;
@@ -33,43 +32,6 @@ public class RegexTests
         var nodes = parser.Parse();
         var transpiler = new RushTranspiler(new CommandTranslator());
         return string.Join("\n", nodes.Select(s => transpiler.TranspileNode(s)));
-    }
-
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
     }
 
     // ── Lexer Tests ─────────────────────────────────────────────────────
@@ -268,7 +230,7 @@ public class RegexTests
     [Fact]
     public void Integration_MatchOp_ReturnsTrue()
     {
-        var (stdout, _, exitCode) = RunRush("puts \"hello\" =~ /^h/");
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"hello\" =~ /^h/");
         Assert.Equal(0, exitCode);
         Assert.Equal("True", stdout);
     }
@@ -276,7 +238,7 @@ public class RegexTests
     [Fact]
     public void Integration_NotMatchOp_ReturnsTrue()
     {
-        var (stdout, _, exitCode) = RunRush("puts \"hello\" !~ /^x/");
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"hello\" !~ /^x/");
         Assert.Equal(0, exitCode);
         Assert.Equal("True", stdout);
     }
@@ -285,7 +247,7 @@ public class RegexTests
     public void Integration_MatchOp_CaseInsensitiveByDefault()
     {
         // PowerShell -match is case-insensitive by default
-        var (stdout, _, exitCode) = RunRush("puts \"HELLO\" =~ /hello/");
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"HELLO\" =~ /hello/");
         Assert.Equal(0, exitCode);
         Assert.Equal("True", stdout);
     }
@@ -293,7 +255,7 @@ public class RegexTests
     [Fact]
     public void Integration_Gsub_WithRegex()
     {
-        var (stdout, _, exitCode) = RunRush("result = \"hello world\".gsub(/o/, \"0\"); puts result");
+        var (stdout, _, exitCode) = TestHelper.RunRush("result = \"hello world\".gsub(/o/, \"0\"); puts result");
         Assert.Equal(0, exitCode);
         Assert.Equal("hell0 w0rld", stdout);
     }
@@ -302,7 +264,7 @@ public class RegexTests
     public void Integration_RegexWithFlags()
     {
         // /i flag should ensure case-insensitive even if PS default changes
-        var (stdout, _, exitCode) = RunRush("puts \"ABC\" =~ /abc/i");
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"ABC\" =~ /abc/i");
         Assert.Equal(0, exitCode);
         Assert.Equal("True", stdout);
     }
@@ -310,7 +272,7 @@ public class RegexTests
     [Fact]
     public void Integration_Sub_WithRegex()
     {
-        var (stdout, _, exitCode) = RunRush("result = \"hello\".sub(/l/, \"r\"); puts result");
+        var (stdout, _, exitCode) = TestHelper.RunRush("result = \"hello\".sub(/l/, \"r\"); puts result");
         Assert.Equal(0, exitCode);
         Assert.Equal("herlo", stdout);
     }
@@ -318,7 +280,7 @@ public class RegexTests
     [Fact]
     public void Integration_Scan_WithRegex()
     {
-        var (stdout, _, exitCode) = RunRush("result = \"cat bat hat\".scan(/[cbh]at/); puts result.length");
+        var (stdout, _, exitCode) = TestHelper.RunRush("result = \"cat bat hat\".scan(/[cbh]at/); puts result.length");
         Assert.Equal(0, exitCode);
         Assert.Equal("3", stdout);
     }

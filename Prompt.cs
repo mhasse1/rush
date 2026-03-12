@@ -132,7 +132,7 @@ public class Prompt
         // CWD (2 levels max)
         Console.Write("  ");
         Console.ForegroundColor = Theme.Current.PromptPath;
-        Console.Write(ShortenPath(cwd));
+        Console.Write(PathUtils.Normalize(ShortenPath(cwd)));
 
         // Git branch + dirty state
         var (branch, isDirty) = GetGitBranchAndDirty(cwd);
@@ -283,12 +283,11 @@ public class Prompt
     private static string ShortenPath(string path)
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (path.StartsWith(home))
-            path = "~" + path[home.Length..];
+        if (path.StartsWith(home, StringComparison.OrdinalIgnoreCase))
+            path = "~" + PathUtils.Normalize(path[home.Length..]);
 
         // Split and take last 2 components (ignoring ~ prefix)
-        var sep = Path.DirectorySeparatorChar;
-        var parts = path.Split(sep, StringSplitOptions.RemoveEmptyEntries);
+        var parts = path.Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
 
         if (parts.Length <= 2)
             return path; // Already short enough: "~", "~/src", "/etc"
@@ -297,7 +296,7 @@ public class Prompt
         // e.g., ~/src/rush/bin → rush/bin
         // If absolute path outside home — show last 2 dirs
         // e.g., /usr/local/bin → local/bin
-        return parts[^2] + sep + parts[^1];
+        return parts[^2] + "/" + parts[^1];
     }
 
     /// <summary>

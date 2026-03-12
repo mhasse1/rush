@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Rush.Tests;
@@ -29,43 +28,6 @@ public class EnumTests
         var parser = new Parser(tokens);
         var nodes = parser.Parse();
         return nodes.First();
-    }
-
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        psi.ArgumentList.Add("-c");
-        psi.ArgumentList.Add(command);
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
     }
 
     // ── Lexer Tests ─────────────────────────────────────────────────────
@@ -232,7 +194,7 @@ end
 
 puts Color.red";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Red", stdout);
         Assert.Equal(0, exitCode);
@@ -250,7 +212,7 @@ end
 
 puts Status.active";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Active", stdout);
         Assert.Equal(0, exitCode);
@@ -269,7 +231,7 @@ end
 favorite = Color.blue
 puts favorite";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("Blue", stdout);
         Assert.Equal(0, exitCode);
@@ -290,7 +252,7 @@ if c == Color.red
   puts ""it is red""
 end";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("it is red", stdout);
         Assert.Equal(0, exitCode);
@@ -310,7 +272,7 @@ end
 p = Priority.high
 puts p";
 
-        var (stdout, stderr, exitCode) = RunRush(script);
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(script);
         Assert.True(string.IsNullOrEmpty(stderr), $"stderr: {stderr}");
         Assert.Equal("High", stdout);
         Assert.Equal(0, exitCode);

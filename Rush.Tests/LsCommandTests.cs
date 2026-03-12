@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Xunit;
 
 namespace Rush.Tests;
@@ -10,45 +9,6 @@ namespace Rush.Tests;
 /// </summary>
 public class LsCommandTests
 {
-    private static string RushBinary
-    {
-        get
-        {
-            var dir = AppDomain.CurrentDomain.BaseDirectory;
-            while (dir != null && !File.Exists(Path.Combine(dir, "Rush.csproj")))
-                dir = Path.GetDirectoryName(dir);
-            if (dir == null)
-                throw new InvalidOperationException("Could not find Rush project root");
-            var binary = Path.Combine(dir, "bin", "Debug", "net8.0", "osx-arm64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "linux-x64", "rush");
-            if (!File.Exists(binary))
-                binary = Path.Combine(dir, "bin", "Debug", "net8.0", "rush");
-            return binary;
-        }
-    }
-
-    private static (string stdout, string stderr, int exitCode) RunRush(string command, string? workDir = null)
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = RushBinary,
-            Arguments = $"-c \"{command.Replace("\"", "\\\"")}\"",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-        if (workDir != null)
-            psi.WorkingDirectory = workDir;
-
-        using var proc = Process.Start(psi)!;
-        var stdout = proc.StandardOutput.ReadToEnd();
-        var stderr = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
-    }
-
     /// <summary>
     /// Temp directory with known files for predictable ls output.
     /// </summary>
@@ -78,7 +38,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir}");
             Assert.Equal(0, exitCode);
             // Should contain our test files (not hidden by default)
             Assert.Contains("alpha.txt", stdout);
@@ -97,7 +57,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = RunRush($"ls -a {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -a {dir}");
             Assert.Contains(".hidden", stdout);
             Assert.Contains("alpha.txt", stdout);
         }
@@ -110,7 +70,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = RunRush($"ls -l {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -l {dir}");
             // Long format should contain permission-like strings and file names
             Assert.Contains("alpha.txt", stdout);
             // Should have multiple columns — look for at least date-like content or size
@@ -128,7 +88,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = RunRush($"ls -R {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -R {dir}");
             // Should include files from subdirectory
             Assert.Contains("nested.txt", stdout);
             Assert.Contains("alpha.txt", stdout);
@@ -144,7 +104,7 @@ public class LsCommandTests
         {
             // rush -c uses Get-ChildItem (not FileListCommand), which
             // outputs one entry per line via OutputRenderer
-            var (stdout, _, _) = RunRush($"ls {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls {dir}");
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             // 3 files + 1 dir = 4 entries (no hidden)
             Assert.Equal(4, lines.Length);
@@ -158,7 +118,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = RunRush($"ls -la {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -la {dir}");
             // Should show hidden files AND long format
             Assert.Contains(".hidden", stdout);
             // Long format lines should have permission-like patterns
@@ -177,7 +137,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | grep alpha");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | grep alpha");
             Assert.Equal(0, exitCode);
             Assert.Contains("alpha", stdout);
             Assert.DoesNotContain("bravo", stdout);
@@ -192,7 +152,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | sort");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | sort");
             Assert.Equal(0, exitCode);
             // Should contain all files
             Assert.Contains("alpha", stdout);
@@ -208,7 +168,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | sort -r");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | sort -r");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
@@ -224,7 +184,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | count");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | count");
             Assert.Equal(0, exitCode);
             // 3 files + 1 dir = 4 (no hidden)
             Assert.Equal("4", stdout);
@@ -238,7 +198,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | head -2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | head -2");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
@@ -254,7 +214,7 @@ public class LsCommandTests
         {
             // wc -l maps to Measure-Object -Line which produces table output
             // Extract the numeric count from the formatted output
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | wc -l");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | wc -l");
             Assert.Equal(0, exitCode);
             // Parse the count from the table — look for first line that's purely numeric
             var countStr = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -272,7 +232,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | first");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | first");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Single(lines);
@@ -286,7 +246,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | last");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | last");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Single(lines);
@@ -301,7 +261,7 @@ public class LsCommandTests
         try
         {
             // ls | uniq shouldn't change count since filenames are already unique
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | uniq");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | uniq");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(4, lines.Length);
@@ -315,7 +275,7 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir} | skip 2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | skip 2");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
@@ -332,7 +292,7 @@ public class LsCommandTests
         var outFile = Path.GetTempFileName();
         try
         {
-            RunRush($"ls {dir} > {outFile}");
+            TestHelper.RunRush($"ls {dir} > {outFile}");
             var content = File.ReadAllText(outFile);
             Assert.Contains("alpha.txt", content);
             Assert.Contains("bravo.txt", content);
@@ -349,7 +309,7 @@ public class LsCommandTests
     [Fact]
     public void Ls_NonexistentDir_ReturnsError()
     {
-        var (_, stderr, exitCode) = RunRush("ls /nonexistent_path_12345");
+        var (_, stderr, exitCode) = TestHelper.RunRush("ls /nonexistent_path_12345");
         Assert.NotEqual(0, exitCode);
     }
 
@@ -360,7 +320,7 @@ public class LsCommandTests
         Directory.CreateDirectory(dir);
         try
         {
-            var (stdout, _, exitCode) = RunRush($"ls {dir}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir}");
             // Empty directory should produce no file listing
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Empty(lines);
