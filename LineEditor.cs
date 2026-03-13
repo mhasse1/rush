@@ -53,6 +53,12 @@ public class LineEditor
     private char _pendingOperator; // 'd', 'c', 'y', or '\0'
     private int _pendingCount;
 
+    // Vi U (undo-all) baseline — initial buffer state at ReadLine entry
+    private (List<char> buffer, int cursor)? _lineBaseline;
+
+    // Vi . (dot-repeat) — closure capturing last edit command
+    private Action? _dotRepeatAction;
+
     // History persistence
     private static readonly string HistoryDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -94,6 +100,7 @@ public class LineEditor
             _savedInput = null;
             _viCount = 0;
             _viCountActive = false;
+            _lineBaseline = (new List<char>(_buffer), _cursor);
 
             if (Mode == EditMode.Vi)
             {
@@ -229,6 +236,24 @@ public class LineEditor
                     _cursor = FindWordEnd(_buffer, _cursor);
                 SetCursorPos();
                 return null;
+            case 'W':
+                for (int i = 0; i < count; i++)
+                {
+                    _cursor = FindWORDBoundaryRight(_buffer, _cursor);
+                    if (_cursor >= _buffer.Count) { _cursor = Math.Max(0, _buffer.Count - 1); break; }
+                }
+                SetCursorPos();
+                return null;
+            case 'B':
+                for (int i = 0; i < count; i++)
+                    _cursor = FindWORDBoundaryLeft(_buffer, _cursor);
+                SetCursorPos();
+                return null;
+            case 'E':
+                for (int i = 0; i < count; i++)
+                    _cursor = FindWORDEnd(_buffer, _cursor);
+                SetCursorPos();
+                return null;
 
             // -- Find char (f/F/t/T) --
             case 'f':
@@ -239,6 +264,14 @@ public class LineEditor
                 return null;
             case ';': // Repeat last find
                 RepeatFindChar(count);
+                return null;
+            case ',': // Reverse repeat last find
+                if (_lastFindChar != 0)
+                {
+                    _lastFindForward = !_lastFindForward;
+                    RepeatFindChar(count);
+                    _lastFindForward = !_lastFindForward; // restore for next ;
+                }
                 return null;
 
             // -- Operators (wait for motion) --
@@ -291,6 +324,23 @@ public class LineEditor
                     _yankBuffer = xChars.ToString();
                     if (_cursor >= _buffer.Count && _cursor > 0) _cursor--;
                     Redraw();
+                    int xCount = count;
+                    _dotRepeatAction = () =>
+                    {
+                        if (_buffer.Count > 0)
+                        {
+                            PushUndo();
+                            var sb = new System.Text.StringBuilder();
+                            for (int i = 0; i < xCount && _cursor < _buffer.Count; i++)
+                            {
+                                sb.Append(_buffer[_cursor]);
+                                _buffer.RemoveAt(_cursor);
+                            }
+                            _yankBuffer = sb.ToString();
+                            if (_cursor >= _buffer.Count && _cursor > 0) _cursor--;
+                            Redraw();
+                        }
+                    };
                 }
                 return null;
             case 'X':
@@ -306,6 +356,23 @@ public class LineEditor
                     }
                     _yankBuffer = xbChars.ToString();
                     Redraw();
+                    int bigXCount = count;
+                    _dotRepeatAction = () =>
+                    {
+                        if (_cursor > 0)
+                        {
+                            PushUndo();
+                            var sb = new System.Text.StringBuilder();
+                            for (int i = 0; i < bigXCount && _cursor > 0; i++)
+                            {
+                                sb.Insert(0, _buffer[_cursor - 1]);
+                                _buffer.RemoveAt(_cursor - 1);
+                                _cursor--;
+                            }
+                            _yankBuffer = sb.ToString();
+                            Redraw();
+                        }
+                    };
                 }
                 return null;
             case 'D':
@@ -316,6 +383,17 @@ public class LineEditor
                     _buffer.RemoveRange(_cursor, _buffer.Count - _cursor);
                     if (_cursor > 0) _cursor--;
                     Redraw();
+                    _dotRepeatAction = () =>
+                    {
+                        if (_cursor < _buffer.Count)
+                        {
+                            PushUndo();
+                            _yankBuffer = new string(_buffer.GetRange(_cursor, _buffer.Count - _cursor).ToArray());
+                            _buffer.RemoveRange(_cursor, _buffer.Count - _cursor);
+                            if (_cursor > 0) _cursor--;
+                            Redraw();
+                        }
+                    };
                 }
                 return null;
             case 'C':
@@ -388,6 +466,16 @@ public class LineEditor
                     Redraw();
                 }
                 return null;
+            case 'U': // Undo all — restore line to original state
+                if (_lineBaseline != null)
+                {
+                    PushUndo();
+                    var (baseBuf, baseCur) = _lineBaseline.Value;
+                    _buffer = new List<char>(baseBuf);
+                    _cursor = Math.Min(baseCur, Math.Max(0, _buffer.Count - 1));
+                    Redraw();
+                }
+                return null;
 
             // -- Replace character --
             case 'r':
@@ -398,9 +486,61 @@ public class LineEditor
                     PushUndo();
                     _buffer[_cursor] = rKey.KeyChar;
                     Redraw();
+                    _dotRepeatAction = () =>
+                    {
+                        if (_cursor < _buffer.Count)
+                        {
+                            PushUndo();
+                            _buffer[_cursor] = rKey.KeyChar;
+                            Redraw();
+                        }
+                    };
                 }
                 return null;
             }
+
+            // -- Toggle case --
+            case '~':
+                if (_buffer.Count > 0)
+                {
+                    PushUndo();
+                    int tildeCount = count;
+                    for (int i = 0; i < tildeCount && _cursor < _buffer.Count; i++)
+                    {
+                        char ch = _buffer[_cursor];
+                        _buffer[_cursor] = char.IsUpper(ch) ? char.ToLower(ch) : char.ToUpper(ch);
+                        if (_cursor < _buffer.Count - 1) _cursor++;
+                    }
+                    Redraw();
+                    _dotRepeatAction = () =>
+                    {
+                        if (_buffer.Count > 0)
+                        {
+                            PushUndo();
+                            for (int i = 0; i < tildeCount && _cursor < _buffer.Count; i++)
+                            {
+                                char ch = _buffer[_cursor];
+                                _buffer[_cursor] = char.IsUpper(ch) ? char.ToLower(ch) : char.ToUpper(ch);
+                                if (_cursor < _buffer.Count - 1) _cursor++;
+                            }
+                            Redraw();
+                        }
+                    };
+                }
+                return null;
+
+            // -- Comment line and submit --
+            case '#':
+                _buffer.Insert(0, '#');
+                _buffer.Insert(1, ' ');
+                Redraw();
+                Console.WriteLine();
+                return new string(_buffer.ToArray());
+
+            // -- Dot-repeat last modification --
+            case '.':
+                _dotRepeatAction?.Invoke();
+                return null;
 
             // -- Vi search --
             case '/':
@@ -452,17 +592,14 @@ public class LineEditor
                 SetCursorPos();
                 return null;
 
-            // Backspace in normal mode: enter insert mode and delete char before cursor.
-            // Standard vi uses h (move left) or X (delete left), but Backspace as
-            // "delete-and-edit" matches shell user expectations after history recall.
+            // Backspace in normal mode: delete char before cursor, stay in normal mode.
+            // Matches GNU readline rl_vi_rubout: move left + delete, no mode change.
             case ConsoleKey.Backspace:
                 if (_cursor > 0)
                 {
                     PushUndo();
                     _buffer.RemoveAt(_cursor - 1);
                     _cursor--;
-                    _viMode = ViMode.Insert;
-                    SetCursorShape(insert: true);
                     Redraw();
                 }
                 return null;
@@ -573,6 +710,17 @@ public class LineEditor
                 if (op == 'c') { _viMode = ViMode.Insert; SetCursorShape(insert: true); }
                 Redraw();
             }
+            if (op == 'd')
+            {
+                _dotRepeatAction = () =>
+                {
+                    PushUndo();
+                    _yankBuffer = new string(_buffer.ToArray());
+                    _buffer.Clear();
+                    _cursor = 0;
+                    Redraw();
+                };
+            }
             return;
         }
 
@@ -591,6 +739,21 @@ public class LineEditor
                 _buffer.RemoveRange(start, end - start);
                 _cursor = Math.Min(start, Math.Max(0, _buffer.Count - 1));
                 Redraw();
+                // Capture dot-repeat for d+motion
+                char motionChar = key.KeyChar;
+                int motionCount = count;
+                _dotRepeatAction = () =>
+                {
+                    var rng = ComputeMotionRange(new ConsoleKeyInfo(motionChar, 0, false, false, false), motionCount);
+                    if (rng == null) return;
+                    var (s, e) = rng.Value;
+                    if (s == e) return;
+                    PushUndo();
+                    _yankBuffer = new string(_buffer.GetRange(s, e - s).ToArray());
+                    _buffer.RemoveRange(s, e - s);
+                    _cursor = Math.Min(s, Math.Max(0, _buffer.Count - 1));
+                    Redraw();
+                };
                 break;
             case 'c':
                 _buffer.RemoveRange(start, end - start);
@@ -629,6 +792,24 @@ public class LineEditor
                 to = from;
                 for (int i = 0; i < count; i++)
                     to = FindWordEnd(_buffer, to);
+                return (from, Math.Min(to + 1, _buffer.Count));
+
+            case 'W':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWORDBoundaryRight(_buffer, to);
+                return (from, Math.Min(to, _buffer.Count));
+
+            case 'B':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWORDBoundaryLeft(_buffer, to);
+                return (Math.Min(to, from), Math.Max(to, from));
+
+            case 'E':
+                to = from;
+                for (int i = 0; i < count; i++)
+                    to = FindWORDEnd(_buffer, to);
                 return (from, Math.Min(to + 1, _buffer.Count));
 
             case '$':
@@ -708,7 +889,7 @@ public class LineEditor
 
             case ConsoleKey.LeftArrow:
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Alt))
-                    _cursor = FindWordBoundaryLeft(_buffer, _cursor);
+                    _cursor = FindWORDBoundaryLeft(_buffer, _cursor);
                 else if (_cursor > 0)
                     _cursor--;
                 SetCursorPos();
@@ -716,7 +897,7 @@ public class LineEditor
 
             case ConsoleKey.RightArrow:
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Alt))
-                    _cursor = FindWordBoundaryRight(_buffer, _cursor);
+                    _cursor = FindWORDBoundaryRight(_buffer, _cursor);
                 else if (_cursor < _buffer.Count)
                     _cursor++;
                 SetCursorPos();
@@ -1334,16 +1515,59 @@ public class LineEditor
 
     // ── Word Movement ────────────────────────────────────────────────────
 
+    // ── Vi word classification ────────────────────────────────────────
+    // Vi distinguishes 3 char classes: word (alnum/_), punctuation, whitespace.
+    // w/b/e use class boundaries; W/B/E use whitespace-only boundaries (WORD).
+
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    // ── w/b/e — char-class word boundaries (vi "word") ──────────────
+
+    private static int FindWordBoundaryRight(List<char> buffer, int cursor)
+    {
+        if (cursor >= buffer.Count) return buffer.Count;
+        int pos = cursor;
+        // Skip current class
+        if (pos < buffer.Count && IsWordChar(buffer[pos]))
+            while (pos < buffer.Count && IsWordChar(buffer[pos])) pos++;
+        else if (pos < buffer.Count && !char.IsWhiteSpace(buffer[pos]))
+            while (pos < buffer.Count && !char.IsWhiteSpace(buffer[pos]) && !IsWordChar(buffer[pos])) pos++;
+        // Skip whitespace
+        while (pos < buffer.Count && char.IsWhiteSpace(buffer[pos])) pos++;
+        return pos;
+    }
+
     private static int FindWordBoundaryLeft(List<char> buffer, int cursor)
     {
         if (cursor == 0) return 0;
         int pos = cursor - 1;
+        // Skip whitespace
         while (pos > 0 && char.IsWhiteSpace(buffer[pos])) pos--;
-        while (pos > 0 && !char.IsWhiteSpace(buffer[pos - 1])) pos--;
+        // Skip current class backward
+        if (pos >= 0 && IsWordChar(buffer[pos]))
+            while (pos > 0 && IsWordChar(buffer[pos - 1])) pos--;
+        else if (pos >= 0 && !char.IsWhiteSpace(buffer[pos]))
+            while (pos > 0 && !char.IsWhiteSpace(buffer[pos - 1]) && !IsWordChar(buffer[pos - 1])) pos--;
         return pos;
     }
 
-    private static int FindWordBoundaryRight(List<char> buffer, int cursor)
+    private static int FindWordEnd(List<char> buffer, int cursor)
+    {
+        if (cursor >= buffer.Count - 1) return Math.Max(0, buffer.Count - 1);
+        int pos = cursor + 1;
+        // Skip whitespace
+        while (pos < buffer.Count && char.IsWhiteSpace(buffer[pos])) pos++;
+        // Skip current class forward to end
+        if (pos < buffer.Count && IsWordChar(buffer[pos]))
+            while (pos < buffer.Count - 1 && IsWordChar(buffer[pos + 1])) pos++;
+        else if (pos < buffer.Count && !char.IsWhiteSpace(buffer[pos]))
+            while (pos < buffer.Count - 1 && !char.IsWhiteSpace(buffer[pos + 1]) && !IsWordChar(buffer[pos + 1])) pos++;
+        return pos;
+    }
+
+    // ── W/B/E — whitespace-only WORD boundaries (vi "WORD") ─────────
+
+    private static int FindWORDBoundaryRight(List<char> buffer, int cursor)
     {
         if (cursor >= buffer.Count) return buffer.Count;
         int pos = cursor;
@@ -1352,7 +1576,16 @@ public class LineEditor
         return pos;
     }
 
-    private static int FindWordEnd(List<char> buffer, int cursor)
+    private static int FindWORDBoundaryLeft(List<char> buffer, int cursor)
+    {
+        if (cursor == 0) return 0;
+        int pos = cursor - 1;
+        while (pos > 0 && char.IsWhiteSpace(buffer[pos])) pos--;
+        while (pos > 0 && !char.IsWhiteSpace(buffer[pos - 1])) pos--;
+        return pos;
+    }
+
+    private static int FindWORDEnd(List<char> buffer, int cursor)
     {
         if (cursor >= buffer.Count - 1) return Math.Max(0, buffer.Count - 1);
         int pos = cursor + 1;

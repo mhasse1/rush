@@ -88,6 +88,11 @@ dotnet publish -c Release -r win-arm64 --self-contained true -p:PublishSingleFil
 cp "$SCRIPT_DIR/bin/Release/net8.0/win-arm64/publish/rush.exe" "$WIN_STAGING/rush.exe"
 echo "  → $WIN_STAGING/rush.exe"
 
+echo "  → Building Windows x64..."
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true "$SCRIPT_DIR" > /dev/null
+cp "$SCRIPT_DIR/bin/Release/net8.0/win-x64/publish/rush.exe" "$WIN_STAGING/rush-x64.exe"
+echo "  → $WIN_STAGING/rush-x64.exe"
+
 echo "  → Copying docs..."
 cp "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$WIN_STAGING/"
 cp "$SCRIPT_DIR/docs/user-manual.md" "$WIN_STAGING/"

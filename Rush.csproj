@@ -52,7 +52,9 @@
   </Target>
 
   <!-- ── Block publish on dirty working tree ─────────────────────────── -->
-  <Target Name="EnforceCleanPublish" BeforeTargets="Publish" DependsOnTargets="GitVersion">
+  <!-- Pass -p:SkipCleanCheck=true to bypass (e.g., test builds) -->
+  <Target Name="EnforceCleanPublish" BeforeTargets="Publish" DependsOnTargets="GitVersion"
+          Condition="'$(SkipCleanCheck)' != 'true'">
     <Error Condition="'$(_IsDirty)' == 'true'"
            Text="Cannot publish with uncommitted changes. Commit first, then publish.%0AGit status:%0A$(GitDirty)" />
   </Target>

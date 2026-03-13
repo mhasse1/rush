@@ -247,11 +247,24 @@ public class McpSshMode
                 var host = arguments?["host"]?.GetValue<string>();
                 if (string.IsNullOrEmpty(host)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: host"); return; }
 
-                // Gather context in a single SSH call
+                // Gather context in a single SSH call (bash syntax for Linux/macOS)
                 var contextCmd = "echo \"__HOST__$(hostname)\" && echo \"__CWD__$(pwd)\" && " +
                     "echo \"__BRANCH__$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')\" && " +
                     "echo \"__DIRTY__$(test -n \"$(git status --porcelain 2>/dev/null)\" && echo true || echo false)\"";
                 var (stdout, stderr, exitCode, durationMs) = RunSsh(host, contextCmd);
+
+                // Fallback: PowerShell 5.1 on Windows doesn't support && or test
+                if (exitCode != 0 && stderr.Contains("is not a valid statement separator"))
+                {
+                    var psCmd = "echo \"__HOST__$(hostname)\"; " +
+                        "echo \"__CWD__$(Get-Location)\"; " +
+                        "try { $b = git rev-parse --abbrev-ref HEAD 2>$null; " +
+                        "if ($b) { echo \"__BRANCH__$b\" } } catch {}; " +
+                        "try { $d = git status --porcelain 2>$null; " +
+                        "if ($d) { echo \"__DIRTY__true\" } else { echo \"__DIRTY__false\" } } " +
+                        "catch { echo \"__DIRTY__false\" }";
+                    (stdout, stderr, exitCode, durationMs) = RunSsh(host, psCmd);
+                }
 
                 var resultObj = new JsonObject
                 {
