@@ -80,6 +80,7 @@ public class McpSshMode
             }
         }
 
+        SshPool.Cleanup();
         Console.Error.WriteLine("[rush-ssh] Server shutting down (EOF)");
     }
 
@@ -319,12 +320,14 @@ public class McpSshMode
             psi.ArgumentList.Add("ServerAliveCountMax=3");
             psi.ArgumentList.Add("-o");
             psi.ArgumentList.Add("BatchMode=yes");
+            SshPool.Apply(psi);
             psi.ArgumentList.Add(host);
             psi.ArgumentList.Add(command);
 
             using var proc = Process.Start(psi);
             if (proc == null)
                 return ("", $"Failed to start ssh to {host}", 1, sw.ElapsedMilliseconds);
+            SshPool.Track(host);
 
             var stdoutTask = proc.StandardOutput.ReadToEndAsync();
             var stderrTask = proc.StandardError.ReadToEndAsync();

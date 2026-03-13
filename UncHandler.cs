@@ -393,12 +393,14 @@ public static class UncHandler
             psi.ArgumentList.Add("BatchMode=yes");
             psi.ArgumentList.Add("-o");
             psi.ArgumentList.Add("ConnectTimeout=10");
+            SshPool.Apply(psi);
             psi.ArgumentList.Add(sshTarget);
             psi.ArgumentList.Add($"rush -c \"{rushCommand.Replace("\"", "\\\"")}\"");
 
             using var proc = Process.Start(psi);
             if (proc == null)
                 return ("", $"Failed to start ssh to {sshTarget}", 1);
+            SshPool.Track(sshTarget);
 
             var stdoutTask = proc.StandardOutput.ReadToEndAsync();
             var stderrTask = proc.StandardError.ReadToEndAsync();
@@ -435,6 +437,7 @@ public static class UncHandler
             psi.ArgumentList.Add("BatchMode=yes");
             psi.ArgumentList.Add("-o");
             psi.ArgumentList.Add("ConnectTimeout=10");
+            SshPool.Apply(psi);
             psi.ArgumentList.Add(src);
             psi.ArgumentList.Add(dst);
 

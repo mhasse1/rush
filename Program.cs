@@ -2064,6 +2064,7 @@ if (host.ShouldExit)
     Environment.ExitCode = host.ExitCode;
 if (!signalExit) // Don't write to a dead terminal (SIGHUP)
     Console.WriteLine("bye.");
+SshPool.Cleanup();
 
 // Dispose signal registrations
 sigtstpReg?.Dispose();
