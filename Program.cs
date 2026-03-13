@@ -650,6 +650,14 @@ while (true)
             runInBackground = true;
         }
 
+        // ── UNC path handling ──────────────────────────────────────
+        if (segment.Contains("//ssh:") && UncHandler.TryHandle(segment, out bool uncFailed))
+        {
+            lastSegmentFailed = uncFailed;
+            lastExitCode = uncFailed ? 1 : 0;
+            continue;
+        }
+
         // ── Try Built-in Commands ───────────────────────────────────
         // Job control builtins
         if (segment.Equals("jobs", StringComparison.OrdinalIgnoreCase))
@@ -4504,8 +4512,15 @@ static void RunNonInteractive(string command)
         return;
     }
 
-    // ── ls builtin (same dispatch as interactive REPL) ──
+    // ── UNC path handling ──────────────────────────────────────
     var trimmedCmd = command.TrimStart();
+    if (trimmedCmd.Contains("//ssh:") && UncHandler.TryHandle(trimmedCmd, out bool uncFailed))
+    {
+        if (uncFailed) Environment.ExitCode = 1;
+        return;
+    }
+
+    // ── ls builtin (same dispatch as interactive REPL) ──
     if ((trimmedCmd.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
          trimmedCmd.StartsWith("ls ", StringComparison.OrdinalIgnoreCase) ||
          trimmedCmd.StartsWith("ls\t", StringComparison.OrdinalIgnoreCase)) &&
