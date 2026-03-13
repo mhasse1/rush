@@ -15,7 +15,7 @@ namespace Rush;
 /// </summary>
 public static class TerminalBackground
 {
-    public record TerminalBg(bool IsDark, double BgLuminance);
+    public record TerminalBg(bool IsDark, double BgLuminance, double BgR = 0, double BgG = 0, double BgB = 0);
 
     /// <summary>
     /// Saved stty settings for emergency restore if detection times out.
@@ -67,8 +67,8 @@ public static class TerminalBackground
         try
         {
             // 1. OSC 11 — query terminal directly for background RGB
-            if (TryOsc11(out var luminance))
-                return new TerminalBg(luminance < 0.5, luminance);
+            if (TryOsc11(out var luminance, out var bgR, out var bgG, out var bgB))
+                return new TerminalBg(luminance < 0.5, luminance, bgR, bgG, bgB);
         }
         catch { /* OSC 11 failed — try next method */ }
 
@@ -94,9 +94,10 @@ public static class TerminalBackground
 
     // ── OSC 11 Terminal Query ──────────────────────────────────────────
 
-    private static bool TryOsc11(out double luminance)
+    private static bool TryOsc11(out double luminance, out double bgR, out double bgG, out double bgB)
     {
         luminance = 0;
+        bgR = bgG = bgB = 0;
 
         // Only attempt on Unix when connected to a real terminal
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return false;
@@ -177,7 +178,7 @@ public static class TerminalBackground
                 if (read(0, buf, 1) <= 0) break;
             }
 
-            return ParseOsc11Response(response.ToString(), out luminance);
+            return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
         }
         finally
         {
@@ -287,9 +288,11 @@ public static class TerminalBackground
     /// Parse an OSC 11 response like: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
     /// The hex values can be 1-4 digits each.
     /// </summary>
-    private static bool ParseOsc11Response(string response, out double luminance)
+    private static bool ParseOsc11Response(string response, out double luminance,
+        out double bgR, out double bgG, out double bgB)
     {
         luminance = 0;
+        bgR = bgG = bgB = 0;
 
         // Match rgb:XXXX/XXXX/XXXX pattern
         var match = Regex.Match(response, @"rgb:([0-9a-fA-F]+)/([0-9a-fA-F]+)/([0-9a-fA-F]+)");
@@ -301,11 +304,11 @@ public static class TerminalBackground
 
         // Normalize to 0.0-1.0 range based on hex digit count
         // 1 digit = /15, 2 digits = /255, 3 digits = /4095, 4 digits = /65535
-        double r = NormalizeHex(rHex);
-        double g = NormalizeHex(gHex);
-        double b = NormalizeHex(bHex);
+        bgR = NormalizeHex(rHex);
+        bgG = NormalizeHex(gHex);
+        bgB = NormalizeHex(bHex);
 
-        luminance = RelativeLuminance(r, g, b);
+        luminance = RelativeLuminance(bgR, bgG, bgB);
         return true;
     }
 
