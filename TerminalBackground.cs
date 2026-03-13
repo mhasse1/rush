@@ -15,7 +15,7 @@ namespace Rush;
 /// </summary>
 public static class TerminalBackground
 {
-    public record TerminalBg(bool IsDark, double BgLuminance, double BgR = 0, double BgG = 0, double BgB = 0);
+    public record TerminalBg(bool IsDark, double BgLuminance, double BgR = -1, double BgG = -1, double BgB = -1);
 
     /// <summary>
     /// Saved stty settings for emergency restore if detection times out.
@@ -103,8 +103,7 @@ public static class TerminalBackground
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return false;
         if (Console.IsInputRedirected || Console.IsOutputRedirected) return false;
 
-        // Open /dev/tty directly — bypasses .NET's Console stdin buffer
-        // which can swallow response bytes during an active REPL session
+        // Open /dev/tty directly to avoid interfering with stdin/stdout
         const string ttyPath = "/dev/tty";
         if (!File.Exists(ttyPath)) return false;
 
@@ -118,12 +117,8 @@ public static class TerminalBackground
         // we're in raw mode (e.g., read() blocks in a nested shell)
         _savedStty = saved.Trim();
 
-        int ttyFd = -1;
         try
         {
-            ttyFd = open(ttyPath, O_RDWR);
-            if (ttyFd < 0) return false;
-
             // Disable echo and canonical mode, set read timeout
             // min 0 + time 1 = return immediately with whatever is available,
             // or after 100ms with nothing
@@ -136,11 +131,14 @@ public static class TerminalBackground
             // Send OSC 11 query: ESC ] 11 ; ? ESC backslash
             var query = "\x1b]11;?\x1b\\";
             var queryBytes = Encoding.ASCII.GetBytes(query);
-            write(ttyFd, queryBytes, queryBytes.Length);
 
-            // Read response via /dev/tty fd — use poll() before each read()
-            // to guarantee we never block, even if stty settings didn't take
-            // effect (nested shells, broken ptys)
+            using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
+            ttyWrite.Write(queryBytes);
+            ttyWrite.Flush();
+
+            // Read response — use poll() before each read() to guarantee
+            // we never block, even if stty settings didn't take effect
+            // (which can happen in nested shells or broken ptys)
             var response = new StringBuilder();
             var deadline = DateTime.UtcNow.AddMilliseconds(300);
             var buf = new byte[1];
@@ -148,12 +146,12 @@ public static class TerminalBackground
             while (DateTime.UtcNow < deadline)
             {
                 // poll() with 50ms timeout — returns >0 if data available
-                var pfd = new Pollfd { fd = ttyFd, events = POLLIN };
+                var pfd = new Pollfd { fd = 0, events = POLLIN };
                 var ready = poll(ref pfd, 1, 50);
 
                 if (ready > 0 && (pfd.revents & POLLIN) != 0)
                 {
-                    var bytesRead = read(ttyFd, buf, 1);
+                    var bytesRead = read(0, buf, 1);
                     if (bytesRead > 0)
                     {
                         response.Append((char)buf[0]);
@@ -175,17 +173,15 @@ public static class TerminalBackground
             var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
             while (DateTime.UtcNow < drainDeadline)
             {
-                var pfd2 = new Pollfd { fd = ttyFd, events = POLLIN };
+                var pfd2 = new Pollfd { fd = 0, events = POLLIN };
                 if (poll(ref pfd2, 1, 10) <= 0) break;
-                if (read(ttyFd, buf, 1) <= 0) break;
+                if (read(0, buf, 1) <= 0) break;
             }
 
             return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
         }
         finally
         {
-            if (ttyFd >= 0) close(ttyFd);
-
             // Restore terminal settings (re-enables echo)
             RunSttySafe(saved.Trim());
             _savedStty = null; // Successfully restored
@@ -425,18 +421,7 @@ public static class TerminalBackground
     // ── Native P/Invoke (Unix only) ─────────────────────────────────────
 
     [DllImport("libc", SetLastError = true)]
-    private static extern int open([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
-
-    [DllImport("libc", SetLastError = true)]
     private static extern int read(int fd, byte[] buf, int count);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int write(int fd, byte[] buf, int count);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int close(int fd);
-
-    private const int O_RDWR = 2;
 
     /// <summary>
     /// poll() — check if file descriptors have data available without blocking.

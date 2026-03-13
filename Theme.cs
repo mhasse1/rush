@@ -196,19 +196,19 @@ public class Theme
         {
             // Light background — use dark/saturated colors for contrast
             Banner          = ConsoleColor.DarkCyan;
-            Muted           = ConsoleColor.Gray;
+            Muted           = ConsoleColor.DarkGray;
             Accent          = ConsoleColor.Black;
-            Error           = ConsoleColor.DarkRed;
+            Error           = ConsoleColor.Red;
             Warning         = ConsoleColor.DarkYellow;
             PromptPath      = ConsoleColor.DarkGreen;
             PromptGitBranch = ConsoleColor.DarkYellow;
             PromptGitDirty  = ConsoleColor.DarkYellow;
             PromptSuccess   = ConsoleColor.DarkGreen;
-            PromptFailed    = ConsoleColor.DarkRed;
-            PromptRoot      = ConsoleColor.DarkRed;
-            PromptTime      = ConsoleColor.Gray;
-            PromptUser      = ConsoleColor.DarkCyan;
-            PromptHost      = ConsoleColor.Gray;
+            PromptFailed    = ConsoleColor.Red;
+            PromptRoot      = ConsoleColor.Red;
+            PromptTime      = ConsoleColor.DarkGray;
+            PromptUser      = ConsoleColor.Blue;
+            PromptHost      = ConsoleColor.DarkGray;
             PromptSshHost   = ConsoleColor.DarkYellow;
             Directory       = ConsoleColor.Blue;
             Executable      = ConsoleColor.DarkGreen;
@@ -216,15 +216,15 @@ public class Theme
             Image           = ConsoleColor.Magenta;
             Config          = ConsoleColor.DarkYellow;
             Document        = ConsoleColor.DarkCyan;
-            SourceCode      = ConsoleColor.DarkCyan;
+            SourceCode      = ConsoleColor.DarkBlue;
             RegularFile     = ConsoleColor.Black;
-            TableHeader     = ConsoleColor.DarkCyan;
-            Separator       = ConsoleColor.Gray;
-            Metadata        = ConsoleColor.Gray;
-            Memory          = ConsoleColor.DarkYellow;
+            TableHeader     = ConsoleColor.Blue;
+            Separator       = ConsoleColor.DarkGray;
+            Metadata        = ConsoleColor.DarkGray;
+            Memory          = ConsoleColor.DarkMagenta;
             SearchQuery     = ConsoleColor.DarkYellow;
             PermRead        = ConsoleColor.DarkYellow;
-            PermWrite       = ConsoleColor.DarkRed;
+            PermWrite       = ConsoleColor.Red;
             PermExec        = ConsoleColor.DarkGreen;
 
             AnsiKnownCommand   = "\x1b[34m";         // Blue
@@ -239,8 +239,9 @@ public class Theme
         }
 
         // ── Contrast validation pass ──────────────────────────────────
-        // When actual background RGB is available (from OSC 11), validate
-        // every color against it and swap any that fail the minimum contrast.
+        // When background RGB is available (from OSC 11 or assumed in
+        // Initialize), validate every color and swap any that fail.
+        // Skipped for the static default initializer (bgR = -1).
         if (bgR >= 0)
         {
             double bgLum = TerminalBackground.RelativeLuminance(bgR, bgG, bgB);
@@ -309,7 +310,16 @@ public class Theme
         else
         {
             var bg = TerminalBackground.Detect();
-            Current = new Theme(bg.IsDark, bg.BgR, bg.BgG, bg.BgB);
+            double r = bg.BgR, g = bg.BgG, b = bg.BgB;
+            if (r < 0)
+            {
+                // No OSC 11 RGB data (fallback detection) — assume
+                // pure white for light themes, pure black for dark.
+                // Without this, contrast validation would be skipped
+                // and colors like Gray would wash out on light backgrounds.
+                r = g = b = bg.IsDark ? 0.0 : 1.0;
+            }
+            Current = new Theme(bg.IsDark, r, g, b);
         }
     }
 
