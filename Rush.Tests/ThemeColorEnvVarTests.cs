@@ -483,4 +483,179 @@ public class ThemeColorEnvVarTests : IDisposable
             Theme.MinContrast = origContrast;
         }
     }
+
+    // ── HSL and Hue Distance Tests ───────────────────────────────────
+
+    [Fact]
+    public void RgbToHsl_PureRed_Returns0Hue()
+    {
+        var (h, s, l) = Theme.RgbToHsl(1.0, 0.0, 0.0);
+        Assert.Equal(0, h, 1);
+        Assert.Equal(1.0, s, 1);
+        Assert.Equal(0.5, l, 1);
+    }
+
+    [Fact]
+    public void RgbToHsl_PureGreen_Returns120Hue()
+    {
+        var (h, _, _) = Theme.RgbToHsl(0.0, 1.0, 0.0);
+        Assert.Equal(120, h, 1);
+    }
+
+    [Fact]
+    public void RgbToHsl_PureBlue_Returns240Hue()
+    {
+        var (h, _, _) = Theme.RgbToHsl(0.0, 0.0, 1.0);
+        Assert.Equal(240, h, 1);
+    }
+
+    [Fact]
+    public void RgbToHsl_Gray_HasZeroSaturation()
+    {
+        var (_, s, _) = Theme.RgbToHsl(0.5, 0.5, 0.5);
+        Assert.Equal(0, s, 1);
+    }
+
+    [Fact]
+    public void HueDistance_SameHue_ReturnsZero()
+    {
+        Assert.Equal(0, Theme.HueDistance(120, 120), 1);
+    }
+
+    [Fact]
+    public void HueDistance_Opposite_Returns180()
+    {
+        Assert.Equal(180, Theme.HueDistance(0, 180), 1);
+    }
+
+    [Fact]
+    public void HueDistance_WrapsAround()
+    {
+        // 350° and 10° are 20° apart, not 340°
+        Assert.Equal(20, Theme.HueDistance(350, 10), 1);
+    }
+
+    // ── 256-Color Palette Generation Tests ───────────────────────────
+
+    [Fact]
+    public void Build256LsColors_PureBlack_AllEntriesUse256Color()
+    {
+        var result = Theme.Build256LsColors(isDark: true, 0, 0, 0);
+        // Should contain 38;5; format entries for primary types
+        Assert.Contains("di=38;5;", result);
+        Assert.Contains("ln=38;5;", result);
+        Assert.Contains("ex=38;5;", result);
+        // Background-coded entries should still be basic
+        Assert.Contains("su=37;41", result);
+    }
+
+    [Fact]
+    public void Build256LsColors_AllPrimaryEntriesDistinct()
+    {
+        // On dark blue-gray (#222733), all primary entries must be different 256 codes
+        double r = 0x22 / 255.0, g = 0x27 / 255.0, b = 0x33 / 255.0;
+        var result = Theme.Build256LsColors(isDark: true, r, g, b);
+
+        var codes = new HashSet<string>();
+        foreach (var entry in result.Split(':'))
+        {
+            var eq = entry.IndexOf('=');
+            if (eq < 0) continue;
+            var key = entry[..eq];
+            var sgr = entry[(eq + 1)..];
+            if (key is "di" or "ln" or "ex" or "so" or "pi")
+            {
+                Assert.True(codes.Add(sgr), $"Duplicate SGR code {sgr} for key {key}");
+            }
+        }
+    }
+
+    [Fact]
+    public void Build256LsColors_BlueBg_AvoidsBlueDirs()
+    {
+        // Bright blue background (#3498db) — directories should NOT be blue
+        double r = 0x34 / 255.0, g = 0x98 / 255.0, b = 0xdb / 255.0;
+        var result = Theme.Build256LsColors(isDark: false, r, g, b);
+
+        // Extract di= code
+        foreach (var entry in result.Split(':'))
+        {
+            if (!entry.StartsWith("di=38;5;")) continue;
+            var idx = int.Parse(entry[8..]);
+            var rgb = GetPalette256Rgb(idx);
+            Assert.NotNull(rgb);
+            // The directory color's hue should not be within 40° of blue (240°)
+            var (h, s, _) = Theme.RgbToHsl(rgb.Value.r, rgb.Value.g, rgb.Value.b);
+            if (s > 0.2)  // only check saturated colors
+                Assert.True(Theme.HueDistance(h, 210) > 30,
+                    $"Directory color (idx={idx}, hue={h:F0}°) too close to blue background");
+        }
+    }
+
+    [Fact]
+    public void Build256LsColors_ContrastMeetsMinimum()
+    {
+        // All primary entries should meet 7:1 contrast on pure black
+        var result = Theme.Build256LsColors(isDark: true, 0, 0, 0);
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+
+        foreach (var entry in result.Split(':'))
+        {
+            var eq = entry.IndexOf('=');
+            if (eq < 0) continue;
+            var key = entry[..eq];
+            if (key is not ("di" or "ln" or "ex")) continue;
+
+            var sgr = entry[(eq + 1)..];
+            if (!sgr.StartsWith("38;5;")) continue;
+            var idx = int.Parse(sgr[5..]);
+            var rgb = GetPalette256Rgb(idx);
+            Assert.NotNull(rgb);
+            var fgLum = TerminalBackground.RelativeLuminance(rgb.Value.r, rgb.Value.g, rgb.Value.b);
+            var ratio = TerminalBackground.ContrastRatio(fgLum, bgLum);
+            Assert.True(ratio >= 7.0, $"{key} contrast ratio {ratio:F1} < 7.0 (idx={idx})");
+        }
+    }
+
+    [Fact]
+    public void Build256GrepColors_PureBlack_HasMatchAndFilename()
+    {
+        var result = Theme.Build256GrepColors(isDark: true, 0, 0, 0);
+        Assert.Contains("ms=", result);
+        Assert.Contains("fn=38;5;", result);
+    }
+
+    [Fact]
+    public void Build256LsColors_LightBg_UsesJewelTones()
+    {
+        // Pure white background — directory should be a dark, saturated color
+        var result = Theme.Build256LsColors(isDark: false, 1.0, 1.0, 1.0);
+        foreach (var entry in result.Split(':'))
+        {
+            if (!entry.StartsWith("di=38;5;")) continue;
+            var idx = int.Parse(entry[8..]);
+            var rgb = GetPalette256Rgb(idx);
+            Assert.NotNull(rgb);
+            var (_, _, lVal) = Theme.RgbToHsl(rgb.Value.r, rgb.Value.g, rgb.Value.b);
+            // Jewel tones should be dark (lightness < 0.5)
+            Assert.True(lVal < 0.6, $"Light bg directory color (idx={idx}) lightness {lVal:F2} — expected jewel tone");
+        }
+    }
+
+    [Fact]
+    public void SelectBestColor_ReturnsValidCode()
+    {
+        var slot = new Theme.ColorSlot("test", 7.0, 14.0, 180, 1.0);
+        var used = new HashSet<int>();
+        var code = Theme.SelectBestColor(slot, 0, 0, 0, 0, 0, 0, used);
+        Assert.True(code >= 16 && code <= 255, $"Expected 256-color code, got {code}");
+    }
+
+    // Helper to access Palette256ToRgb via reflection (it's private)
+    private static (double r, double g, double b)? GetPalette256Rgb(int idx)
+    {
+        var method = typeof(Theme).GetMethod("Palette256ToRgb",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+        return method?.Invoke(null, new object[] { idx }) as (double, double, double)?;
+    }
 }

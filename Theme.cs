@@ -357,9 +357,31 @@ public class Theme
             SmartSet("CLICOLOR", "1");
 
         double bgLum = Current.BgLuminance;
-        SmartSet("LS_COLORS",   BuildLsColors(isDark, bgLum));
+
+        // When exact background RGB is known, use 256-color palette for
+        // optimal hue-aware color selection. Otherwise fall back to basic 16.
+        if (Current.HasDetectedRgb)
+        {
+            // Get background RGB from the current theme
+            var bg = TerminalBackground.Detect();
+            if (bg.BgR >= 0)
+            {
+                SmartSet("LS_COLORS",   Build256LsColors(isDark, bg.BgR, bg.BgG, bg.BgB));
+                SmartSet("GREP_COLORS", Build256GrepColors(isDark, bg.BgR, bg.BgG, bg.BgB));
+            }
+            else
+            {
+                SmartSet("LS_COLORS",   BuildLsColors(isDark, bgLum));
+                SmartSet("GREP_COLORS", BuildGrepColors(isDark, bgLum));
+            }
+        }
+        else
+        {
+            SmartSet("LS_COLORS",   BuildLsColors(isDark, bgLum));
+            SmartSet("GREP_COLORS", BuildGrepColors(isDark, bgLum));
+        }
+        // BSD LSCOLORS is always basic 16 (BSD ls doesn't support 256-color)
         SmartSet("LSCOLORS",    BuildLsColorsBsd(isDark, bgLum));
-        SmartSet("GREP_COLORS", BuildGrepColors(isDark, bgLum));
     }
 
     /// <summary>
@@ -708,6 +730,259 @@ public class Theme
             return true;
         }
         return false;
+    }
+
+    // ── Tiered 256-Color Palette Generation ──────────────────────────
+    //
+    // When exact background RGB is known (via RUSH_BG/setbg), we generate
+    // optimal LS_COLORS and GREP_COLORS using the full xterm 256-color palette
+    // instead of the basic 16 ANSI colors. This provides:
+    //   - Hue avoidance: colors shifted away from the background hue
+    //   - Three contrast tiers: Primary (7:1+), Secondary (4.5:1+), Muted (3:1+)
+    //   - Inter-color distinction: each slot gets a perceptually different color
+    //   - Dark mode: pastels/neons; Light mode: jewel tones
+
+    /// <summary>
+    /// Convert normalized RGB (0.0-1.0) to HSL. Hue is 0-360°.
+    /// </summary>
+    internal static (double H, double S, double L) RgbToHsl(double r, double g, double b)
+    {
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var l = (max + min) / 2.0;
+
+        if (max == min)
+            return (0, 0, l); // achromatic
+
+        var d = max - min;
+        var s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
+
+        double h;
+        if (max == r)
+            h = ((g - b) / d + (g < b ? 6 : 0)) * 60;
+        else if (max == g)
+            h = ((b - r) / d + 2) * 60;
+        else
+            h = ((r - g) / d + 4) * 60;
+
+        return (h, s, l);
+    }
+
+    /// <summary>
+    /// Circular hue distance (0-180°). Two hues within 30° are "similar".
+    /// </summary>
+    internal static double HueDistance(double h1, double h2)
+    {
+        var d = Math.Abs(h1 - h2);
+        return d > 180 ? 360 - d : d;
+    }
+
+    /// <summary>
+    /// Color slot definition for palette generation.
+    /// </summary>
+    internal record ColorSlot(string Key, double MinContrast, double MaxContrast, double PreferredHue, double HueWeight = 1.0);
+
+    /// <summary>
+    /// LS_COLORS slots with contrast tiers and preferred hues.
+    /// Dark: pastels/neons. Light: jewel tones.
+    /// </summary>
+    private static readonly ColorSlot[] DarkLsSlots =
+    {
+        new("di", 7.0, 14.0, 180, 1.5),  // directory — cyan (shifted from blue)
+        new("ln", 7.0, 14.0, 300, 1.5),  // symlink — magenta/pink
+        new("so", 4.5,  9.0, 280, 1.0),  // socket — purple
+        new("pi", 4.5,  9.0,  50, 1.0),  // pipe — yellow
+        new("ex", 7.0, 14.0, 120, 1.5),  // executable — green
+        new("bd", 4.5,  9.0,  40, 1.0),  // block device — orange
+        new("cd", 4.5,  9.0,  40, 1.0),  // char device — orange
+    };
+
+    private static readonly ColorSlot[] LightLsSlots =
+    {
+        new("di", 7.0, 14.0, 220, 1.5),  // directory — navy blue
+        new("ln", 7.0, 14.0, 320, 1.5),  // symlink — deep magenta
+        new("so", 4.5,  9.0, 280, 1.0),  // socket — purple
+        new("pi", 4.5,  9.0,  45, 1.0),  // pipe — dark yellow/olive
+        new("ex", 7.0, 14.0, 160, 1.5),  // executable — teal/dark green
+        new("bd", 4.5,  9.0,  30, 1.0),  // block device — dark orange
+        new("cd", 4.5,  9.0,  30, 1.0),  // char device — dark orange
+    };
+
+    /// <summary>
+    /// GREP_COLORS slots with contrast tiers.
+    /// </summary>
+    private static readonly ColorSlot[] DarkGrepSlots =
+    {
+        new("fn", 7.0, 14.0, 300, 1.0),  // filename — magenta
+        new("ln", 4.5,  9.0,  50, 1.0),  // line number — yellow
+        new("bn", 4.5,  9.0,  50, 1.0),  // byte offset — yellow
+        new("se", 3.0,  6.0,   0, 0.0),  // separator — gray (no hue pref)
+    };
+
+    private static readonly ColorSlot[] LightGrepSlots =
+    {
+        new("fn", 7.0, 14.0, 220, 1.0),  // filename — navy
+        new("ln", 4.5,  9.0, 160, 1.0),  // line number — teal
+        new("bn", 4.5,  9.0, 160, 1.0),  // byte offset — teal
+        new("se", 3.0,  6.0,   0, 0.0),  // separator — gray
+    };
+
+    /// <summary>
+    /// Select the best xterm 256-color code for a slot, considering:
+    /// - Contrast ratio against background (must be in MinContrast-MaxContrast range)
+    /// - Hue proximity to preferred hue (bonus)
+    /// - Hue distance from background hue (penalty if too close)
+    /// - Distance from already-used colors (penalty if too similar)
+    /// </summary>
+    internal static int SelectBestColor(ColorSlot slot, double bgR, double bgG, double bgB,
+        double bgLum, double bgHue, double bgSat, HashSet<int> usedCodes)
+    {
+        int bestCode = -1;
+        double bestScore = double.MinValue;
+
+        // Scan the 6x6x6 color cube (16-231) + grayscale (232-255)
+        for (int idx = 16; idx <= 255; idx++)
+        {
+            var rgb = Palette256ToRgb(idx);
+            if (rgb == null) continue;
+            var (r, g, b) = rgb.Value;
+
+            var fgLum = TerminalBackground.RelativeLuminance(r, g, b);
+            var contrast = TerminalBackground.ContrastRatio(fgLum, bgLum);
+
+            // Must meet minimum contrast
+            if (contrast < slot.MinContrast) continue;
+
+            double score = 0;
+
+            // Penalize exceeding max contrast (avoid halation on dark, eye strain on light)
+            if (contrast > slot.MaxContrast)
+                score -= (contrast - slot.MaxContrast) * 2.0;
+            else
+                // Prefer contrast in the upper half of the range
+                score += (contrast - slot.MinContrast) / (slot.MaxContrast - slot.MinContrast) * 3.0;
+
+            var (fgHue, fgSat, fgLightness) = RgbToHsl(r, g, b);
+
+            // Bonus for closeness to preferred hue (only for saturated colors)
+            if (fgSat > 0.2 && slot.HueWeight > 0)
+            {
+                var hueDist = HueDistance(fgHue, slot.PreferredHue);
+                // Max bonus at 0° distance, decays linearly over 90°
+                score += Math.Max(0, (90 - hueDist) / 90.0) * 5.0 * slot.HueWeight;
+
+                // Bonus for saturation (prefer vivid colors over washed-out)
+                score += fgSat * 2.0;
+            }
+
+            // Penalty for hue proximity to background (avoid blending)
+            if (bgSat > 0.1 && fgSat > 0.2)
+            {
+                var bgHueDist = HueDistance(fgHue, bgHue);
+                if (bgHueDist < 40)
+                    score -= (40 - bgHueDist) / 40.0 * 8.0; // strong penalty
+            }
+
+            // Penalty for similarity to already-used colors
+            foreach (var usedIdx in usedCodes)
+            {
+                var usedRgb = Palette256ToRgb(usedIdx);
+                if (usedRgb == null) continue;
+                var usedLum = TerminalBackground.RelativeLuminance(usedRgb.Value.r, usedRgb.Value.g, usedRgb.Value.b);
+                var interDist = TerminalBackground.ContrastRatio(fgLum, usedLum);
+                if (interDist < 1.5)
+                    score -= (1.5 - interDist) * 10.0; // heavy penalty for near-identical
+            }
+
+            // Slight penalty for grayscale codes when a hue is preferred
+            if (idx >= 232 && slot.HueWeight > 0)
+                score -= 3.0;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestCode = idx;
+            }
+        }
+
+        return bestCode;
+    }
+
+    /// <summary>
+    /// Build LS_COLORS using 256-color palette optimized for the exact background.
+    /// Falls back to basic 16-color method if no suitable colors are found.
+    /// </summary>
+    internal static string Build256LsColors(bool isDark, double bgR, double bgG, double bgB)
+    {
+        var bgLum = TerminalBackground.RelativeLuminance(bgR, bgG, bgB);
+        var (bgHue, bgSat, _) = RgbToHsl(bgR, bgG, bgB);
+        var slots = isDark ? DarkLsSlots : LightLsSlots;
+        var usedCodes = new HashSet<int>();
+
+        var entries = new List<string>();
+
+        foreach (var slot in slots)
+        {
+            var code = SelectBestColor(slot, bgR, bgG, bgB, bgLum, bgHue, bgSat, usedCodes);
+            if (code >= 0)
+            {
+                entries.Add($"{slot.Key}=38;5;{code}");
+                usedCodes.Add(code);
+            }
+            else
+            {
+                // Fallback to basic color
+                var (_, darkSgr, lightSgr) = LsColorEntries.First(e => e.key == slot.Key);
+                entries.Add($"{slot.Key}={EnsureSgrContrast(isDark ? darkSgr : lightSgr, bgLum, isDark)}");
+            }
+        }
+
+        // Background-coded entries are always basic (su, sg, tw, ow)
+        foreach (var (key, darkSgr, lightSgr) in LsColorEntries)
+        {
+            if (key is "su" or "sg" or "tw" or "ow")
+                entries.Add($"{key}={(isDark ? darkSgr : lightSgr)}");
+        }
+
+        return string.Join(":", entries);
+    }
+
+    /// <summary>
+    /// Build GREP_COLORS using 256-color palette optimized for the exact background.
+    /// </summary>
+    internal static string Build256GrepColors(bool isDark, double bgR, double bgG, double bgB)
+    {
+        var bgLum = TerminalBackground.RelativeLuminance(bgR, bgG, bgB);
+        var (bgHue, bgSat, _) = RgbToHsl(bgR, bgG, bgB);
+        var slots = isDark ? DarkGrepSlots : LightGrepSlots;
+        var usedCodes = new HashSet<int>();
+
+        var entries = new List<string>();
+
+        // ms/mc (match) — always red-ish, use basic bold for visibility
+        var matchSgr = isDark ? "01;31" : "31";
+        matchSgr = EnsureSgrContrast(matchSgr, bgLum, isDark);
+        entries.Add($"ms={matchSgr}");
+        entries.Add($"mc={matchSgr}");
+        entries.Add("sl="); // selected line — default
+        entries.Add("cx="); // context line — default
+
+        foreach (var slot in slots)
+        {
+            var code = SelectBestColor(slot, bgR, bgG, bgB, bgLum, bgHue, bgSat, usedCodes);
+            if (code >= 0)
+            {
+                entries.Add($"{slot.Key}=38;5;{code}");
+                usedCodes.Add(code);
+            }
+            else
+            {
+                var (_, darkSgr, lightSgr) = GrepColorEntries.First(e => e.key == slot.Key);
+                entries.Add($"{slot.Key}={EnsureSgrContrast(isDark ? darkSgr : lightSgr, bgLum, isDark)}");
+            }
+        }
+
+        return string.Join(":", entries);
     }
 
     // ── SGR Contrast Validation (for LS_COLORS / GREP_COLORS) ────────
