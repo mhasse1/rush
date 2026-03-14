@@ -137,67 +137,59 @@ public static class TerminalBackground
             var query = "\x1b]11;?\x07";
             var queryBytes = Encoding.ASCII.GetBytes(query);
 
-            // Open /dev/tty for reading with a separate fd.
-            // We can't use fd 0 (stdin) because .NET's Console.In StreamReader
-            // has its own buffer over fd 0 — the terminal's response may be
-            // consumed by that buffer before our raw read() sees it.
-            var ttyReadFd = open(ttyPath, O_RDONLY);
-            if (ttyReadFd < 0) return false;
+            // Use a single FileStream on /dev/tty for both write and read.
+            // We can't use fd 0 (stdin) for reading because .NET's Console.In
+            // StreamReader has its own buffer over fd 0. A separate FileStream
+            // on /dev/tty gets its own fd managed by .NET (no P/Invoke open/close).
+            using var tty = new FileStream(ttyPath, FileMode.Open, FileAccess.ReadWrite);
+            var ttyFd = (int)tty.SafeFileHandle.DangerousGetHandle();
 
-            try
+            tty.Write(queryBytes);
+            tty.Flush();
+
+            // Read response — use poll() before each read() to guarantee
+            // we never block, even if stty settings didn't take effect
+            // (which can happen in nested shells or broken ptys)
+            var response = new StringBuilder();
+            var deadline = DateTime.UtcNow.AddMilliseconds(300);
+            var buf = new byte[1];
+
+            while (DateTime.UtcNow < deadline)
             {
-                using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
-                ttyWrite.Write(queryBytes);
-                ttyWrite.Flush();
+                // poll() with 50ms timeout — returns >0 if data available
+                var pfd = new Pollfd { fd = ttyFd, events = POLLIN };
+                var ready = poll(ref pfd, 1, 50);
 
-                // Read response — use poll() before each read() to guarantee
-                // we never block, even if stty settings didn't take effect
-                // (which can happen in nested shells or broken ptys)
-                var response = new StringBuilder();
-                var deadline = DateTime.UtcNow.AddMilliseconds(300);
-                var buf = new byte[1];
-
-                while (DateTime.UtcNow < deadline)
+                if (ready > 0 && (pfd.revents & POLLIN) != 0)
                 {
-                    // poll() with 50ms timeout — returns >0 if data available
-                    var pfd = new Pollfd { fd = ttyReadFd, events = POLLIN };
-                    var ready = poll(ref pfd, 1, 50);
-
-                    if (ready > 0 && (pfd.revents & POLLIN) != 0)
+                    var bytesRead = read(ttyFd, buf, 1);
+                    if (bytesRead > 0)
                     {
-                        var bytesRead = read(ttyReadFd, buf, 1);
-                        if (bytesRead > 0)
-                        {
-                            response.Append((char)buf[0]);
+                        response.Append((char)buf[0]);
 
-                            // Response ends with ST (ESC \) or BEL (\x07)
-                            var s = response.ToString();
-                            if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
-                                break;
-                        }
-                        else
-                        {
-                            break; // EOF or error
-                        }
+                        // Response ends with ST (ESC \) or BEL (\x07)
+                        var s = response.ToString();
+                        if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
+                            break;
                     }
-                    // poll returned 0 (timeout) or -1 (error) — loop checks deadline
+                    else
+                    {
+                        break; // EOF or error
+                    }
                 }
-
-                // Drain any remaining bytes before restoring echo
-                var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
-                while (DateTime.UtcNow < drainDeadline)
-                {
-                    var pfd2 = new Pollfd { fd = ttyReadFd, events = POLLIN };
-                    if (poll(ref pfd2, 1, 10) <= 0) break;
-                    if (read(ttyReadFd, buf, 1) <= 0) break;
-                }
-
-                return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
+                // poll returned 0 (timeout) or -1 (error) — loop checks deadline
             }
-            finally
+
+            // Drain any remaining bytes before restoring echo
+            var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
+            while (DateTime.UtcNow < drainDeadline)
             {
-                close(ttyReadFd);
+                var pfd2 = new Pollfd { fd = ttyFd, events = POLLIN };
+                if (poll(ref pfd2, 1, 10) <= 0) break;
+                if (read(ttyFd, buf, 1) <= 0) break;
             }
+
+            return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
         }
         finally
         {
