@@ -17,7 +17,7 @@ public class ScriptEngine
     {
         "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
         "begin", "match", "class", "enum",
-        "macos", "win64", "win32", "linux"
+        "macos", "win64", "win32", "linux", "isssh"
     };
 
     /// <summary>
@@ -34,7 +34,7 @@ public class ScriptEngine
         "true", "false", "nil",
         "next", "continue", "break",
         "class", "attr", "self", "super", "enum",
-        "macos", "win64", "win32", "linux"
+        "macos", "win64", "win32", "linux", "isssh"
     };
 
     /// <summary>

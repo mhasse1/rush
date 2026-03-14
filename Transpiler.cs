@@ -395,6 +395,15 @@ public class RushTranspiler
         else
         {
             // Map platform keyword to $os value
+            // isssh uses env var check instead of $os comparison
+            if (node.Platform == "isssh")
+            {
+                sb.AppendLine("if ($env:SSH_CLIENT -or $env:SSH_TTY) {");
+                sb.Append(TranspileBody(node.Body!));
+                sb.Append('}');
+                return sb.ToString();
+            }
+
             var osValue = node.Platform switch
             {
                 "macos" => "macos",

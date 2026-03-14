@@ -496,6 +496,7 @@ public class Parser
             RushTokenType.Win64 => ParsePlatformBlock(),
             RushTokenType.Win32 => ParseWin32Block(),
             RushTokenType.Linux => ParsePlatformBlock(),
+            RushTokenType.Isssh => ParsePlatformBlock(),
             RushTokenType.Next => ParseLoopControl(),
             RushTokenType.Continue => ParseLoopControl(),
             RushTokenType.Break => ParseLoopControl(),
