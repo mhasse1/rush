@@ -5,8 +5,9 @@ namespace Rush.Tests;
 
 /// <summary>
 /// Tests for CommandTranslator — Unix-to-PowerShell command translation.
-/// Covers: basic commands, flag translation, pipe context, special commands,
-/// dot-notation, passthrough, and command/flag queries.
+/// On *nix, standard Unix commands run natively (return null from Translate).
+/// Rush pipeline operators (where, select, count, etc.) and isAfterPipe
+/// special cases (grep→Where-Object, sort→Sort-Object) always work.
 /// </summary>
 public class CommandTranslatorTests
 {
@@ -14,65 +15,52 @@ public class CommandTranslatorTests
 
     // ── Basic Translation ───────────────────────────────────────────────
 
-    [Theory]
-    [InlineData("ls", "Get-ChildItem")]
-    // cat is now a .NET builtin (CatCommand.cs), no longer translated
-    [InlineData("pwd", "Get-Location")]
-    [InlineData("ps", "Get-Process")]
-    [InlineData("echo hello", "Write-Output \"hello\"")]
-    [InlineData("env", "Get-ChildItem Env:")]
-    [InlineData("which dotnet", "Get-Command dotnet")]
-    [InlineData("clear", "Clear-Host")]
-    public void BasicCommands_TranslateCorrectly(string input, string expected)
-    {
-        var result = _translator.Translate(input);
-        Assert.Equal(expected, result);
-    }
-
-    // ── Flag Translation ────────────────────────────────────────────────
-
     [Fact]
-    public void Ls_DashA_TranslatesToForce()
+    public void Echo_AlwaysTranslates()
     {
-        var result = _translator.Translate("ls -a");
-        Assert.Equal("Get-ChildItem -Force", result);
+        // echo → Write-Output on all platforms (for PS variable expansion)
+        var result = _translator.Translate("echo hello");
+        Assert.Equal("Write-Output \"hello\"", result);
     }
 
     [Fact]
-    public void Ls_DashR_TranslatesToRecurse()
+    public void NativeCommands_ReturnNull_OnNonWindows()
     {
-        var result = _translator.Translate("ls -R");
-        Assert.Equal("Get-ChildItem -Recurse", result);
-    }
+        if (OperatingSystem.IsWindows()) return; // Skip on Windows
 
-    [Fact]
-    public void Rm_DashRf_TranslatesRecurseForce()
-    {
-        var result = _translator.Translate("rm -rf /tmp/junk");
-        Assert.Equal("Remove-Item -Recurse -Force /tmp/junk", result);
-    }
-
-    [Fact]
-    public void Cp_DashR_TranslatesToRecurse()
-    {
-        var result = _translator.Translate("cp -r src/ dest/");
-        Assert.Equal("Copy-Item -Recurse src/ dest/", result);
+        // Standard Unix commands should NOT be translated on *nix
+        Assert.Null(_translator.Translate("ls"));
+        Assert.Null(_translator.Translate("grep -i users file.txt"));
+        Assert.Null(_translator.Translate("cp -r src/ dest/"));
+        Assert.Null(_translator.Translate("rm -rf /tmp/junk"));
+        Assert.Null(_translator.Translate("head -n 5 file.txt"));
+        Assert.Null(_translator.Translate("tail -n 10 file.txt"));
+        Assert.Null(_translator.Translate("sort file.txt"));
+        Assert.Null(_translator.Translate("ps aux"));
+        Assert.Null(_translator.Translate("kill 1234"));
+        Assert.Null(_translator.Translate("pwd"));
+        Assert.Null(_translator.Translate("env"));
+        Assert.Null(_translator.Translate("which dotnet"));
     }
 
     // ── Pipe Context — Special After-Pipe Translations ──────────────────
+    // isAfterPipe translations work regardless of platform — they're hardcoded
+    // in TranslateSegment, independent of Register() calls.
 
     [Theory]
-    [InlineData("ls | grep test", "Get-ChildItem | Where-Object { $_ -cmatch 'test' }")]
-    [InlineData("ls | sort", "Get-ChildItem | Sort-Object")]
-    [InlineData("ls | sort -r", "Get-ChildItem | Sort-Object -Descending")]
-    [InlineData("ls | wc -l", "Get-ChildItem | Measure-Object -Line")]
-    [InlineData("ls | uniq", "Get-ChildItem | Select-Object -Unique")]
-    [InlineData("ls | count", "Get-ChildItem | Measure-Object | ForEach-Object { $_.Count }")]
-    [InlineData("ls | first", "Get-ChildItem | Select-Object -First 1")]
-    [InlineData("ls | first 5", "Get-ChildItem | Select-Object -First 5")]
-    [InlineData("ls | last", "Get-ChildItem | Select-Object -Last 1")]
-    [InlineData("ls | last 3", "Get-ChildItem | Select-Object -Last 3")]
-    [InlineData("ls | skip 2", "Get-ChildItem | Select-Object -Skip 2")]
+    [InlineData("data | grep test", "data | Where-Object { $_ -cmatch 'test' }")]
+    [InlineData("data | grep -i test", "data | Where-Object { $_ -match 'test' }")]
+    [InlineData("data | sort", "data | Sort-Object")]
+    [InlineData("data | sort Name", "data | Sort-Object -Property Name")]
+    [InlineData("data | sort -r", "data | Sort-Object -Descending")]
+    [InlineData("data | wc -l", "data | Measure-Object -Line")]
+    [InlineData("data | uniq", "data | Select-Object -Unique")]
+    [InlineData("data | count", "data | Measure-Object | ForEach-Object { $_.Count }")]
+    [InlineData("data | first", "data | Select-Object -First 1")]
+    [InlineData("data | first 5", "data | Select-Object -First 5")]
+    [InlineData("data | last", "data | Select-Object -Last 1")]
+    [InlineData("data | last 3", "data | Select-Object -Last 3")]
+    [InlineData("data | skip 2", "data | Select-Object -Skip 2")]
     public void PipeContext_SpecialCommands_TranslateCorrectly(string input, string expected)
     {
         var result = _translator.Translate(input);
@@ -82,22 +70,22 @@ public class CommandTranslatorTests
     [Fact]
     public void HeadAfterPipe_DefaultsTo10()
     {
-        var result = _translator.Translate("ls | head");
-        Assert.Equal("Get-ChildItem | Select-Object -First 10", result);
+        var result = _translator.Translate("data | head");
+        Assert.Equal("data | Select-Object -First 10", result);
     }
 
     [Fact]
     public void HeadAfterPipe_WithCount()
     {
-        var result = _translator.Translate("ls | head -5");
-        Assert.Equal("Get-ChildItem | Select-Object -First 5", result);
+        var result = _translator.Translate("data | head -5");
+        Assert.Equal("data | Select-Object -First 5", result);
     }
 
     [Fact]
     public void TailAfterPipe_DefaultsTo10()
     {
-        var result = _translator.Translate("ls | tail");
-        Assert.Equal("Get-ChildItem | Select-Object -Last 10", result);
+        var result = _translator.Translate("data | tail");
+        Assert.Equal("data | Select-Object -Last 10", result);
     }
 
     // ── Format Conversion (as/from) ─────────────────────────────────────
@@ -120,8 +108,8 @@ public class CommandTranslatorTests
     [Fact]
     public void DotNotation_SimpleProperty()
     {
-        var result = _translator.Translate("ps | .ProcessName");
-        Assert.Equal("Get-Process | ForEach-Object { $_.ProcessName }", result);
+        var result = _translator.Translate("data | .Name");
+        Assert.Equal("data | ForEach-Object { $_.Name }", result);
     }
 
     [Fact]
@@ -134,9 +122,9 @@ public class CommandTranslatorTests
     // ── Where (pipe filter) ─────────────────────────────────────────────
 
     [Theory]
-    [InlineData("ps | where CPU > 10", "Get-Process | Where-Object { $_.CPU -gt 10 }")]
-    [InlineData("ps | where Name == chrome", "Get-Process | Where-Object { $_.Name -eq 'chrome' }")]
-    [InlineData("ps | where CPU < 5", "Get-Process | Where-Object { $_.CPU -lt 5 }")]
+    [InlineData("data | where CPU > 10", "data | Where-Object { $_.CPU -gt 10 }")]
+    [InlineData("data | where Name == chrome", "data | Where-Object { $_.Name -eq 'chrome' }")]
+    [InlineData("data | where CPU < 5", "data | Where-Object { $_.CPU -lt 5 }")]
     public void WhereAfterPipe_TranslatesOperators(string input, string expected)
     {
         var result = _translator.Translate(input);
@@ -193,25 +181,23 @@ public class CommandTranslatorTests
         Assert.Null(result);
     }
 
+    [Fact]
+    public void Find_NotTranslated_RunsNatively()
+    {
+        // find should pass through to native execution (not translated to PS)
+        var result = _translator.Translate("find . -iname '*.txt'");
+        Assert.Null(result);
+    }
+
     // ── Command/Flag Query APIs ─────────────────────────────────────────
 
     [Fact]
-    public void GetCommandNames_ContainsBasicCommands()
+    public void GetCommandNames_ContainsPipelineOperators()
     {
         var names = _translator.GetCommandNames().ToList();
-        Assert.Contains("ls", names);
-        Assert.Contains("grep", names);
-        // cat is now a .NET builtin, not in CommandTranslator
-        Assert.Contains("rm", names);
-    }
-
-    [Fact]
-    public void GetFlagsForCommand_Ls_ContainsExpectedFlags()
-    {
-        var flags = _translator.GetFlagsForCommand("ls").ToList();
-        Assert.Contains("-a", flags);
-        Assert.Contains("-l", flags);
-        Assert.Contains("-R", flags);
+        Assert.Contains("echo", names);
+        Assert.Contains("where", names);
+        Assert.Contains("select", names);
     }
 
     [Fact]
@@ -224,15 +210,15 @@ public class CommandTranslatorTests
     [Fact]
     public void IsKnownCommand_ReturnsTrueForRegistered()
     {
-        Assert.True(_translator.IsKnownCommand("ls"));
-        Assert.True(_translator.IsKnownCommand("grep"));
+        Assert.True(_translator.IsKnownCommand("echo"));
+        Assert.True(_translator.IsKnownCommand("where"));
     }
 
     [Fact]
     public void IsKnownCommand_CaseInsensitive()
     {
-        Assert.True(_translator.IsKnownCommand("LS"));
-        Assert.True(_translator.IsKnownCommand("Grep"));
+        Assert.True(_translator.IsKnownCommand("ECHO"));
+        Assert.True(_translator.IsKnownCommand("Where"));
     }
 
     [Fact]
@@ -257,7 +243,6 @@ public class CommandTranslatorTests
     public void Echo_QuotesPositionalArgs()
     {
         var result = _translator.Translate("echo hello world");
-        // echo combines args into double-quoted output for variable expansion
         Assert.Equal("Write-Output \"hello world\"", result);
     }
 
@@ -265,7 +250,6 @@ public class CommandTranslatorTests
     public void Echo_StripsAndRewrapsQuotedArgs()
     {
         var result = _translator.Translate("echo 'hello world'");
-        // Outer quotes stripped, re-wrapped in double quotes
         Assert.Equal("Write-Output \"hello world\"", result);
     }
 
@@ -273,7 +257,6 @@ public class CommandTranslatorTests
     public void Echo_ExpandsVariableReference()
     {
         var result = _translator.Translate("echo $x");
-        // Double quotes allow PowerShell to expand $x
         Assert.Equal("Write-Output \"$x\"", result);
     }
 
@@ -288,16 +271,7 @@ public class CommandTranslatorTests
     public void Echo_DoubleQuotedInput()
     {
         var result = _translator.Translate("echo \"hello world\"");
-        // Outer double quotes stripped, re-wrapped
         Assert.Equal("Write-Output \"hello world\"", result);
-    }
-
-    [Fact]
-    public void Find_NotTranslated_RunsNatively()
-    {
-        // find should pass through to native execution (not translated to PS)
-        var result = _translator.Translate("find . -iname '*.txt'");
-        Assert.Null(result);
     }
 
     // ── Tee ─────────────────────────────────────────────────────────────
@@ -305,15 +279,15 @@ public class CommandTranslatorTests
     [Fact]
     public void TeeAfterPipe_TranslatesToTeeObject()
     {
-        var result = _translator.Translate("ls | tee output.txt");
-        Assert.Equal("Get-ChildItem | Tee-Object -FilePath output.txt", result);
+        var result = _translator.Translate("data | tee output.txt");
+        Assert.Equal("data | Tee-Object -FilePath output.txt", result);
     }
 
     [Fact]
     public void TeeAfterPipe_Append()
     {
-        var result = _translator.Translate("ls | tee -a output.txt");
-        Assert.Equal("Get-ChildItem | Tee-Object -FilePath output.txt -Append", result);
+        var result = _translator.Translate("data | tee -a output.txt");
+        Assert.Equal("data | Tee-Object -FilePath output.txt -Append", result);
     }
 
     // ── Distinct ────────────────────────────────────────────────────────

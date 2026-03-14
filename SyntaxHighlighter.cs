@@ -32,7 +32,10 @@ public class SyntaxHighlighter
         "printf", "read", "exec", "trap", // Shell builtins
         "path", // PATH management
         "ai", // AI assistant
-        "sql" // Database queries
+        "sql", // Database queries
+        // Standard Unix commands — run natively on *nix, highlighted as known
+        "ls", "grep", "cp", "mv", "rm", "ps", "kill", "head", "tail",
+        "sort", "touch", "mkdir", "pwd", "env", "which", "whoami", "hostname"
     };
 
     private static readonly HashSet<string> RushKeywords = new(StringComparer.OrdinalIgnoreCase)

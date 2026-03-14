@@ -4360,8 +4360,8 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine();
 
     Console.WriteLine("  Pipes:    ls | grep foo | head -5 | sort");
-    Console.WriteLine("  Flags:    ls -la → Get-ChildItem -Force");
-    Console.WriteLine("  Native:   git, docker, kubectl just work");
+    Console.WriteLine("  Native:   grep, find, git, docker — all run natively");
+    Console.WriteLine("  Objectify: netstat | objectify | where State == LISTEN");
     Console.WriteLine("  PS7:      Full PowerShell syntax works directly");
     Console.WriteLine("  Chain:    cmd1 && cmd2 || echo 'fallback'");
     Console.WriteLine("  Redirect: ls > files.txt   echo hi >> log.txt");

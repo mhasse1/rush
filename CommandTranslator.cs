@@ -360,18 +360,56 @@ public class CommandTranslator
 
     private void RegisterDefaults()
     {
+        // On *nix, standard Unix commands run natively — no translation needed.
+        // On Windows, translate to PowerShell cmdlets as fallback (until GNU
+        // utils are bundled). The isAfterPipe special cases (grep→Where-Object,
+        // head→Select-Object, sort→Sort-Object, etc.) are independent of these
+        // registrations and always work in pipeline context.
+        if (OperatingSystem.IsWindows())
+            RegisterWindowsFallbacks();
+
+        // echo: always translate — needs Write-Output for PS variable expansion
+        Register("echo", "Write-Output", quotePositionalArgs: true);
+
+        // Passthrough markers (run natively on all platforms)
+        Register("curl", null);
+        Register("wget", null);
+
+        // Rush pipeline operators — always registered
+        Register("where", "Where-Object");
+        Register("select", "Select-Object");
+        Register("count", null); // Special handling in TranslateSegment
+        Register("first", null); // Special handling
+        Register("last", null);  // Special handling
+        Register("skip", null);  // Special handling
+        Register("tee", null);   // Special handling
+        Register("distinct", null); // Special handling
+        Register("sum", null);   // Special handling
+        Register("avg", null);   // Special handling
+        Register("min", null);   // Special handling
+        Register("max", null);   // Special handling
+        Register("json", null);  // Special handling in TranslateSegment
+        Register("objectify", null); // Special handling — text → PSCustomObjects
+        Register("columns", null);  // Special handling — index-based column selection
+    }
+
+    /// <summary>
+    /// Windows-only: translate standard Unix commands to PowerShell cmdlets.
+    /// On *nix these commands exist natively; on Windows they don't (yet).
+    /// Will be removed once GNU utils (BusyBox-w64) are bundled.
+    /// </summary>
+    private void RegisterWindowsFallbacks()
+    {
         // File system
         Register("ls", "Get-ChildItem", new Dictionary<string, string>
         {
-            ["-l"] = "",           // default formatting handles this
+            ["-l"] = "",
             ["-a"] = "-Force",
             ["-la"] = "-Force",
             ["-al"] = "-Force",
             ["-r"] = "-Recurse",
             ["-R"] = "-Recurse",
         });
-
-        // cat: handled as .NET builtin (CatCommand.cs); piped falls through to native cat / PS alias
         Register("pwd", "Get-Location");
         Register("cd", "Set-Location");
         Register("cp", "Copy-Item", new Dictionary<string, string>
@@ -395,16 +433,11 @@ public class CommandTranslator
 
         // Text/search
         Register("grep", "Select-String -Pattern");
-        Register("echo", "Write-Output", quotePositionalArgs: true);
 
         // Environment
         Register("env", "Get-ChildItem Env:");
         Register("which", "Get-Command");
         Register("type", "Get-Command");
-
-        // Networking
-        Register("curl", null); // passthrough to native curl
-        Register("wget", null); // passthrough to native wget
 
         // System info
         Register("whoami", "[Environment]::UserName");
@@ -412,7 +445,7 @@ public class CommandTranslator
         Register("df", "Get-PSDrive -PSProvider FileSystem");
         Register("uptime", "(Get-Date) - (Get-Process -Id $PID).StartTime");
 
-        // Standalone head/tail (not just after pipe)
+        // Standalone head/tail/sort
         Register("head", "Get-Content", new Dictionary<string, string>
         {
             ["-n"] = "-TotalCount",
@@ -421,31 +454,10 @@ public class CommandTranslator
         {
             ["-n"] = "-Tail",
         });
+        Register("sort", "Sort-Object");
 
         // Shell
         Register("clear", "Clear-Host");
-
-        // find: NOT translated — runs natively via PATH.
-        // Native find supports -iname, -mtime, -exec, -perm, etc. that
-        // don't map cleanly to Get-ChildItem.
-
-        // Pipe shorthands (also register for standalone use / tab completion)
-        Register("where", "Where-Object");
-        Register("select", "Select-Object");
-        Register("sort", "Sort-Object");
-        Register("count", null); // Special handling in TranslateSegment
-        Register("first", null); // Special handling
-        Register("last", null);  // Special handling
-        Register("skip", null);  // Special handling
-        Register("tee", null);   // Special handling
-        Register("distinct", null); // Special handling
-        Register("sum", null);   // Special handling
-        Register("avg", null);   // Special handling
-        Register("min", null);   // Special handling
-        Register("max", null);   // Special handling
-        Register("json", null);  // Special handling in TranslateSegment
-        Register("objectify", null); // Special handling — text → PSCustomObjects
-        Register("columns", null);  // Special handling — index-based column selection
     }
 
     // ── Objectify PS Code Generation ────────────────────────────────────
