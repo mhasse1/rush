@@ -156,7 +156,7 @@ A commented default is created on first run. Custom prompts have access to conte
 
 ### Colors & Theming
 
-Rush auto-detects your terminal background (dark or light) at startup and selects a contrast-aware color palette. All Rush UI colors (prompt, syntax highlighting, file types) are validated against a WCAG 3:1 minimum contrast ratio.
+Rush detects your terminal background at startup using environment hints (`COLORFGBG`, macOS appearance) and selects a contrast-aware color palette. For best results, set your exact background color with `set bg`. All Rush UI colors (prompt, syntax highlighting, file types) are validated against a WCAG 3:1 minimum contrast ratio.
 
 Rush also configures native command colors automatically:
 
@@ -174,6 +174,16 @@ set theme dark              # Force dark palette
 set theme light             # Force light palette
 set theme auto              # Auto-detect (default)
 set --save theme light      # Persist to config.json
+```
+
+**Exact background color:** Use `set bg` to tell Rush your terminal's exact background color. This enables precise 256-color palette generation for maximum readability. Without it, Rush falls back to basic dark/light detection with 16-color palettes.
+
+```rush
+set bg "#222733"           # Tell Rush your exact background color
+set --save bg "#222733"    # Persist across sessions
+setbg "#222733"            # Shorthand (same as set bg)
+setbg --save "#222733"     # Shorthand with persist
+set bg off                 # Turn off (let terminal control background)
 ```
 
 If you've customized `LS_COLORS` or `GREP_COLORS` in your shell profile, Rush respects your values.
@@ -1456,6 +1466,9 @@ The dot shortcuts extend to any number of dots: each `.` beyond the first means 
 | `path rm ~/bin` | Remove directory from PATH |
 | `path rm --save ~/bin` | Remove from PATH and init.rush |
 | `path edit` | Edit PATH in `$EDITOR` |
+| `path check` | List PATH entries with existence check and duplicate detection |
+| `path dedupe` | Remove duplicate entries (first occurrence wins) |
+| `path dedupe --save` | Remove duplicates and persist to init.rush |
 
 Use `--name=VARNAME` to manage any colon-separated variable:
 
@@ -1464,6 +1477,27 @@ path --name=MANPATH add ~/man          # add to MANPATH
 path --name=PYTHONPATH                  # list PYTHONPATH entries
 path --name=MANPATH edit                # edit MANPATH in $EDITOR
 path --name=MANPATH add --save ~/man   # add and persist
+```
+
+Multi-line blocks provide declarative PATH management, ideal for init.rush:
+
+```rush
+# Multi-line blocks — declarative PATH in init.rush
+path add
+  /opt/homebrew/bin
+  /usr/local/bin
+  ~/.local/bin
+end
+
+path rm
+  /opt/old/bin
+  /usr/old/bin
+end
+
+# Diagnostics
+path check               # show all entries with ✓/✗ and duplicate flags
+path dedupe              # remove duplicate entries
+path dedupe --save       # remove and persist
 ```
 
 ### Aliases
@@ -1515,6 +1549,8 @@ path --name=MANPATH add --save ~/man   # add and persist
 | `set +o pipefail` | Clear pipefail |
 | `set --save key val` | Change setting and persist to config.json |
 | `set --secret KEY val` | Save API key/token to secrets.rush |
+| `set bg "#hex"` | Set terminal background color for precise theming |
+| `set bg off` | Disable Rush background control |
 
 ### AI Assistant
 

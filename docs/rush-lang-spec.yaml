@@ -1477,7 +1477,14 @@ shell_builtins:
       - { rush: 'path rm ~/bin', note: "Remove from PATH" }
       - { rush: 'path edit', note: "Edit PATH in $EDITOR" }
       - { rush: 'path --name=MANPATH add ~/man', note: "Manage any path-like variable" }
+      - { rush: 'path check', note: "List PATH entries with existence and duplicate detection" }
+      - { rush: 'path dedupe', note: "Remove duplicate PATH entries (first occurrence wins)" }
+      - { rush: 'path dedupe --save', note: "Remove duplicates and persist to init.rush" }
       - { rush: 'path --name=PYTHONPATH', note: "List entries of any path variable" }
+      - rush: "path add\n  /opt/bin\n  ~/.local/bin\nend"
+        note: "Multi-line block — add multiple directories"
+      - rush: "path rm\n  /old/bin\nend"
+        note: "Multi-line block — remove multiple directories"
     note: "--name=VARNAME works with any colon-separated env var (default: PATH)"
 
   - name: "init"
@@ -1498,7 +1505,11 @@ shell_builtins:
       - { rush: 'set editMode vi', note: "Change setting for this session" }
       - { rush: 'set --save showTips false', note: "Change and persist to config.json" }
       - { rush: 'set --secret ANTHROPIC_API_KEY sk-ant-...', note: "Save to secrets.rush" }
-    note: "Settings: editMode, theme, showTiming, showTips, showHints, aiProvider, aiModel, and more"
+      - { rush: 'set bg "#222733"', note: "Set terminal background color for precise 256-color theming" }
+      - { rush: 'set --save bg "#222733"', note: "Set and persist background color" }
+      - { rush: 'set bg off', note: "Disable Rush background control" }
+      - { rush: 'setbg "#222733"', note: "Shorthand for set bg" }
+    note: "Settings: editMode, theme, showTiming, showTips, showHints, aiProvider, aiModel, bg, and more"
 
   - name: "sync"
     description: "Sync config across machines"

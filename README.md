@@ -67,6 +67,8 @@ Full PowerShell syntax works too — Rush translates what it recognizes and pass
 - Real-time syntax highlighting as you type
 - Color-coded `ls` output by file type
 - Human-readable process memory display
+- PATH management (`path add`, `path rm`, `path check`, `path dedupe`, `path edit`, `path add...end` blocks)
+- Terminal background color (`set bg "#hex"`) with contrast-aware palette generation
 - `cd -` to toggle previous directory
 - `~` tilde expansion to home directory
 - `!!` and `!$` bang expansion

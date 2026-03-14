@@ -168,12 +168,18 @@ set --secret API_KEY "value"    # Save secret
 
 ### Colors & Theming
 
-Rush auto-detects your terminal background and configures native command colors:
+Rush detects your terminal background and configures native command colors:
 - **Dark terminal** → bold/bright colors for `ls`, `grep`, etc.
 - **Light terminal** → non-bold/darker colors that stay readable
 
 No setup needed. Override with `set theme dark` or `set theme light`.
 Disable all colors with `NO_COLOR=1`. Rush respects existing `LS_COLORS`/`GREP_COLORS` if set.
+
+```bash
+set bg "#222733"            # Tell Rush your exact background color
+setbg "#222733"             # Shorthand
+set bg off                  # Disable (default)
+```
 
 ### PATH Management
 
@@ -183,6 +189,12 @@ path add /opt/bin               # Add (session only)
 path add --save /opt/bin        # Add and persist
 path add --front --save /opt/bin # Prepend and persist
 path edit --save                # Edit in $EDITOR
+path check                  # Show PATH with existence + duplicate checks
+path dedupe                 # Remove duplicate entries
+path add                    # Multi-line block:
+  /opt/homebrew/bin         #   one directory per line
+  ~/.local/bin              #   terminated by 'end'
+end
 ```
 
 ---
