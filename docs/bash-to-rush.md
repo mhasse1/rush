@@ -166,6 +166,15 @@ set --save aiProvider anthropic # AI provider
 set --secret API_KEY "value"    # Save secret
 ```
 
+### Colors & Theming
+
+Rush auto-detects your terminal background and configures native command colors:
+- **Dark terminal** → bold/bright colors for `ls`, `grep`, etc.
+- **Light terminal** → non-bold/darker colors that stay readable
+
+No setup needed. Override with `set theme dark` or `set theme light`.
+Disable all colors with `NO_COLOR=1`. Rush respects existing `LS_COLORS`/`GREP_COLORS` if set.
+
 ### PATH Management
 
 ```bash

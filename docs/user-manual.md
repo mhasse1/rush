@@ -39,6 +39,7 @@ Rush is a Unix shell that combines Bash's pipeline and process model with clean,
 - Block keywords use `end`, not braces — `if`/`end`, `def`/`end`
 - Braces `{ }` are for lambdas and blocks only
 - Pipelines work for both shell commands and objects
+- AI integration is optional — Rush is a full shell with or without API keys
 
 ---
 
@@ -152,6 +153,31 @@ end
 ```
 
 A commented default is created on first run. Custom prompts have access to context variables: `$exit_code`, `$exit_failed`, `$is_ssh`, `$is_root`, and `$needs_reload` (true when the binary has been updated since startup).
+
+### Colors & Theming
+
+Rush auto-detects your terminal background (dark or light) at startup and selects a contrast-aware color palette. All Rush UI colors (prompt, syntax highlighting, file types) are validated against a WCAG 3:1 minimum contrast ratio.
+
+Rush also configures native command colors automatically:
+
+| Variable | Purpose |
+|----------|---------|
+| `LS_COLORS` | GNU `ls` colors (Linux, Homebrew coreutils) |
+| `LSCOLORS` | BSD `ls` colors (macOS) |
+| `GREP_COLORS` | `grep` match highlighting |
+| `CLICOLOR` | Enable BSD `ls` color (macOS only) |
+
+**Dark terminals** get bold/bright colors. **Light terminals** get non-bold/darker shades.
+
+```rush
+set theme dark              # Force dark palette
+set theme light             # Force light palette
+set theme auto              # Auto-detect (default)
+set --save theme light      # Persist to config.json
+```
+
+If you've customized `LS_COLORS` or `GREP_COLORS` in your shell profile, Rush respects your values.
+Set `NO_COLOR=1` to disable all color output.
 
 ### Reloading
 
@@ -408,6 +434,22 @@ Access object properties directly in pipeline:
 ps | .ProcessName       # Extract property
 json config.json | .settings.theme
 ```
+
+### UNC SSH Paths
+
+Access remote files directly using `//ssh:` paths — no `scp` or `rsync` needed:
+
+```rush
+ls //ssh:server/var/log             # List remote directory
+cat //ssh:server/etc/hosts          # Read remote file
+cp //ssh:server/data/file.csv .     # Download file
+cp local.txt //ssh:server/tmp/      # Upload file
+mv //ssh:server/a.txt //ssh:server/b.txt  # Rename remote file
+rm //ssh:server/tmp/old.log         # Delete remote file
+mkdir //ssh:server/tmp/newdir       # Create remote directory
+```
+
+Supports user@ syntax: `//ssh:mark@server/path`. Uses your SSH config (`~/.ssh/config`) for host aliases, keys, and ports.
 
 ---
 
@@ -1504,7 +1546,16 @@ set --save aiProvider anthropic    # anthropic, openai, gemini, ollama
 set --save aiModel auto            # "auto" = provider default
 ```
 
-**Custom providers:** Drop a JSON file in `~/.config/rush/ai-providers/`:
+**Supported providers:**
+
+| Provider | API Key Env Var | Default Model | Notes |
+|----------|----------------|---------------|-------|
+| Anthropic | `ANTHROPIC_API_KEY` | Claude Sonnet | Default provider |
+| OpenAI | `OPENAI_API_KEY` | GPT-4o | |
+| Google Gemini | `GEMINI_API_KEY` | Gemini Pro | |
+| Ollama | *(none — local)* | llama3 | Runs locally, no API key needed |
+
+**Custom providers:** Drop a JSON file in `~/.config/rush/ai-providers/` for any OpenAI-compatible API:
 
 ```json
 {
@@ -1515,6 +1566,8 @@ set --save aiModel auto            # "auto" = provider default
   "defaultModel": "meta-llama/Llama-3-70b-chat-hf"
 }
 ```
+
+The `format` field selects the wire protocol parser: `openai`, `anthropic`, `gemini`, or `ollama`.
 
 #### Agent Mode
 
@@ -1595,44 +1648,11 @@ trap 'cleanup' EXIT         # Run on shell exit
 
 ---
 
-## The `ls` Builtin
+## Native Commands
 
-Rush includes a custom `ls` implementation built on .NET (not PowerShell's `Get-ChildItem`). It provides Unix-style output with color coding and human-readable sizes.
+Standard Unix commands (`ls`, `grep`, `find`, `cp`, `mv`, `rm`, etc.) run natively on macOS and Linux — Rush does not translate or intercept them. All flags and behaviors work exactly as you'd expect.
 
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `-l` | Long format (permissions, owner, size, date, name) |
-| `-a` / `-A` | Show hidden files (starting with `.`) |
-| `-R` | Recursive — list subdirectories |
-| `-r` | Reverse sort order |
-| `-t` | Sort by modification time (newest first) |
-| `-S` | Sort by file size (largest first) |
-| `-1` | One entry per line |
-| `-d` | List directory entry itself, not contents |
-| `-F` | Append type indicator (`/` dir, `*` executable, `@` symlink) |
-| `-G` | Omit group column in long format |
-| `-h` | Human-readable sizes (always on) |
-
-Flags can be combined: `ls -laR`, `ls -ltS`.
-
-### Long Format Example
-
-```
-drwxr-xr-x  5 mark staff  160 Mar  1 14:34 src/
--rw-r--r--  1 mark staff 2.3K Mar  1 14:34 README.md
-lrwxr-xr-x  1 mark staff   10 Mar  1 14:34 link -> target
--rwxr-xr-x  1 mark staff 8.1M Mar  1 14:34 rush*
-```
-
-### Color Coding
-
-Files are colored by type: directories, executables, symlinks, archives (.zip, .tar.gz), images, config files (.json, .yaml), documents (.md, .txt), source code (.cs, .py, .js), and hidden files (dimmed).
-
-### Size Display
-
-Sizes are always human-readable: bytes, K, M, G.
+Rush configures theme-aware colors for native commands at startup (see [Colors & Theming](#colors--theming)), so `ls` and `grep` produce readable colored output on both dark and light terminals automatically.
 
 ---
 
@@ -1735,45 +1755,11 @@ Connections are stored in `~/.config/rush/databases.json`. Passwords are never s
 
 ---
 
-## Command Translations
+## Command Execution
 
-Rush translates common Unix commands to PowerShell equivalents. Native commands (git, docker, ssh, etc.) pass through directly.
+On macOS and Linux, Unix commands (`ls`, `grep`, `find`, `cp`, `mv`, `rm`, `head`, `tail`, `sort`, `ps`, `kill`, etc.) run **natively** — Rush does not translate or intercept them. All flags work exactly as the OS provides.
 
-### File Operations
-
-| Unix | PowerShell | Notes |
-|------|-----------|-------|
-| `ls` | Custom builtin | See [ls builtin](#the-ls-builtin) |
-| `cat` | Custom builtin | See [cat builtin](#the-cat-builtin) |
-| `cp src dst` | `Copy-Item` | `-r` → `-Recurse` |
-| `mv src dst` | `Move-Item` | |
-| `rm file` | `Remove-Item` | `-r` → `-Recurse`, `-rf` → `-Recurse -Force` |
-| `touch file` | `New-Item -ItemType File` | |
-| `mkdir dir` | `New-Item -ItemType Directory` | |
-| `find . -name "*.txt"` | `Get-ChildItem -Recurse -Filter` | |
-| `head -5 file` | `Get-Content -TotalCount 5` | |
-| `tail -5 file` | `Get-Content -Tail 5` | |
-
-### Process & System
-
-| Unix | PowerShell | Notes |
-|------|-----------|-------|
-| `ps` | `Get-Process` | |
-| `kill PID` | `Stop-Process -Id` | |
-| `env` | `Get-ChildItem Env:` | |
-| `which cmd` | `Get-Command` | |
-| `whoami` | `[Environment]::UserName` | |
-| `hostname` | `[Environment]::MachineName` | |
-| `df` | `Get-PSDrive -PSProvider FileSystem` | |
-| `uptime` | Process start time calculation | |
-
-### Text & Search
-
-| Unix | PowerShell | Notes |
-|------|-----------|-------|
-| `grep pattern` | `Select-String -Pattern` | Piped: `Where-Object { $_ -match }` |
-| `echo text` | `Write-Output` | |
-| `sort` | `Sort-Object` | `-r` → `-Descending` |
+`echo` is the only standalone command Rush translates (to PowerShell's `Write-Output`) for PowerShell variable expansion.
 
 ### Pipeline Operations (After `|`)
 
@@ -1969,6 +1955,10 @@ ssh server "rush --llm"
 ```
 
 The JSON protocol flows over SSH transparently. The context prompt includes `host` so the LLM always knows which machine it's on.
+
+### SSH Keepalive
+
+In LLM mode, Rush auto-injects `-o ServerAliveInterval=15 -o ServerAliveCountMax=3` on any SSH command. This detects dead connections in ~45 seconds instead of hanging indefinitely — critical for autonomous agents that can't manually interrupt a stuck session.
 
 ### Usage
 

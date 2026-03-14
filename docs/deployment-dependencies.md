@@ -112,6 +112,25 @@ Options for Windows:
 2. Require Git for Windows (includes grep, find, head, tail, sort, etc.)
 3. Rely on PS7 aliases for basics, document gaps
 
+## Native Command Colors (auto-configured)
+
+Rush detects the terminal background (dark/light) at startup and sets
+color environment variables so native commands produce readable output:
+
+| Variable | Purpose | Dark theme | Light theme |
+|----------|---------|------------|-------------|
+| `LS_COLORS` | GNU `ls` colors | Bold (bright on dark bg) | Non-bold (darker shades) |
+| `LSCOLORS` | BSD `ls` colors (macOS) | Uppercase = bold | Lowercase = plain |
+| `GREP_COLORS` | `grep` match colors | Bold red matches | Plain red matches |
+| `CLICOLOR` | Enable BSD `ls` color | `1` (macOS only) | `1` (macOS only) |
+
+- **Respects user values** — if already set in `.bashrc`/`.zshrc`, rush won't overwrite
+- **Respects `NO_COLOR`** — if set, no color vars are injected
+- **Live updates** — `set theme light`/`dark` or `reload` updates these immediately
+- **Implementation** — `Theme.SetNativeColorEnvVars()` in Theme.cs
+
+---
+
 ## Dead Code
 
 | File | Status |
