@@ -451,6 +451,8 @@ mkdir //ssh:server/tmp/newdir       # Create remote directory
 
 Supports user@ syntax: `//ssh:mark@server/path`. Uses your SSH config (`~/.ssh/config`) for host aliases, keys, and ports.
 
+**Requires Rush on the remote host** — UNC operations run `rush -c` over SSH. Copy operations (`cp`) use `scp`.
+
 ---
 
 ## Objectify & Auto-Objectify
@@ -1948,17 +1950,17 @@ Interactive commands (vim, nano, less, top, etc.) return structured errors with 
 
 ### SSH
 
-For structured remote access, use Rush on both ends:
+For structured remote access, run Rush on both ends:
 
 ```bash
 ssh server "rush --llm"
 ```
 
-The JSON protocol flows over SSH transparently. The context prompt includes `host` so the LLM always knows which machine it's on.
+**Requires Rush on the remote host.** The JSON protocol flows over SSH transparently. The context prompt includes `host` so the LLM always knows which machine it's on. The remote Rush loads its own `init.rush` and `secrets.rush`, so environment, PATH, and API keys are configured per-host.
 
 ### SSH Keepalive
 
-In LLM mode, Rush auto-injects `-o ServerAliveInterval=15 -o ServerAliveCountMax=3` on any SSH command. This detects dead connections in ~45 seconds instead of hanging indefinitely — critical for autonomous agents that can't manually interrupt a stuck session.
+In LLM mode, Rush auto-injects `-o ServerAliveInterval=15 -o ServerAliveCountMax=3` on any `ssh` command the agent executes. This detects dead connections in ~45 seconds instead of hanging indefinitely — critical for autonomous agents that can't manually interrupt a stuck session.
 
 ### Usage
 
@@ -2019,6 +2021,8 @@ Server name: `rush-ssh`
 
 A stateless SSH gateway for remote execution. Each tool call runs an independent SSH session. All tools require a `host` parameter.
 
+**Does not require Rush on the remote host** — commands execute in the remote system's default shell. Only needs SSH key-based auth (BatchMode is enforced — no password prompts).
+
 **Tools:**
 
 | Tool | Description |
@@ -2027,7 +2031,7 @@ A stateless SSH gateway for remote execution. Each tool call runs an independent
 | `rush_read_file` | Read a file from `host` via SSH. |
 | `rush_context` | Get hostname, cwd, git status from `host` via SSH. |
 
-Designed for parallel execution across multiple hosts — Claude can target different servers simultaneously.
+Designed for parallel execution across multiple hosts — Claude can target different servers simultaneously. Connections are multiplexed via OpenSSH ControlMaster for performance (~0ms reconnect vs ~200-500ms handshake).
 
 ### Local vs SSH
 
@@ -2040,6 +2044,42 @@ Designed for parallel execution across multiple hosts — Claude can target diff
 ### Resources
 
 Both servers provide a `rush://lang-spec` resource containing the Rush language specification (YAML), so Claude understands Rush syntax.
+
+---
+
+## SSH Requirements
+
+Rush uses SSH in three different ways, with different requirements for each:
+
+| Mode | What it does | Rush on remote? | Auth |
+|------|-------------|----------------|------|
+| `//ssh:host/path` | UNC file operations | **Yes** (runs `rush -c`) | Key-based |
+| `ssh host "rush --llm"` | Structured remote shell | **Yes** | Key-based |
+| `rush --mcp-ssh` | MCP gateway for Claude | **No** (uses remote shell) | Key-based (BatchMode) |
+| `sync init ssh host:path` | Config sync | **No** (uses scp) | Key-based |
+
+### Prerequisites
+
+- **SSH key-based auth** — all modes use `BatchMode=yes` or equivalent (no password prompts)
+- **`ssh` in PATH** on the local machine
+- **Rush on remote** — only for UNC paths and LLM mode. Copy the binary or build from source
+
+### Deploying Rush to Remote Hosts
+
+```bash
+# Build for the target platform
+dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
+
+# Copy the binary
+scp bin/Release/net8.0/linux-x64/publish/rush server:/usr/local/bin/
+
+# Verify
+ssh server "rush --version"
+```
+
+### Connection Pooling
+
+Rush automatically uses OpenSSH ControlMaster multiplexing for UNC paths and MCP-SSH. The first connection to a host creates a master socket; subsequent connections reuse it (~0ms vs ~200-500ms handshake). Sockets persist for 60 seconds after the last use.
 
 ---
 
