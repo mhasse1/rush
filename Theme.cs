@@ -937,6 +937,17 @@ public class Theme
             }
         }
 
+        // Regular files — give them a muted/neutral color so they're distinct from
+        // colored types (directories, symlinks, executables) but not distracting.
+        // Target: 4.5:1 contrast, neutral/low-saturation.
+        var fiSlot = new ColorSlot("fi", 4.5, 10.0, 0, 0.0); // no hue preference = gray/neutral
+        var fiCode = SelectBestColor(fiSlot, bgR, bgG, bgB, bgLum, bgHue, bgSat, usedCodes);
+        if (fiCode >= 0)
+        {
+            entries.Add($"fi=38;5;{fiCode}");
+            usedCodes.Add(fiCode);
+        }
+
         // Background-coded entries are always basic (su, sg, tw, ow)
         foreach (var (key, darkSgr, lightSgr) in LsColorEntries)
         {

@@ -2100,7 +2100,24 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
     try
     {
         var source = File.ReadAllText(path);
-        var psCode = engine.TranspileFile(source);
+
+        // Pre-process Rush builtins that can't be transpiled to PowerShell.
+        // These are handled inline before the rest goes to the transpiler.
+        var transpilableLines = new List<string>();
+        foreach (var rawLine in source.Split('\n'))
+        {
+            var trimmed = rawLine.TrimStart();
+            if (trimmed.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase) ||
+                trimmed.Equals("setbg", StringComparison.OrdinalIgnoreCase))
+            {
+                HandleSetbgLine(trimmed, filename);
+                continue;
+            }
+            transpilableLines.Add(rawLine);
+        }
+
+        var filteredSource = string.Join('\n', transpilableLines);
+        var psCode = engine.TranspileFile(filteredSource);
         if (psCode != null)
         {
             using var ps = PowerShell.Create();
@@ -2128,6 +2145,29 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"rush: {filename}: {ex.Message}");
+        Console.ResetColor();
+    }
+}
+
+/// <summary>
+/// Handle a setbg line from a startup script (init.rush).
+/// Extracted because setbg is a Rush builtin, not transpilable to PowerShell.
+/// </summary>
+static void HandleSetbgLine(string line, string filename)
+{
+    var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length < 2)
+        return; // bare "setbg" with no arg — ignore in scripts
+
+    var hex = parts[1].Trim().Trim('"', '\'');
+    if (string.Equals(hex, "reset", StringComparison.OrdinalIgnoreCase))
+    {
+        Theme.ResetBackground();
+    }
+    else if (!Theme.SetBackground(hex))
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"rush: {filename}: setbg: invalid color '{hex}'");
         Console.ResetColor();
     }
 }
