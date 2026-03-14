@@ -185,6 +185,11 @@ var config = RushConfig.Load();
 
 // ── Theme (detect terminal background for contrast-aware colors) ─────
 Theme.Initialize(config.GetThemeOverride());
+bool rootBgApplied = false;
+if (Prompt.IsRoot())
+{
+    rootBgApplied = Theme.ApplyRootBackground(config.RootBackground);
+}
 Theme.SetNativeColorEnvVars();
 
 // ── Banner ───────────────────────────────────────────────────────────
@@ -354,6 +359,7 @@ if (!OperatingSystem.IsWindows())
     {
         ctx.Cancel = true;
         signalExit = true;
+        Theme.RestoreBackground();
         try { runningPs?.Stop(); } catch { }
     });
 }
@@ -2053,6 +2059,7 @@ if (traps.TryGetValue("EXIT", out var exitTrap))
 jobManager.Dispose();
 lineEditor.SaveHistory();
 Console.Write("\x1b[0 q"); // Reset cursor shape
+Theme.RestoreBackground(); // Restore original bg if root shell changed it
 if (host.ShouldExit)
     Environment.ExitCode = host.ExitCode;
 if (!signalExit) // Don't write to a dead terminal (SIGHUP)

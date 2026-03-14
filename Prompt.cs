@@ -213,7 +213,7 @@ public class Prompt
 
     // ── Helpers ───────────────────────────────────────────────────────
 
-    private static bool IsRoot()
+    internal static bool IsRoot()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {

@@ -20,6 +20,14 @@ public class RushConfig
     public bool ShowTips { get; set; } = true;
     public bool ShowHints { get; set; } = true;
 
+    // ── Root Shell ──────────────────────────────────────────────────────
+    /// <summary>
+    /// Terminal background color for root/admin shells.
+    /// "auto" = dark red on dark themes, dark yellow on light.
+    /// "none" = disabled. Hex color like "#330000" for custom.
+    /// </summary>
+    public string RootBackground { get; set; } = "auto";
+
     // ── Error Handling ─────────────────────────────────────────────────
     public bool StopOnError { get; set; } = false;
     public bool PipefailMode { get; set; } = false;

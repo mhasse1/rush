@@ -271,4 +271,39 @@ public class ThemeColorEnvVarTests : IDisposable
         var result = Theme.EnsureSgrContrast("", 0.5, isDark: true);
         Assert.Equal("", result);
     }
+
+    // ── Hex Color Parsing Tests ──────────────────────────────────────
+
+    [Fact]
+    public void TryParseHexColor_6Digit()
+    {
+        Assert.True(Theme.TryParseHexColor("#330000", out var r, out var g, out var b));
+        Assert.Equal(0x33 * 257, r);  // 8-bit → 16-bit
+        Assert.Equal(0, g);
+        Assert.Equal(0, b);
+    }
+
+    [Fact]
+    public void TryParseHexColor_3Digit()
+    {
+        Assert.True(Theme.TryParseHexColor("#F80", out var r, out var g, out var b));
+        Assert.Equal(0xF * 0x1111, r);
+        Assert.Equal(0x8 * 0x1111, g);
+        Assert.Equal(0, b);
+    }
+
+    [Fact]
+    public void TryParseHexColor_NoHash()
+    {
+        Assert.True(Theme.TryParseHexColor("FF0000", out var r, out _, out _));
+        Assert.Equal(0xFF * 257, r);
+    }
+
+    [Fact]
+    public void TryParseHexColor_Invalid()
+    {
+        Assert.False(Theme.TryParseHexColor("none", out _, out _, out _));
+        Assert.False(Theme.TryParseHexColor("", out _, out _, out _));
+        Assert.False(Theme.TryParseHexColor("#GG0000", out _, out _, out _));
+    }
 }

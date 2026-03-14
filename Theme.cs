@@ -577,6 +577,98 @@ public class Theme
         return (gray, gray, gray);
     }
 
+    // ── Root Shell Background ─────────────────────────────────────────
+
+    /// <summary>Saved original background for restore on exit. Null if not changed.</summary>
+    private static string? _savedBgOsc;
+
+    /// <summary>
+    /// If root/admin, set the terminal background via OSC 11.
+    /// Call after Initialize(). Returns true if background was changed.
+    /// </summary>
+    public static bool ApplyRootBackground(string rootBgSetting)
+    {
+        if (string.Equals(rootBgSetting, "none", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var hex = rootBgSetting;
+        if (string.Equals(hex, "auto", StringComparison.OrdinalIgnoreCase))
+            hex = Current.IsDark ? "#330000" : "#FFFF88";
+
+        if (!TryParseHexColor(hex, out var r, out var g, out var b))
+            return false;
+
+        // Save current background for restore (use OSC 11 query result if available)
+        // We can't re-query here (breaks terminal state), so save what we detected at init.
+        // If we had RGB from detection, build the restore string; otherwise skip.
+        if (Current.HasDetectedRgb && Current.BgLuminance >= 0)
+        {
+            // We don't store raw RGB on Theme, so we'll save a restore command
+            // to reset to default instead (OSC 111 resets bg to terminal default)
+            _savedBgOsc = "\x1b]111\x1b\\";
+        }
+        else
+        {
+            // No detection — still set bg, use OSC 111 to restore
+            _savedBgOsc = "\x1b]111\x1b\\";
+        }
+
+        // Set background via OSC 11: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
+        var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
+        Console.Write(osc);
+
+        // Re-initialize theme with the new background color for contrast validation
+        var newBgR = r / 65535.0;
+        var newBgG = g / 65535.0;
+        var newBgB = b / 65535.0;
+        var newLum = TerminalBackground.RelativeLuminance(newBgR, newBgG, newBgB);
+        Current = new Theme(newLum < 0.5, newBgR, newBgG, newBgB);
+        Current.HasDetectedRgb = true;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Restore the original terminal background. Call on exit if root bg was applied.
+    /// </summary>
+    public static void RestoreBackground()
+    {
+        if (_savedBgOsc != null)
+        {
+            Console.Write(_savedBgOsc);
+            _savedBgOsc = null;
+        }
+    }
+
+    /// <summary>Parse a hex color like "#330000" or "#FF8" to 16-bit RGB components.</summary>
+    internal static bool TryParseHexColor(string hex, out int r, out int g, out int b)
+    {
+        r = g = b = 0;
+        if (string.IsNullOrEmpty(hex)) return false;
+        hex = hex.TrimStart('#');
+
+        if (hex.Length == 3)
+        {
+            // Short form: #RGB → expand to #RRGGBB
+            if (!int.TryParse(hex[0..1], System.Globalization.NumberStyles.HexNumber, null, out var r4) ||
+                !int.TryParse(hex[1..2], System.Globalization.NumberStyles.HexNumber, null, out var g4) ||
+                !int.TryParse(hex[2..3], System.Globalization.NumberStyles.HexNumber, null, out var b4))
+                return false;
+            r = r4 * 0x1111; g = g4 * 0x1111; b = b4 * 0x1111;
+            return true;
+        }
+        if (hex.Length == 6)
+        {
+            if (!int.TryParse(hex[0..2], System.Globalization.NumberStyles.HexNumber, null, out var r8) ||
+                !int.TryParse(hex[2..4], System.Globalization.NumberStyles.HexNumber, null, out var g8) ||
+                !int.TryParse(hex[4..6], System.Globalization.NumberStyles.HexNumber, null, out var b8))
+                return false;
+            r = r8 * 257; g = g8 * 257; b = b8 * 257; // scale 8-bit to 16-bit
+            return true;
+        }
+        return false;
+    }
+
     // ── SGR Contrast Validation (for LS_COLORS / GREP_COLORS) ────────
 
     /// <summary>
