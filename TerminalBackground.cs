@@ -137,15 +137,16 @@ public static class TerminalBackground
             var query = "\x1b]11;?\x07";
             var queryBytes = Encoding.ASCII.GetBytes(query);
 
-            // Use a single FileStream on /dev/tty for both write and read.
-            // We can't use fd 0 (stdin) for reading because .NET's Console.In
-            // StreamReader has its own buffer over fd 0. A separate FileStream
-            // on /dev/tty gets its own fd managed by .NET (no P/Invoke open/close).
-            using var tty = new FileStream(ttyPath, FileMode.Open, FileAccess.ReadWrite);
-            var ttyFd = (int)tty.SafeFileHandle.DangerousGetHandle();
+            // Write query via Console.Out (stdout) — some terminals (iTerm2)
+            // only respond to queries arriving on the original stdout, not on
+            // separately-opened /dev/tty fds.
+            // Read response from a separate /dev/tty FileStream to bypass
+            // .NET's Console.In buffer on fd 0.
+            using var ttyRead = new FileStream(ttyPath, FileMode.Open, FileAccess.Read);
+            var ttyFd = (int)ttyRead.SafeFileHandle.DangerousGetHandle();
 
-            tty.Write(queryBytes);
-            tty.Flush();
+            Console.Out.Write(query);
+            Console.Out.Flush();
 
             // Read response — use poll() before each read() to guarantee
             // we never block, even if stty settings didn't take effect
