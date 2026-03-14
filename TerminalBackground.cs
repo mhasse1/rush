@@ -15,7 +15,10 @@ namespace Rush;
 /// </summary>
 public static class TerminalBackground
 {
-    public record TerminalBg(bool IsDark, double BgLuminance, double BgR = -1, double BgG = -1, double BgB = -1);
+    public enum DetectionMethod { Osc11, ColorFgBg, MacOsAppearance, Fallback }
+
+    public record TerminalBg(bool IsDark, double BgLuminance, double BgR = -1, double BgG = -1, double BgB = -1,
+        DetectionMethod Method = DetectionMethod.Fallback);
 
     /// <summary>
     /// Saved stty settings for emergency restore if detection times out.
@@ -68,7 +71,7 @@ public static class TerminalBackground
         {
             // 1. OSC 11 — query terminal directly for background RGB
             if (TryOsc11(out var luminance, out var bgR, out var bgG, out var bgB))
-                return new TerminalBg(luminance < 0.5, luminance, bgR, bgG, bgB);
+                return new TerminalBg(luminance < 0.5, luminance, bgR, bgG, bgB, DetectionMethod.Osc11);
         }
         catch { /* OSC 11 failed — try next method */ }
 
@@ -76,7 +79,7 @@ public static class TerminalBackground
         {
             // 2. COLORFGBG env var (set by some terminals: iTerm2, Konsole, urxvt)
             if (TryColorFgBg(out var isDark))
-                return new TerminalBg(isDark, isDark ? 0.0 : 1.0);
+                return new TerminalBg(isDark, isDark ? 0.0 : 1.0, Method: DetectionMethod.ColorFgBg);
         }
         catch { }
 
@@ -84,7 +87,7 @@ public static class TerminalBackground
         {
             // 3. macOS system appearance
             if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && TryMacOsAppearance(out var isDark))
-                return new TerminalBg(isDark, isDark ? 0.0 : 1.0);
+                return new TerminalBg(isDark, isDark ? 0.0 : 1.0, Method: DetectionMethod.MacOsAppearance);
         }
         catch { }
 

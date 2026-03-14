@@ -20,6 +20,9 @@ public class Theme
     /// <summary>True if background RGB was detected via OSC 11 (actual terminal query).</summary>
     public bool HasDetectedRgb { get; private set; }
 
+    /// <summary>How the background was detected.</summary>
+    public TerminalBackground.DetectionMethod DetectionMethod { get; private set; } = TerminalBackground.DetectionMethod.Fallback;
+
     // ── ConsoleColor Properties (OutputRenderer, Program, Prompt, etc.) ──
 
     /// <summary>Banner text, help section headers.</summary>
@@ -328,6 +331,7 @@ public class Theme
             }
             Current = new Theme(bg.IsDark, r, g, b);
             Current.HasDetectedRgb = bg.BgR >= 0;
+            Current.DetectionMethod = bg.Method;
         }
     }
 

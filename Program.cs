@@ -197,10 +197,12 @@ Console.ForegroundColor = Theme.Current.Banner;
 Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R");
-if (!Theme.Current.HasDetectedRgb && config.GetThemeOverride() == null)
+if (Theme.Current.DetectionMethod == TerminalBackground.DetectionMethod.Fallback
+    && config.GetThemeOverride() == null)
 {
-    Console.WriteLine("[theme] Terminal did not respond to background color query — using defaults.");
-    Console.WriteLine("        Set COLORFGBG=\";0\" (dark) or COLORFGBG=\";15\" (light) to override.");
+    Console.WriteLine("[theme] Could not detect terminal background — assuming dark.");
+    Console.WriteLine("        Run: export COLORFGBG=\";0\" (dark) or export COLORFGBG=\";15\" (light)");
+    Console.WriteLine("        Or set \"theme\": \"dark\" or \"light\" in ~/.config/rush/config.json");
 }
 Console.ResetColor();
 
