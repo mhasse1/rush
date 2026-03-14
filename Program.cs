@@ -479,6 +479,24 @@ while (true)
         continue;
     }
 
+    // ── Path block accumulation (path add...end / path rm...end) ────
+    if (IsPathBlock(input))
+    {
+        while (true)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.Write(new string(' ', Prompt.InputPrefix.Length + 2));
+            Console.ResetColor();
+            var continuation = lineEditor.ReadLine();
+            if (continuation == null) break;           // Ctrl+D
+            if (continuation == "") { input = ""; break; }  // Ctrl+C
+            input += "\n" + continuation;
+            if (continuation.Trim().Equals("end", StringComparison.OrdinalIgnoreCase))
+                break;
+        }
+        if (string.IsNullOrEmpty(input)) continue; // cancelled
+    }
+
     // ── Shell command processing (non-Rush syntax) ──────────────────
     var (cmdFailed, cmdExitCode, cmdShouldExit) = ProcessCommand(input, state);
     if (cmdShouldExit || signalExit) break;
@@ -2206,11 +2224,34 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
             // New path: line-by-line processing with full builtin support
             var lines = File.ReadAllLines(path);
             var accumulated = new System.Text.StringBuilder();
+            System.Text.StringBuilder? pathBlock = null; // accumulates path add...end / path rm...end
 
             foreach (var rawLine in lines)
             {
                 var trimmed = rawLine.TrimStart();
-                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#'))
+                {
+                    // Comments inside path blocks are kept (filtered later by HandlePathCommand)
+                    if (pathBlock != null && trimmed.StartsWith('#'))
+                        pathBlock.AppendLine().Append(trimmed);
+                    continue;
+                }
+
+                // ── Path block accumulation ──────────────────────────
+                if (pathBlock != null)
+                {
+                    pathBlock.AppendLine().Append(trimmed);
+                    if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Dispatch the complete path block
+                        var fullCmd = pathBlock.ToString();
+                        pathBlock = null;
+                        // Strip "path " prefix for HandlePathCommand
+                        var pathArgs = fullCmd.Length > 5 ? fullCmd[5..] : "";
+                        HandlePathCommand(pathArgs, state.Runspace);
+                    }
+                    continue;
+                }
 
                 // Accumulate for multi-line Rush blocks
                 if (accumulated.Length > 0)
@@ -2232,8 +2273,15 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
                     continue;
                 }
 
-                // Not Rush syntax — process as shell command via shared dispatch
+                // Not Rush syntax — check for path block start
                 accumulated.Clear();
+
+                if (IsPathBlock(trimmed))
+                {
+                    pathBlock = new System.Text.StringBuilder(trimmed);
+                    continue;
+                }
+
                 var (failed, _, shouldExit) = ProcessCommand(trimmed, state);
                 if (shouldExit) break;
             }
@@ -3019,6 +3067,41 @@ static void RemovePathFromInit(string expandedDir, string originalDir, string va
 }
 
 /// <summary>
+/// Detect a bare "path add" or "path rm" line that starts a multi-line block (path add...end).
+/// Returns true when the line has the subcommand + optional flags but NO directory argument,
+/// indicating the user wants to list directories on subsequent lines terminated by "end".
+/// </summary>
+static bool IsPathBlock(string input)
+{
+    var trimmed = input.Trim();
+    // Must start with "path add" or "path rm"/"path remove"
+    if (!trimmed.StartsWith("path add", StringComparison.OrdinalIgnoreCase) &&
+        !trimmed.StartsWith("path rm", StringComparison.OrdinalIgnoreCase) &&
+        !trimmed.StartsWith("path remove", StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    // Strip the "path add" / "path rm" / "path remove" prefix
+    var rest = trimmed;
+    if (rest.StartsWith("path remove", StringComparison.OrdinalIgnoreCase))
+        rest = rest[11..].Trim();
+    else if (rest.StartsWith("path add", StringComparison.OrdinalIgnoreCase))
+        rest = rest[8..].Trim();
+    else // path rm
+        rest = rest[7..].Trim();
+
+    // Strip any flags (--front, --save, --name=X)
+    while (rest.StartsWith("--"))
+    {
+        var spaceIdx = rest.IndexOf(' ');
+        if (spaceIdx < 0) { rest = ""; break; }
+        rest = rest[(spaceIdx + 1)..].TrimStart();
+    }
+
+    // If nothing left after stripping subcommand and flags, it's a block start
+    return string.IsNullOrEmpty(rest);
+}
+
+/// <summary>
 /// Built-in path variable management: list, add, remove, edit.
 /// Supports --name=VARNAME to target any colon-separated env var (default: PATH).
 /// Returns true if the command failed.
@@ -3145,11 +3228,11 @@ static bool HandlePathCommand(string args, Runspace runspace)
         return false;
     }
 
-    // ── path add [--front] [--save] <dir> ───────────────────────────
-    if (args.StartsWith("add ", StringComparison.OrdinalIgnoreCase) ||
-        args.StartsWith("add\t", StringComparison.OrdinalIgnoreCase))
+    // ── path add [--front] [--save] <dir|...end block> ─────────────
+    if (args.StartsWith("add", StringComparison.OrdinalIgnoreCase) &&
+        (args.Length == 3 || args[3] == ' ' || args[3] == '\t' || args[3] == '\n'))
     {
-        var addArgs = args[4..].Trim();
+        var addArgs = args.Length > 3 ? args[4..].Trim() : "";
         bool front = false;
         bool save = false;
 
@@ -3167,6 +3250,42 @@ static bool HandlePathCommand(string args, Runspace runspace)
                 addArgs = addArgs[6..].TrimStart();
             }
             else break;
+        }
+
+        // Multi-line block: "path add\n  /foo\n  /bar\nend"
+        if (addArgs.Contains('\n'))
+        {
+            var dirs = addArgs.Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrEmpty(l) &&
+                            !l.StartsWith('#') &&
+                            !l.Equals("end", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var d in dirs)
+            {
+                var dStripped = StripQuotes(d);
+                var dExpanded = ExpandTildePath(dStripped).TrimEnd('/', '\\');
+                if (entries.Contains(dExpanded)) continue;
+                if (!Directory.Exists(dExpanded))
+                {
+                    Console.ForegroundColor = Theme.Current.Warning;
+                    Console.WriteLine($"  note: {dExpanded} does not exist (adding anyway)");
+                    Console.ResetColor();
+                }
+                if (front)
+                    entries.Insert(0, dExpanded);
+                else
+                    entries.Add(dExpanded);
+            }
+
+            var blockValue = string.Join(PathUtils.PathListSeparator.ToString(), entries);
+            SetEnvVar(varName, blockValue, runspace);
+
+            if (save)
+                SavePathEditToInit(varName, entries);
+
+            return false;
         }
 
         if (string.IsNullOrEmpty(addArgs))
@@ -3223,27 +3342,69 @@ static bool HandlePathCommand(string args, Runspace runspace)
         return false;
     }
 
-    // ── path rm [--save] <dir> ──────────────────────────────────────
-    if (args.StartsWith("rm ", StringComparison.OrdinalIgnoreCase) ||
-        args.StartsWith("remove ", StringComparison.OrdinalIgnoreCase))
+    // ── path rm [--save] <dir|...end block> ────────────────────────
+    if (args.StartsWith("rm", StringComparison.OrdinalIgnoreCase) &&
+        (args.Length == 2 || args[2] == ' ' || args[2] == '\t' || args[2] == '\n') ||
+        args.StartsWith("remove", StringComparison.OrdinalIgnoreCase) &&
+        (args.Length == 6 || args[6] == ' ' || args[6] == '\t' || args[6] == '\n'))
     {
-        var rmStart = args.IndexOf(' ') + 1;
-        var rmArgs = args[rmStart..].Trim();
+        var rmStart = args.IndexOf(' ');
+        var rmArgs = rmStart >= 0 ? args[(rmStart + 1)..].Trim() : "";
         bool save = false;
-        if (rmArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
-            rmArgs.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+        if (rmArgs.StartsWith("--save", StringComparison.OrdinalIgnoreCase))
         {
             save = true;
-            rmArgs = rmArgs[7..].Trim();
+            var afterFlag = rmArgs.Length > 6 ? rmArgs[6..].TrimStart() : "";
+            rmArgs = afterFlag;
+        }
+
+        // Multi-line block: "rm\n  /foo\n  /bar\nend"
+        if (rmArgs.Contains('\n'))
+        {
+            var dirs = rmArgs.Split('\n')
+                .Select(l => l.Trim())
+                .Where(l => !string.IsNullOrEmpty(l) &&
+                            !l.StartsWith('#') &&
+                            !l.Equals("end", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            int totalRemoved = 0;
+            foreach (var d in dirs)
+            {
+                var dStripped = StripQuotes(d);
+                var dExpanded = ExpandTildePath(dStripped).TrimEnd('/', '\\');
+                var before = entries.Count;
+                entries.RemoveAll(e => e.TrimEnd('/').Equals(dExpanded, StringComparison.Ordinal));
+                totalRemoved += before - entries.Count;
+            }
+
+            if (totalRemoved > 0)
+            {
+                var rmBlockValue = string.Join(PathUtils.PathListSeparator.ToString(), entries);
+                SetEnvVar(varName, rmBlockValue, runspace);
+            }
+
+            if (save)
+                SavePathEditToInit(varName, entries);
+
+            return false;
+        }
+
+        if (string.IsNullOrEmpty(rmArgs))
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine("  path rm: missing directory argument");
+            Console.ResetColor();
+            return true;
         }
 
         var dir = StripQuotes(rmArgs);
         var expandedDir = ExpandTildePath(dir).TrimEnd('/');
 
-        var before = entries.Count;
+        var before2 = entries.Count;
         entries.RemoveAll(e => e.TrimEnd('/').Equals(expandedDir, StringComparison.Ordinal));
 
-        if (entries.Count == before)
+        if (entries.Count == before2)
         {
             Console.ForegroundColor = Theme.Current.Warning;
             Console.Error.WriteLine($"  not found in {varName}: {expandedDir}");
@@ -4549,8 +4710,11 @@ static string GetStartupTip(RushConfig config)
         "path  -- list all PATH entries with existence check",
         "path add ~/bin  -- add directory to PATH for this session",
         "path add --save --front /opt/bin  -- prepend to PATH and persist",
-        "path edit  -- edit PATH in your $EDITOR (one entry per line)",
+        "path add...end  -- add multiple directories (one per line, terminated by 'end')",
         "path rm /old/dir  -- remove a directory from PATH",
+        "path rm...end  -- remove multiple directories (one per line)",
+        "path dedupe  -- remove duplicate PATH entries (first occurrence wins)",
+        "path edit  -- edit PATH in your $EDITOR (one entry per line)",
 
         // ── Settings ──
         "set  -- show all settings with descriptions and current values",
