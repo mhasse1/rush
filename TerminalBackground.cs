@@ -131,8 +131,10 @@ public static class TerminalBackground
                 return false;
             }
 
-            // Send OSC 11 query: ESC ] 11 ; ? ESC backslash
-            var query = "\x1b]11;?\x1b\\";
+            // Send OSC 11 query: ESC ] 11 ; ? BEL
+            // Some terminals (iTerm2) only respond to BEL-terminated queries,
+            // not ST (ESC \) terminated ones.
+            var query = "\x1b]11;?\x07";
             var queryBytes = Encoding.ASCII.GetBytes(query);
 
             using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
