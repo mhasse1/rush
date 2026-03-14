@@ -137,16 +137,9 @@ public static class TerminalBackground
             var query = "\x1b]11;?\x07";
             var queryBytes = Encoding.ASCII.GetBytes(query);
 
-            // Write query via Console.Out (stdout) — some terminals (iTerm2)
-            // only respond to queries arriving on the original stdout, not on
-            // separately-opened /dev/tty fds.
-            // Read response from a separate /dev/tty FileStream to bypass
-            // .NET's Console.In buffer on fd 0.
-            using var ttyRead = new FileStream(ttyPath, FileMode.Open, FileAccess.Read);
-            var ttyFd = (int)ttyRead.SafeFileHandle.DangerousGetHandle();
-
-            Console.Out.Write(query);
-            Console.Out.Flush();
+            using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
+            ttyWrite.Write(queryBytes);
+            ttyWrite.Flush();
 
             // Read response — use poll() before each read() to guarantee
             // we never block, even if stty settings didn't take effect
@@ -158,12 +151,12 @@ public static class TerminalBackground
             while (DateTime.UtcNow < deadline)
             {
                 // poll() with 50ms timeout — returns >0 if data available
-                var pfd = new Pollfd { fd = ttyFd, events = POLLIN };
+                var pfd = new Pollfd { fd = 0, events = POLLIN };
                 var ready = poll(ref pfd, 1, 50);
 
                 if (ready > 0 && (pfd.revents & POLLIN) != 0)
                 {
-                    var bytesRead = read(ttyFd, buf, 1);
+                    var bytesRead = read(0, buf, 1);
                     if (bytesRead > 0)
                     {
                         response.Append((char)buf[0]);
@@ -185,9 +178,9 @@ public static class TerminalBackground
             var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
             while (DateTime.UtcNow < drainDeadline)
             {
-                var pfd2 = new Pollfd { fd = ttyFd, events = POLLIN };
+                var pfd2 = new Pollfd { fd = 0, events = POLLIN };
                 if (poll(ref pfd2, 1, 10) <= 0) break;
-                if (read(ttyFd, buf, 1) <= 0) break;
+                if (read(0, buf, 1) <= 0) break;
             }
 
             return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
@@ -434,14 +427,6 @@ public static class TerminalBackground
 
     [DllImport("libc", SetLastError = true)]
     private static extern int read(int fd, byte[] buf, int count);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int open([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int close(int fd);
-
-    private const int O_RDONLY = 0;
 
     /// <summary>
     /// poll() — check if file descriptors have data available without blocking.
