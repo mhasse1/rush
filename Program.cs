@@ -1637,7 +1637,7 @@ while (true)
         if (segment.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("ai ", StringComparison.OrdinalIgnoreCase))
         {
-            var (aiCmd, _, aiStdin) = RedirectionParser.Parse(segment);
+            var (aiCmd, _, aiStdin, _) = RedirectionParser.Parse(segment);
             var aiArgs = aiCmd.Length > 2 ? aiCmd[2..].TrimStart() : "";
             string? pipedInput = null;
             if (aiStdin != null)
@@ -1740,7 +1740,7 @@ while (true)
             !segment.Contains('|') &&
             !segment.Contains("<("))
         {
-            var (catCmd, catRedirect, catStdin) = RedirectionParser.Parse(segment);
+            var (catCmd, catRedirect, catStdin, _) = RedirectionParser.Parse(segment);
             string? catStdinContent = null;
             if (catStdin != null)
             {
@@ -1768,7 +1768,7 @@ while (true)
         }
 
         // ── Parse Redirection ─────────────────────────────────────
-        var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(segment);
+        var (cmdPart, redirect, stdinRedirect, stderrRedirect) = RedirectionParser.Parse(segment);
 
         // ── Translate & Execute (with timing) ────────────────────────
         var translated = translator.Translate(cmdPart);
@@ -1856,7 +1856,7 @@ while (true)
         if (!needsPowerShell)
         {
             var sw2 = Stopwatch.StartNew();
-            var nativeExitCode = RunInteractive(commandToRun, translator, builtinCts.Token);
+            var nativeExitCode = RunInteractive(commandToRun, translator, builtinCts.Token, stderrRedirect);
             lastSegmentFailed = nativeExitCode != 0;
             lastExitCode = nativeExitCode;
             sw2.Stop();
@@ -2316,7 +2316,7 @@ static void RunScriptFile(string path, string[] scriptArgs)
 /// interactive programs, shells, TUIs, and regular CLI tools alike.
 /// </summary>
 static int RunInteractive(string command, CommandTranslator? translator = null,
-    CancellationToken cancelToken = default)
+    CancellationToken cancelToken = default, StderrInfo? stderrRedirect = null)
 {
     try
     {
@@ -2329,8 +2329,51 @@ static int RunInteractive(string command, CommandTranslator? translator = null,
             UseShellExecute = false,
         };
 
+        // Handle 2>/dev/null and 2>file stderr redirection for native commands
+        FileStream? stderrFile = null;
+        if (stderrRedirect != null)
+        {
+            psi.RedirectStandardError = true;
+            if (stderrRedirect.FilePath != "/dev/null")
+            {
+                stderrFile = new FileStream(stderrRedirect.FilePath,
+                    stderrRedirect.Append ? FileMode.Append : FileMode.Create,
+                    FileAccess.Write);
+            }
+        }
+
         var proc = Process.Start(psi);
-        if (proc == null) return 1;
+        if (proc == null)
+        {
+            stderrFile?.Dispose();
+            return 1;
+        }
+
+        // Drain stderr in background to prevent buffer deadlock
+        Task? stderrTask = null;
+        if (stderrRedirect != null)
+        {
+            var errFile = stderrFile; // capture for closure
+            stderrTask = Task.Run(async () =>
+            {
+                try
+                {
+                    if (errFile != null)
+                    {
+                        using var writer = new StreamWriter(errFile, leaveOpen: false);
+                        string? line;
+                        while ((line = await proc.StandardError.ReadLineAsync()) != null)
+                            await writer.WriteLineAsync(line);
+                    }
+                    else
+                    {
+                        // /dev/null — just drain
+                        while (await proc.StandardError.ReadLineAsync() != null) { }
+                    }
+                }
+                catch { }
+            });
+        }
 
         // Poll with cancellation so Ctrl+C can kill hung processes
         if (cancelToken != default)
@@ -2340,6 +2383,7 @@ static int RunInteractive(string command, CommandTranslator? translator = null,
                 if (cancelToken.IsCancellationRequested)
                 {
                     try { proc.Kill(); } catch { }
+                    stderrTask?.Wait(500);
                     proc.Dispose();
                     return 130; // Standard Ctrl+C exit code
                 }
@@ -2349,6 +2393,7 @@ static int RunInteractive(string command, CommandTranslator? translator = null,
         {
             proc.WaitForExit();
         }
+        stderrTask?.Wait(1000);
         var exitCode = proc.ExitCode;
         proc.Dispose();
         return exitCode;
@@ -4649,7 +4694,7 @@ static void RunNonInteractive(string command)
         !CommandTranslator.HasUnquotedPipe(trimmedCmd) &&
         !trimmedCmd.Contains("<("))
     {
-        var (catCmd, catRedirect, catStdin) = RedirectionParser.Parse(trimmedCmd);
+        var (catCmd, catRedirect, catStdin, _) = RedirectionParser.Parse(trimmedCmd);
         string? catStdinContent = null;
         if (catStdin != null)
         {
@@ -4677,7 +4722,7 @@ static void RunNonInteractive(string command)
     command = ExpandCommandSubstitution(command, tr, rs);
 
     // Parse redirections before translation
-    var (cmdPart, redirect, stdinRedirect) = RedirectionParser.Parse(command);
+    var (cmdPart, redirect, stdinRedirect, _) = RedirectionParser.Parse(command);
     var translated = tr.Translate(cmdPart) ?? cmdPart;
     var commandToRun = translated;
 

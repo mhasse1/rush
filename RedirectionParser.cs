@@ -8,13 +8,12 @@ public static class RedirectionParser
 {
     /// <summary>
     /// Parse redirect operators from a command string.
-    /// Returns (cleanCommand, stdoutRedirect, stdinRedirect).
-    /// 2> and 2>> are left in the command for PowerShell to handle natively.
+    /// Returns (cleanCommand, stdoutRedirect, stdinRedirect, stderrRedirect).
     /// </summary>
-    public static (string command, RedirectInfo? redirect, StdinInfo? stdin) Parse(string input)
+    public static (string command, RedirectInfo? redirect, StdinInfo? stdin, StderrInfo? stderr) Parse(string input)
     {
         var trimmed = input.TrimEnd();
-        if (string.IsNullOrEmpty(trimmed)) return (input, null, null);
+        if (string.IsNullOrEmpty(trimmed)) return (input, null, null, null);
 
         bool inSQ = false, inDQ = false;
 
@@ -34,13 +33,13 @@ public static class RedirectionParser
             if (ch == '2' && i + 3 < trimmed.Length
                 && trimmed[i + 1] == '>' && trimmed[i + 2] == '&' && trimmed[i + 3] == '1')
             { ops.Add((i, "2>&1")); i += 3; }
-            // 2>> — skip past but leave in command for PowerShell
+            // 2>> — stderr append redirect
             else if (ch == '2' && i + 2 < trimmed.Length
                      && trimmed[i + 1] == '>' && trimmed[i + 2] == '>')
-            { i += 2; }
-            // 2> — skip past but leave in command for PowerShell
+            { ops.Add((i, "2>>")); i += 2; }
+            // 2> — stderr redirect
             else if (ch == '2' && i + 1 < trimmed.Length && trimmed[i + 1] == '>')
-            { i += 1; }
+            { ops.Add((i, "2>")); i += 1; }
             // >>
             else if (ch == '>' && i + 1 < trimmed.Length && trimmed[i + 1] == '>')
             { ops.Add((i, ">>")); i += 1; }
@@ -52,11 +51,12 @@ public static class RedirectionParser
             { ops.Add((i, "<")); }
         }
 
-        if (ops.Count == 0) return (input, null, null);
+        if (ops.Count == 0) return (input, null, null, null);
 
         // Phase 2: Process operators — parse file targets, decide what to strip.
         RedirectInfo? stdoutRedirect = null;
         StdinInfo? stdinRedirect = null;
+        StderrInfo? stderrRedirect = null;
         bool hasMerge = false;
         var stripRanges = new List<(int start, int end)>(); // [start, end)
 
@@ -71,7 +71,7 @@ public static class RedirectionParser
                 continue;
             }
 
-            // For >, >>, < — parse the target file path
+            // For >, >>, <, 2>, 2>> — parse the target file path
             int j = opEnd;
             while (j < trimmed.Length && trimmed[j] == ' ') j++;
             if (j >= trimmed.Length) continue; // no target — leave as-is
@@ -110,6 +110,8 @@ public static class RedirectionParser
 
             if (op == "<")
                 stdinRedirect = new StdinInfo(filePath);
+            else if (op is "2>" or "2>>")
+                stderrRedirect = new StderrInfo(filePath, op == "2>>");
             else
                 stdoutRedirect = new RedirectInfo(filePath, op == ">>");
         }
@@ -125,7 +127,7 @@ public static class RedirectionParser
         }
 
         if (stripRanges.Count == 0)
-            return (input, stdoutRedirect, stdinRedirect);
+            return (input, stdoutRedirect, stdinRedirect, null);
 
         // Phase 4: Build clean command by removing strip ranges.
         var sorted = stripRanges.OrderBy(r => r.start).ToList();
@@ -138,7 +140,7 @@ public static class RedirectionParser
         }
         if (cursor < trimmed.Length) sb.Append(trimmed[cursor..]);
 
-        return (sb.ToString().Trim(), stdoutRedirect, stdinRedirect);
+        return (sb.ToString().Trim(), stdoutRedirect, stdinRedirect, stderrRedirect);
     }
 }
 
@@ -147,3 +149,6 @@ public record RedirectInfo(string FilePath, bool Append, bool MergeStderr = fals
 
 /// <summary>Stdin redirect source.</summary>
 public record StdinInfo(string FilePath);
+
+/// <summary>Stderr redirect target (2> or 2>>).</summary>
+public record StderrInfo(string FilePath, bool Append);
