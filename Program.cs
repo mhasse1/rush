@@ -3100,6 +3100,9 @@ static string PrintfFormat(string format, string[] args)
             {
                 case 'n': sb.Append('\n'); i++; continue;
                 case 't': sb.Append('\t'); i++; continue;
+                case 'e': sb.Append('\x1b'); i++; continue;
+                case 'a': sb.Append('\a'); i++; continue;
+                case 'r': sb.Append('\r'); i++; continue;
                 case '\\': sb.Append('\\'); i++; continue;
                 case '0': sb.Append('\0'); i++; continue;
             }
