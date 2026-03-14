@@ -188,7 +188,7 @@ Theme.MinContrast = config.GetContrastRatio();
 // Apply saved background color BEFORE Theme.Initialize so the banner prints
 // with correct colors — no visible glitch window.
 if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
-    Theme.SetBackground(config.Bg, emitOsc: false);
+    Theme.SetBackground(config.Bg);
 Theme.Initialize(config.GetThemeOverride());
 bool rootBgApplied = false;
 if (Prompt.IsRoot())
@@ -256,8 +256,28 @@ lineEditor.ShowCompletionsHandler = () =>
 // ── Rush Environment Variables ───────────────────────────────────────
 InjectRushEnvVars(runspace, Version, isLoginShell);
 
-// ── Run Startup Scripts ─────────────────────────────────────────────
-RunStartupScripts(runspace, scriptEngine);
+// ── State ────────────────────────────────────────────────────────────
+bool signalExit = false; // Set by SIGHUP/SIGTERM to trigger graceful exit
+
+// ── Create ShellState ────────────────────────────────────────────────
+var state = new ShellState
+{
+    Runspace = runspace,
+    Translator = translator,
+    ScriptEngine = scriptEngine,
+    Config = config,
+    LineEditor = lineEditor,
+    JobManager = jobManager,
+    Prompt = prompt,
+    Host = host,
+    TabCompleter = tabCompleter,
+    SetE = cfgStopOnError,
+    SetX = cfgTrace,
+    SetPipefail = cfgPipefail,
+};
+
+// ── Run Startup Scripts (with full builtin support) ─────────────────
+RunStartupScripts(runspace, scriptEngine, state);
 
 // ── Sync .NET Working Directory ──────────────────────────────────────
 // PowerShell's runspace may have a different working directory than
@@ -282,17 +302,6 @@ catch { /* best-effort — don't crash startup */ }
 // ── Capture State Baseline (for reload --hard) ──────────────────────
 ReloadState.CaptureBaseline(runspace);
 
-// ── State ────────────────────────────────────────────────────────────
-string? previousDirectory = null;
-var dirStack = new Stack<string>();
-PowerShell? runningPs = null;
-var builtinCts = new CancellationTokenSource(); // Ctrl+C for .NET builtins
-var traps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-bool setE = cfgStopOnError;   // set -e: exit on error (from config or set -e)
-bool setX = cfgTrace;         // set -x: trace commands (from config or set -x)
-bool setPipefail = cfgPipefail; // set -o pipefail (from config or set -o pipefail)
-bool signalExit = false; // Set by SIGHUP/SIGTERM to trigger graceful exit
-
 // ── Hot-Reload State Restoration ─────────────────────────────────────
 if (isResuming)
 {
@@ -301,7 +310,13 @@ if (isResuming)
         var saved = ReloadState.Load();
         if (saved != null)
         {
-            ReloadState.Restore(saved, runspace, ref previousDirectory, ref setE, ref setX, ref setPipefail);
+            string? prevDir = state.PreviousDirectory;
+            bool tmpE = state.SetE, tmpX = state.SetX, tmpPf = state.SetPipefail;
+            ReloadState.Restore(saved, runspace, ref prevDir, ref tmpE, ref tmpX, ref tmpPf);
+            state.PreviousDirectory = prevDir;
+            state.SetE = tmpE;
+            state.SetX = tmpX;
+            state.SetPipefail = tmpPf;
             Console.ForegroundColor = Theme.Current.Muted;
             Console.WriteLine("  session restored");
             Console.ResetColor();
@@ -319,13 +334,13 @@ if (isResuming)
 Console.CancelKeyPress += (_, e) =>
 {
     e.Cancel = true; // Don't kill the process
-    if (runningPs != null)
+    if (state.RunningPs != null)
     {
-        try { runningPs.Stop(); } // Interrupt running PowerShell pipeline
+        try { state.RunningPs.Stop(); } // Interrupt running PowerShell pipeline
         catch { }
     }
-    try { builtinCts.Cancel(); } catch { } // Signal .NET builtins (cat, read, native procs)
-    // If at the prompt (runningPs == null), LineEditor already handles Ctrl+C
+    try { state.BuiltinCts.Cancel(); } catch { } // Signal .NET builtins (cat, read, native procs)
+    // If at the prompt (RunningPs == null), LineEditor already handles Ctrl+C
 };
 
 // Ctrl+Z (SIGTSTP) — ignore it. .NET's process model makes proper Unix
@@ -351,7 +366,7 @@ if (!OperatingSystem.IsWindows())
     {
         ctx.Cancel = true; // Prevent default termination
         signalExit = true;
-        try { runningPs?.Stop(); } catch { }
+        try { state.RunningPs?.Stop(); } catch { }
     });
 
     // SIGTERM — system shutdown or kill request
@@ -360,7 +375,7 @@ if (!OperatingSystem.IsWindows())
         ctx.Cancel = true;
         signalExit = true;
         Theme.RestoreBackground();
-        try { runningPs?.Stop(); } catch { }
+        try { state.RunningPs?.Stop(); } catch { }
     });
 }
 
@@ -414,9 +429,6 @@ while (true)
             Console.Write(indent);
             Console.ResetColor();
 
-            // TODO: Status line will show contextual hints (esc v → $EDITOR, etc.)
-            // See docs/status-line-design.md
-
             var continuation = lineEditor.ReadLine();
 
             if (continuation == null) break;           // Ctrl+D
@@ -453,82 +465,144 @@ while (true)
         var psCode = scriptEngine.TranspileLine(input);
         if (psCode != null)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            try
+            var (rushFailed, rushShouldExit) = ExecuteTranspiledBlock(psCode, state);
+            if (!rushFailed)
             {
-                using var ps = System.Management.Automation.PowerShell.Create();
-                ps.Runspace = runspace;
-                ps.AddScript(psCode);
-
-                runningPs = ps;
-                List<System.Management.Automation.PSObject> results;
-                try
-                {
-                    results = ps.Invoke().ToList();
-                }
-                catch (System.Management.Automation.PipelineStoppedException)
-                {
-                    Console.WriteLine();
-                    sw.Stop();
-                    runningPs = null;
-                    prompt.SetLastCommandFailed(true);
-                    continue;
-                }
-                finally
-                {
-                    runningPs = null;
-                }
-
-                sw.Stop();
-
-                if (ps.HadErrors)
-                {
-                    OutputRenderer.RenderErrors(ps.Streams);
-                    prompt.SetLastCommandFailed(true);
-                }
-                else
-                {
-                    prompt.SetLastCommandFailed(false);
-
-                    // Track variable assignments for type-aware dot-completion (V2)
-                    TrackVariableAssignment(input, tabCompleter);
-                }
-
-                if (results.Count > 0)
-                    OutputRenderer.Render(results.ToArray());
-
-                if (host.ShouldExit) break;
+                // Track variable assignments for type-aware dot-completion (V2)
+                TrackVariableAssignment(input, tabCompleter);
             }
-            catch (System.Management.Automation.PipelineStoppedException)
-            {
-                Console.WriteLine();
-                prompt.SetLastCommandFailed(true);
-            }
-            catch (Exception ex)
-            {
-                prompt.SetLastCommandFailed(true);
-                var msg = ex.InnerException?.Message ?? ex.Message;
-                Console.ForegroundColor = Theme.Current.Error;
-                Console.Error.WriteLine($"error: {msg}");
-                Console.ResetColor();
-            }
-
-            if (sw.ElapsedMilliseconds > 500)
-            {
-                Console.ForegroundColor = Theme.Current.Muted;
-                var elapsed = sw.Elapsed;
-                if (elapsed.TotalMinutes >= 1)
-                    Console.WriteLine($"  took {elapsed.Minutes}m {elapsed.Seconds}s");
-                else
-                    Console.WriteLine($"  took {elapsed.TotalSeconds:F1}s");
-                Console.ResetColor();
-            }
+            prompt.SetLastCommandFailed(rushFailed);
+            if (rushShouldExit) break;
         }
 
         lineEditor.SaveHistory();
         continue;
     }
 
+    // ── Shell command processing (non-Rush syntax) ──────────────────
+    var (cmdFailed, cmdExitCode, cmdShouldExit) = ProcessCommand(input, state);
+    if (cmdShouldExit || signalExit) break;
+
+    prompt.SetLastCommandFailed(cmdFailed, cmdExitCode);
+    lineEditor.SaveHistory();
+}
+
+// ── Graceful Exit ────────────────────────────────────────────────────
+
+// Fire EXIT trap if registered
+if (state.Traps.TryGetValue("EXIT", out var exitTrap))
+{
+    var exitTranslated = translator.Translate(exitTrap) ?? exitTrap;
+    using var exitPs = PowerShell.Create();
+    exitPs.Runspace = runspace;
+    exitPs.AddScript(exitTranslated);
+    try { exitPs.Invoke(); } catch { }
+}
+
+jobManager.Dispose();
+lineEditor.SaveHistory();
+runspace.Close();
+runspace.Dispose();
+Console.Write("\x1b[0 q"); // Reset cursor shape
+Theme.RestoreBackground(); // Restore original bg if root shell changed it
+if (host.ShouldExit)
+    Environment.ExitCode = host.ExitCode;
+if (!signalExit) // Don't write to a dead terminal (SIGHUP)
+    Console.WriteLine("bye.");
+SshPool.Cleanup();
+
+// Dispose signal registrations
+sigtstpReg?.Dispose();
+sighupReg?.Dispose();
+sigtermReg?.Dispose();
+
+// ═══════════════════════════════════════════════════════════════════
+// Shared State & Dispatch
+// ═══════════════════════════════════════════════════════════════════
+
+/// <summary>
+/// Execute transpiled PowerShell code, handling errors, output, and timing.
+/// Used by both the REPL (for Rush syntax blocks) and startup scripts.
+/// </summary>
+static (bool failed, bool shouldExit) ExecuteTranspiledBlock(string psCode, ShellState state)
+{
+    bool failed = false;
+    bool shouldExit = false;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    try
+    {
+        using var ps = System.Management.Automation.PowerShell.Create();
+        ps.Runspace = state.Runspace;
+        ps.AddScript(psCode);
+
+        state.RunningPs = ps;
+        List<System.Management.Automation.PSObject> results;
+        try
+        {
+            results = ps.Invoke().ToList();
+        }
+        catch (System.Management.Automation.PipelineStoppedException)
+        {
+            Console.WriteLine();
+            sw.Stop();
+            state.RunningPs = null;
+            return (true, false);
+        }
+        finally
+        {
+            state.RunningPs = null;
+        }
+
+        sw.Stop();
+
+        if (ps.HadErrors)
+        {
+            OutputRenderer.RenderErrors(ps.Streams);
+            failed = true;
+        }
+
+        if (results.Count > 0)
+            OutputRenderer.Render(results.ToArray());
+
+        if (state.Host?.ShouldExit == true)
+            shouldExit = true;
+    }
+    catch (System.Management.Automation.PipelineStoppedException)
+    {
+        Console.WriteLine();
+        failed = true;
+    }
+    catch (Exception ex)
+    {
+        failed = true;
+        var msg = ex.InnerException?.Message ?? ex.Message;
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"error: {msg}");
+        Console.ResetColor();
+    }
+
+    if (state.IsInteractive && sw.ElapsedMilliseconds > 500)
+    {
+        Console.ForegroundColor = Theme.Current.Muted;
+        var elapsed = sw.Elapsed;
+        if (elapsed.TotalMinutes >= 1)
+            Console.WriteLine($"  took {elapsed.Minutes}m {elapsed.Seconds}s");
+        else
+            Console.WriteLine($"  took {elapsed.TotalSeconds:F1}s");
+        Console.ResetColor();
+    }
+
+    return (failed, shouldExit);
+}
+
+/// <summary>
+/// Process a shell command line through the full dispatch pipeline:
+/// heredoc, bang expansion, brace/tilde/env/arithmetic/process/command substitution,
+/// chain splitting, and for each segment: builtin dispatch + translate + execute.
+/// This is the shared code path for both REPL and script execution.
+/// </summary>
+static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input, ShellState state)
+{
     // ── Heredoc Detection ───────────────────────────────────────────
     string? heredocContent = null;
     input = DetectAndReadHeredoc(input, out heredocContent);
@@ -538,10 +612,11 @@ while (true)
         input = $"@'\n{heredocContent}\n'@ | {input}";
     }
 
-    // ── Bang Expansion ──────────────────────────────────────────────
-    if (input.Contains('!'))
+    // ── Bang Expansion (interactive only) ──────────────────────────
+    if (state.IsInteractive && input.Contains('!'))
     {
         bool expanded = false;
+        var lineEditor = state.LineEditor!;
 
         // !N — run Nth command from history
         if (input.StartsWith('!') && input.Length > 1 && char.IsDigit(input[1]))
@@ -616,15 +691,15 @@ while (true)
     input = ExpandEnvVars(input);
 
     // ── Arithmetic Expansion $((expr)) ──────────────────────────────
-    input = ExpandArithmetic(input, runspace);
+    input = ExpandArithmetic(input, state.Runspace);
 
     // ── Process Substitution <(cmd) ────────────────────────────────
     List<string>? procSubTempFiles = null;
     if (input.Contains("<("))
-        (input, procSubTempFiles) = ExpandProcessSubstitution(input, translator, runspace);
+        (input, procSubTempFiles) = ExpandProcessSubstitution(input, state.Translator, state.Runspace);
 
     // ── Command Substitution $(...) and `...` ────────────────────────
-    input = ExpandCommandSubstitution(input, translator, runspace);
+    input = ExpandCommandSubstitution(input, state.Translator, state.Runspace);
 
     // ── Split on Chain Operators (&&, ||, ;) ──────────────────────────
     var (chainSegments, chainOps) = SplitChainOperators(input);
@@ -639,10 +714,10 @@ while (true)
         if (string.IsNullOrEmpty(segment)) continue;
 
         // Reset Ctrl+C token for this segment (previous cancellation shouldn't bleed)
-        if (builtinCts.IsCancellationRequested)
+        if (state.BuiltinCts.IsCancellationRequested)
         {
-            builtinCts.Dispose();
-            builtinCts = new CancellationTokenSource();
+            state.BuiltinCts.Dispose();
+            state.BuiltinCts = new CancellationTokenSource();
         }
 
         // Chain logic: && skips on failure, || skips on success, ; always runs
@@ -671,29 +746,32 @@ while (true)
         }
 
         // ── Try Built-in Commands ───────────────────────────────────
-        // Job control builtins
+        // Job control builtins (interactive only)
         if (segment.Equals("jobs", StringComparison.OrdinalIgnoreCase))
         {
-            var allJobs = jobManager.GetJobs();
-            if (allJobs.Count == 0)
+            if (state.JobManager != null)
             {
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine("  no jobs");
-                Console.ResetColor();
-            }
-            else
-            {
-                foreach (var job in allJobs)
+                var allJobs = state.JobManager.GetJobs();
+                if (allJobs.Count == 0)
                 {
-                    var status = job.IsCompleted ? "done" : "running";
-                    var elapsed = DateTime.Now - job.StartTime;
                     Console.ForegroundColor = Theme.Current.Muted;
-                    Console.Write($"  [{job.JobId}] ");
-                    Console.ForegroundColor = job.IsCompleted ? Theme.Current.Accent
-                                            : Theme.Current.Warning;
-                    Console.Write($"{status,-10}");
+                    Console.WriteLine("  no jobs");
                     Console.ResetColor();
-                    Console.WriteLine($" {job.Command}  ({elapsed.TotalSeconds:F0}s)");
+                }
+                else
+                {
+                    foreach (var job in allJobs)
+                    {
+                        var status = job.IsCompleted ? "done" : "running";
+                        var elapsed = DateTime.Now - job.StartTime;
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.Write($"  [{job.JobId}] ");
+                        Console.ForegroundColor = job.IsCompleted ? Theme.Current.Accent
+                                                : Theme.Current.Warning;
+                        Console.Write($"{status,-10}");
+                        Console.ResetColor();
+                        Console.WriteLine($" {job.Command}  ({elapsed.TotalSeconds:F0}s)");
+                    }
                 }
             }
             lastSegmentFailed = false;
@@ -703,11 +781,12 @@ while (true)
         if (segment.StartsWith("fg ", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("fg", StringComparison.OrdinalIgnoreCase))
         {
+            if (state.JobManager == null) { lastSegmentFailed = true; continue; }
             var idStr = segment.Length > 3 ? segment[3..].Trim().TrimStart('%') : "";
             int fgId;
             if (!int.TryParse(idStr, out fgId))
             {
-                var recent = jobManager.GetJobs()
+                var recent = state.JobManager.GetJobs()
                     .Where(j => !j.IsCompleted)
                     .OrderByDescending(j => j.JobId)
                     .FirstOrDefault();
@@ -722,7 +801,7 @@ while (true)
                 }
             }
 
-            var job = jobManager.GetJob(fgId);
+            var job = state.JobManager.GetJob(fgId);
             if (job == null)
             {
                 Console.ForegroundColor = Theme.Current.Error;
@@ -733,7 +812,7 @@ while (true)
             }
 
             // Bring background job to foreground — wait for it
-            var fgResults = jobManager.WaitForJob(fgId);
+            var fgResults = state.JobManager.WaitForJob(fgId);
             if (fgResults != null && fgResults.Count > 0)
                 OutputRenderer.Render(fgResults);
             continue;
@@ -752,10 +831,11 @@ while (true)
 
         if (segment.StartsWith("kill %", StringComparison.OrdinalIgnoreCase))
         {
+            if (state.JobManager == null) { lastSegmentFailed = true; continue; }
             var idStr = segment[6..].Trim();
             if (int.TryParse(idStr, out var killId))
             {
-                if (jobManager.KillJob(killId))
+                if (state.JobManager.KillJob(killId))
                 {
                     Console.ForegroundColor = Theme.Current.Muted;
                     Console.WriteLine($"  [{killId}] killed");
@@ -775,10 +855,11 @@ while (true)
         if (segment.Equals("wait", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("wait ", StringComparison.OrdinalIgnoreCase))
         {
+            if (state.JobManager == null) { lastSegmentFailed = false; continue; }
             if (segment.Equals("wait", StringComparison.OrdinalIgnoreCase))
             {
                 // Wait for ALL running jobs
-                var running = jobManager.GetJobs().Where(j => !j.IsCompleted).ToList();
+                var running = state.JobManager.GetJobs().Where(j => !j.IsCompleted).ToList();
                 if (running.Count == 0)
                 {
                     Console.ForegroundColor = Theme.Current.Muted;
@@ -789,7 +870,7 @@ while (true)
                 {
                     foreach (var job in running)
                     {
-                        var results = jobManager.WaitForJob(job.JobId);
+                        var results = state.JobManager.WaitForJob(job.JobId);
                         Console.ForegroundColor = Theme.Current.Muted;
                         Console.WriteLine($"  [{job.JobId}] done: {job.Command}");
                         Console.ResetColor();
@@ -803,7 +884,7 @@ while (true)
                 var idStr = segment[5..].Trim().TrimStart('%');
                 if (int.TryParse(idStr, out var waitId))
                 {
-                    var results = jobManager.WaitForJob(waitId);
+                    var results = state.JobManager.WaitForJob(waitId);
                     if (results == null)
                     {
                         Console.ForegroundColor = Theme.Current.Error;
@@ -832,7 +913,8 @@ while (true)
 
         if (segment.Equals("help", StringComparison.OrdinalIgnoreCase))
         {
-            ShowHelp(lineEditor, translator);
+            if (state.LineEditor != null)
+                ShowHelp(state.LineEditor, state.Translator);
             lastSegmentFailed = false;
             continue;
         }
@@ -857,16 +939,16 @@ while (true)
                     Console.WriteLine($"{whichCmd}: rush builtin");
                     lastSegmentFailed = false;
                 }
-                else if (config.Aliases.ContainsKey(whichCmd))
+                else if (state.Config.Aliases.ContainsKey(whichCmd))
                 {
-                    Console.WriteLine($"{whichCmd}: aliased to '{config.Aliases[whichCmd]}'");
+                    Console.WriteLine($"{whichCmd}: aliased to '{state.Config.Aliases[whichCmd]}'");
                     lastSegmentFailed = false;
                 }
                 else
                 {
                     // Fall through to Get-Command for external commands
                     using var ps = PowerShell.Create();
-                    ps.Runspace = runspace;
+                    ps.Runspace = state.Runspace;
                     ps.AddScript($"Get-Command '{whichCmd.Replace("'", "''")}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source");
                     var results = ps.Invoke();
                     if (results.Count > 0 && results[0] != null)
@@ -895,30 +977,32 @@ while (true)
             // Backward-compatible shortcuts
             if (setArg.Equals("vi", StringComparison.OrdinalIgnoreCase))
             {
-                lineEditor.Mode = EditMode.Vi;
-                config.EditMode = "vi";
+                if (state.LineEditor != null)
+                    state.LineEditor.Mode = EditMode.Vi;
+                state.Config.EditMode = "vi";
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  editMode = vi");
                 Console.ResetColor();
             }
             else if (setArg.Equals("emacs", StringComparison.OrdinalIgnoreCase))
             {
-                lineEditor.Mode = EditMode.Emacs;
-                config.EditMode = "emacs";
+                if (state.LineEditor != null)
+                    state.LineEditor.Mode = EditMode.Emacs;
+                state.Config.EditMode = "emacs";
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  editMode = emacs");
                 Console.ResetColor();
             }
-            else if (setArg == "-e") { setE = true; config.StopOnError = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = true"); Console.ResetColor(); }
-            else if (setArg == "+e") { setE = false; config.StopOnError = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = false"); Console.ResetColor(); }
-            else if (setArg == "-x") { setX = true; config.TraceCommands = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = true"); Console.ResetColor(); }
-            else if (setArg == "+x") { setX = false; config.TraceCommands = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = false"); Console.ResetColor(); }
-            else if (setArg == "-o pipefail") { setPipefail = true; config.PipefailMode = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = true"); Console.ResetColor(); }
-            else if (setArg == "+o pipefail") { setPipefail = false; config.PipefailMode = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = false"); Console.ResetColor(); }
+            else if (setArg == "-e") { state.SetE = true; state.Config.StopOnError = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = true"); Console.ResetColor(); }
+            else if (setArg == "+e") { state.SetE = false; state.Config.StopOnError = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  stopOnError = false"); Console.ResetColor(); }
+            else if (setArg == "-x") { state.SetX = true; state.Config.TraceCommands = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = true"); Console.ResetColor(); }
+            else if (setArg == "+x") { state.SetX = false; state.Config.TraceCommands = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  traceCommands = false"); Console.ResetColor(); }
+            else if (setArg == "-o pipefail") { state.SetPipefail = true; state.Config.PipefailMode = true; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = true"); Console.ResetColor(); }
+            else if (setArg == "+o pipefail") { state.SetPipefail = false; state.Config.PipefailMode = false; Console.ForegroundColor = Theme.Current.Muted; Console.WriteLine("  pipefailMode = false"); Console.ResetColor(); }
             else if (string.IsNullOrEmpty(setArg))
             {
                 // set (no args) — show all settings grouped by category
-                ShowAllSettings(config, setE, setX, setPipefail);
+                ShowAllSettings(state);
             }
             else if (setArg.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
             {
@@ -927,10 +1011,10 @@ while (true)
                 var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length == 2)
                 {
-                    if (config.SetValue(parts[0], parts[1]))
+                    if (state.Config.SetValue(parts[0], parts[1]))
                     {
-                        ApplySettingToRuntime(parts[0], config, ref setE, ref setX, ref setPipefail, lineEditor);
-                        config.Save();
+                        ApplySettingToRuntime(parts[0], state);
+                        state.Config.Save();
                         Console.ForegroundColor = Theme.Current.Muted;
                         Console.WriteLine($"  {parts[0]} = {parts[1]} (saved)");
                         Console.ResetColor();
@@ -1001,7 +1085,7 @@ while (true)
                     var info = RushConfig.FindSetting(parts[0]);
                     if (info != null)
                     {
-                        var val = config.GetValue(info.Key);
+                        var val = state.Config.GetValue(info.Key);
                         var isDefault = val == info.DefaultValue;
                         Console.ForegroundColor = Theme.Current.Banner;
                         Console.Write($"  {info.Key}");
@@ -1034,9 +1118,9 @@ while (true)
                 else
                 {
                     // Set value for session
-                    if (config.SetValue(parts[0], parts[1]))
+                    if (state.Config.SetValue(parts[0], parts[1]))
                     {
-                        ApplySettingToRuntime(parts[0], config, ref setE, ref setX, ref setPipefail, lineEditor);
+                        ApplySettingToRuntime(parts[0], state);
                         Console.ForegroundColor = Theme.Current.Muted;
                         Console.WriteLine($"  {parts[0]} = {parts[1]}");
                         Console.ResetColor();
@@ -1060,7 +1144,8 @@ while (true)
 
         if (segment.Equals("history -c", StringComparison.OrdinalIgnoreCase))
         {
-            lineEditor.ClearHistory();
+            if (state.LineEditor != null)
+                state.LineEditor.ClearHistory();
             Console.ForegroundColor = Theme.Current.Muted;
             Console.WriteLine("  history cleared");
             Console.ResetColor();
@@ -1070,14 +1155,15 @@ while (true)
 
         if (segment.Equals("history", StringComparison.OrdinalIgnoreCase))
         {
-            ShowHistory(lineEditor);
+            if (state.LineEditor != null)
+                ShowHistory(state.LineEditor);
             lastSegmentFailed = false;
             continue;
         }
 
         if (segment.Equals("alias", StringComparison.OrdinalIgnoreCase))
         {
-            ShowAliases(translator);
+            ShowAliases(state.Translator);
             lastSegmentFailed = false;
             continue;
         }
@@ -1091,9 +1177,9 @@ while (true)
                 // Full binary restart with state preservation
                 try
                 {
-                    var state = ReloadState.Capture(runspace, config, previousDirectory, setE, setX, setPipefail);
-                    ReloadState.Save(state);
-                    lineEditor.SaveHistory();
+                    var rlState = ReloadState.Capture(state.Runspace, state.Config, state.PreviousDirectory, state.SetE, state.SetX, state.SetPipefail);
+                    ReloadState.Save(rlState);
+                    state.LineEditor?.SaveHistory();
 
                     var currentBinary = Environment.ProcessPath ?? "rush";
                     Console.ForegroundColor = Theme.Current.Muted;
@@ -1136,15 +1222,23 @@ while (true)
             else
             {
                 // Soft reload — config only (existing behavior)
-                config = RushConfig.Load();
-                var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
-                setE = reloadE; setX = reloadX; setPipefail = reloadPf;
-                Theme.MinContrast = config.GetContrastRatio();
-                if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
-                    Theme.SetBackground(config.Bg);
+                state.Config = RushConfig.Load();
+                if (state.IsInteractive)
+                {
+                    var (reloadE, reloadX, reloadPf) = state.Config.Apply(state.LineEditor, state.Translator);
+                    state.SetE = reloadE; state.SetX = reloadX; state.SetPipefail = reloadPf;
+                }
+                else
+                {
+                    var (reloadE, reloadX, reloadPf) = state.Config.Apply(null, state.Translator);
+                    state.SetE = reloadE; state.SetX = reloadX; state.SetPipefail = reloadPf;
+                }
+                Theme.MinContrast = state.Config.GetContrastRatio();
+                if (!string.IsNullOrEmpty(state.Config.Bg) && !string.Equals(state.Config.Bg, "off", StringComparison.OrdinalIgnoreCase))
+                    Theme.SetBackground(state.Config.Bg);
                 else
                     Theme.ResetBackground();
-                Theme.Initialize(config.GetThemeOverride());
+                Theme.Initialize(state.Config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  config reloaded");
@@ -1180,7 +1274,7 @@ while (true)
                     proc.Dispose();
 
                     // Re-run init.rush to pick up changes
-                    RunStartupRushFile(runspace, scriptEngine, "init.rush");
+                    RunStartupRushFile(state.Runspace, state.ScriptEngine, "init.rush", state);
                     Console.ForegroundColor = Theme.Current.Muted;
                     Console.WriteLine("  init.rush reloaded");
                     Console.ResetColor();
@@ -1226,9 +1320,9 @@ while (true)
                     (aliasValue.StartsWith('"') && aliasValue.EndsWith('"')))
                     aliasValue = aliasValue[1..^1];
 
-                translator.RegisterAlias(aliasName, aliasValue);
-                config.Aliases[aliasName] = aliasValue;
-                config.Save();
+                state.Translator.RegisterAlias(aliasName, aliasValue);
+                state.Config.Aliases[aliasName] = aliasValue;
+                state.Config.Save();
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  alias {aliasName} → {aliasValue}");
                 Console.ResetColor();
@@ -1240,9 +1334,9 @@ while (true)
         if (segment.StartsWith("unalias ", StringComparison.OrdinalIgnoreCase))
         {
             var name = segment[8..].Trim();
-            if (config.Aliases.Remove(name))
+            if (state.Config.Aliases.Remove(name))
             {
-                config.Save();
+                state.Config.Save();
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  unalias {name} (effective after reload)");
                 Console.ResetColor();
@@ -1286,7 +1380,7 @@ while (true)
                 Environment.SetEnvironmentVariable(varName, varValue);
                 // Also set in PowerShell runspace
                 using var ps = PowerShell.Create();
-                ps.Runspace = runspace;
+                ps.Runspace = state.Runspace;
                 ps.AddScript($"$env:{varName} = '{varValue.Replace("'", "''")}'");
                 ps.Invoke();
 
@@ -1311,7 +1405,7 @@ while (true)
             var varName = segment[6..].Trim();
             Environment.SetEnvironmentVariable(varName, null);
             using var ps = PowerShell.Create();
-            ps.Runspace = runspace;
+            ps.Runspace = state.Runspace;
             ps.AddScript($"Remove-Item Env:{varName} -ErrorAction SilentlyContinue");
             ps.Invoke();
             lastSegmentFailed = false;
@@ -1358,8 +1452,8 @@ while (true)
             }
 
             if (readPrompt != null) Console.Write(readPrompt);
-            var value = CatCommand.ReadLineInterruptible(builtinCts.Token) ?? "";
-            if (builtinCts.IsCancellationRequested)
+            var value = CatCommand.ReadLineInterruptible(state.BuiltinCts.Token) ?? "";
+            if (state.BuiltinCts.IsCancellationRequested)
             {
                 lastSegmentFailed = true;
                 lastExitCode = 130;
@@ -1367,7 +1461,7 @@ while (true)
             }
 
             using var readPs = PowerShell.Create();
-            readPs.Runspace = runspace;
+            readPs.Runspace = state.Runspace;
             readPs.AddScript($"${varName} = '{value.Replace("'", "''")}'");
             readPs.Invoke();
             Environment.SetEnvironmentVariable(varName, value);
@@ -1383,7 +1477,7 @@ while (true)
             var execParts = CommandTranslator.SplitCommandLine(execCmd);
             if (execParts.Length > 0)
             {
-                lineEditor.SaveHistory();
+                state.LineEditor?.SaveHistory();
                 var psi = new ProcessStartInfo
                 {
                     FileName = StripQuotes(execParts[0]),
@@ -1416,14 +1510,14 @@ while (true)
             {
                 var trapCmd = StripQuotes(trapArgs[0]);
                 var signal = trapArgs[1].ToUpperInvariant();
-                traps[signal] = trapCmd;
+                state.Traps[signal] = trapCmd;
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  trap {signal} → {trapCmd}");
                 Console.ResetColor();
             }
             else if (trapArgs.Length == 1 && trapArgs[0] == "-l")
             {
-                foreach (var (sig, cmd) in traps)
+                foreach (var (sig, cmd) in state.Traps)
                 {
                     Console.ForegroundColor = Theme.Current.Muted;
                     Console.WriteLine($"  {sig} → {cmd}");
@@ -1453,11 +1547,11 @@ while (true)
                     // Use ScriptEngine for .rush files, line-by-line for others
                     if (scriptPath.EndsWith(".rush", StringComparison.OrdinalIgnoreCase))
                     {
-                        var psCode = scriptEngine.TranspileFile(scriptSource);
+                        var psCode = state.ScriptEngine.TranspileFile(scriptSource);
                         if (psCode != null)
                         {
                             using var ps = PowerShell.Create();
-                            ps.Runspace = runspace;
+                            ps.Runspace = state.Runspace;
                             ps.AddScript(psCode);
                             var scriptResults = ps.Invoke().ToList();
                             if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
@@ -1465,7 +1559,7 @@ while (true)
 
                             // Reset ErrorActionPreference — TranspileFile sets it to 'Stop'
                             using var reset = PowerShell.Create();
-                            reset.Runspace = runspace;
+                            reset.Runspace = state.Runspace;
                             reset.AddScript("$ErrorActionPreference = 'Continue'");
                             reset.Invoke();
                         }
@@ -1478,9 +1572,9 @@ while (true)
                         {
                             var scriptLine = rawLine.Trim();
                             if (string.IsNullOrEmpty(scriptLine) || scriptLine.StartsWith('#')) continue;
-                            var scriptTranslated = translator.Translate(scriptLine) ?? scriptLine;
+                            var scriptTranslated = state.Translator.Translate(scriptLine) ?? scriptLine;
                             using var ps = PowerShell.Create();
-                            ps.Runspace = runspace;
+                            ps.Runspace = state.Runspace;
                             ps.AddScript(scriptTranslated);
                             var scriptResults = ps.Invoke();
                             if (scriptResults.Count > 0) OutputRenderer.Render(scriptResults);
@@ -1513,11 +1607,11 @@ while (true)
         if (segment.StartsWith("pushd ", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("pushd", StringComparison.OrdinalIgnoreCase))
         {
-            var currentDir = GetRunspaceDir(runspace);
+            var currentDir = GetRunspaceDir(state.Runspace);
             if (segment.Equals("pushd", StringComparison.OrdinalIgnoreCase))
             {
                 // No arg: swap current with top of stack
-                if (dirStack.Count == 0)
+                if (state.DirStack.Count == 0)
                 {
                     Console.ForegroundColor = Theme.Current.Error;
                     Console.Error.WriteLine("pushd: no other directory");
@@ -1526,21 +1620,21 @@ while (true)
                 }
                 else
                 {
-                    var top = dirStack.Pop();
-                    if (currentDir != null) dirStack.Push(currentDir);
-                    var (f, _) = HandleCd(runspace, $"cd {top}", null);
+                    var top = state.DirStack.Pop();
+                    if (currentDir != null) state.DirStack.Push(currentDir);
+                    var (f, _) = HandleCd(state.Runspace, $"cd {top}", null);
                     lastSegmentFailed = f;
-                    if (!f) PrintDirStack(runspace, dirStack);
+                    if (!f) PrintDirStack(state.Runspace, state.DirStack);
                 }
             }
             else
             {
                 // pushd <dir>: push current, cd to target
                 var target = segment[6..].Trim();
-                if (currentDir != null) dirStack.Push(currentDir);
-                var (f, _) = HandleCd(runspace, $"cd {target}", null);
-                if (f) { if (currentDir != null) dirStack.Pop(); } // undo push on failure
-                else PrintDirStack(runspace, dirStack);
+                if (currentDir != null) state.DirStack.Push(currentDir);
+                var (f, _) = HandleCd(state.Runspace, $"cd {target}", null);
+                if (f) { if (currentDir != null) state.DirStack.Pop(); } // undo push on failure
+                else PrintDirStack(state.Runspace, state.DirStack);
                 lastSegmentFailed = f;
             }
             continue;
@@ -1548,7 +1642,7 @@ while (true)
 
         if (segment.Equals("popd", StringComparison.OrdinalIgnoreCase))
         {
-            if (dirStack.Count == 0)
+            if (state.DirStack.Count == 0)
             {
                 Console.ForegroundColor = Theme.Current.Error;
                 Console.Error.WriteLine("popd: directory stack empty");
@@ -1557,10 +1651,10 @@ while (true)
             }
             else
             {
-                var target = dirStack.Pop();
-                var (f, _) = HandleCd(runspace, $"cd {target}", null);
+                var target = state.DirStack.Pop();
+                var (f, _) = HandleCd(state.Runspace, $"cd {target}", null);
                 lastSegmentFailed = f;
-                if (!f) PrintDirStack(runspace, dirStack);
+                if (!f) PrintDirStack(state.Runspace, state.DirStack);
             }
             continue;
         }
@@ -1569,7 +1663,7 @@ while (true)
             segment.StartsWith("dirs ", StringComparison.OrdinalIgnoreCase))
         {
             bool verbose = segment.Contains("-v", StringComparison.OrdinalIgnoreCase);
-            var currentDir = GetRunspaceDir(runspace) ?? ".";
+            var currentDir = GetRunspaceDir(state.Runspace) ?? ".";
             var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
             if (verbose)
@@ -1577,12 +1671,12 @@ while (true)
                 string Shorten(string p) => p.StartsWith(home) ? "~" + p[home.Length..] : p;
                 Console.WriteLine($"  0  {Shorten(currentDir)}");
                 int idx = 1;
-                foreach (var d in dirStack)
+                foreach (var d in state.DirStack)
                     Console.WriteLine($"  {idx++}  {Shorten(d)}");
             }
             else
             {
-                PrintDirStack(runspace, dirStack);
+                PrintDirStack(state.Runspace, state.DirStack);
             }
             lastSegmentFailed = false;
             continue;
@@ -1597,7 +1691,6 @@ while (true)
             // Fall through to cd handler below
         }
 
-        // ── path: PATH management ─────────────────────────────────────
         // ── ai --exec: run last AI response ──────────────────────
         if (segment.Equals("ai --exec", StringComparison.OrdinalIgnoreCase) ||
             segment.TrimEnd().Equals("ai --exec", StringComparison.OrdinalIgnoreCase))
@@ -1640,61 +1733,65 @@ while (true)
         if (segment.Equals("ai", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("ai ", StringComparison.OrdinalIgnoreCase))
         {
-            var (aiCmd, _, aiStdin, _) = RedirectionParser.Parse(segment);
-            var aiArgs = aiCmd.Length > 2 ? aiCmd[2..].TrimStart() : "";
-            string? pipedInput = null;
-            if (aiStdin != null)
+            if (state.IsInteractive)
             {
-                try { pipedInput = File.ReadAllText(aiStdin.FilePath); }
-                catch (Exception ex)
+                var (aiCmd, _, aiStdin, _) = RedirectionParser.Parse(segment);
+                var aiArgs = aiCmd.Length > 2 ? aiCmd[2..].TrimStart() : "";
+                string? pipedInput = null;
+                if (aiStdin != null)
                 {
-                    Console.ForegroundColor = Theme.Current.Error;
-                    Console.Error.WriteLine($"ai: {ex.Message}");
-                    Console.ResetColor();
-                    lastSegmentFailed = true;
-                    continue;
+                    try { pipedInput = File.ReadAllText(aiStdin.FilePath); }
+                    catch (Exception ex)
+                    {
+                        Console.ForegroundColor = Theme.Current.Error;
+                        Console.Error.WriteLine($"ai: {ex.Message}");
+                        Console.ResetColor();
+                        lastSegmentFailed = true;
+                        continue;
+                    }
                 }
-            }
-            using var aiCts = new CancellationTokenSource();
-            ConsoleCancelEventHandler aiCancel = (_, e) => { e.Cancel = true; aiCts.Cancel(); };
-            Console.CancelKeyPress += aiCancel;
-            try
-            {
-                // Check for --agent flag: autonomous multi-turn agent mode
-                if (aiArgs.Contains("--agent", StringComparison.OrdinalIgnoreCase))
+                using var aiCts = new CancellationTokenSource();
+                ConsoleCancelEventHandler aiCancel = (_, e) => { e.Cancel = true; aiCts.Cancel(); };
+                Console.CancelKeyPress += aiCancel;
+                try
                 {
-                    var llm = new LlmMode(runspace, scriptEngine, translator, Version);
-                    var (aiOk, _) = AiCommand.ExecuteAgentAsync(aiArgs, llm, config,
-                        lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
-                    lastSegmentFailed = !aiOk;
+                    // Check for --agent flag: autonomous multi-turn agent mode
+                    if (aiArgs.Contains("--agent", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var llm = new LlmMode(state.Runspace, state.ScriptEngine, state.Translator, RushVersion.Full);
+                        var (aiOk, _) = AiCommand.ExecuteAgentAsync(aiArgs, llm, state.Config,
+                            state.LineEditor!.History, aiCts.Token).GetAwaiter().GetResult();
+                        lastSegmentFailed = !aiOk;
+                    }
+                    else
+                    {
+                        var (aiOk, _) = AiCommand.ExecuteAsync(aiArgs, pipedInput, state.Config,
+                            state.LineEditor!.History, aiCts.Token).GetAwaiter().GetResult();
+                        lastSegmentFailed = !aiOk;
+                    }
                 }
-                else
+                finally
                 {
-                    var (aiOk, _) = AiCommand.ExecuteAsync(aiArgs, pipedInput, config,
-                        lineEditor.History, aiCts.Token).GetAwaiter().GetResult();
-                    lastSegmentFailed = !aiOk;
+                    Console.CancelKeyPress -= aiCancel;
                 }
-            }
-            finally
-            {
-                Console.CancelKeyPress -= aiCancel;
             }
             continue;
         }
 
+        // ── path: PATH management ─────────────────────────────────────
         if (segment.Equals("path", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("path ", StringComparison.OrdinalIgnoreCase))
         {
             var pathArgs = segment.Length > 4 ? segment[4..].Trim() : "";
-            lastSegmentFailed = HandlePathCommand(pathArgs, runspace);
+            lastSegmentFailed = HandlePathCommand(pathArgs, state.Runspace);
             continue;
         }
 
         // ── cd (with - support) ─────────────────────────────────────
         if (segment.StartsWith("cd ", StringComparison.OrdinalIgnoreCase) || segment == "cd")
         {
-            var (cdFailed, newPrev) = HandleCd(runspace, segment, previousDirectory);
-            if (!cdFailed && newPrev != null) previousDirectory = newPrev;
+            var (cdFailed, newPrev) = HandleCd(state.Runspace, segment, state.PreviousDirectory);
+            if (!cdFailed && newPrev != null) state.PreviousDirectory = newPrev;
             lastSegmentFailed = cdFailed;
             continue;
         }
@@ -1710,15 +1807,30 @@ while (true)
         }
 
         // ── setbg: shorthand for `set bg` ────────────────────────
+        // Supports: setbg "#hex", setbg --save "#hex", setbg reset
         if (segment.Equals("setbg", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase))
         {
             var bgArgs = segment.Length > 5 ? segment[5..].Trim() : "";
-            var bgValue = string.IsNullOrEmpty(bgArgs) ? "reset" : bgArgs.Trim('"', '\'');
-            if (config.SetValue("bg", bgValue))
+            bool saveBg = false;
+            if (bgArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
+                bgArgs.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
             {
-                ApplySettingToRuntime("bg", config, ref setE, ref setX, ref setPipefail, lineEditor);
+                saveBg = true;
+                bgArgs = bgArgs[6..].TrimStart();
+            }
+            var bgValue = string.IsNullOrEmpty(bgArgs) ? "reset" : bgArgs.Trim('"', '\'');
+            if (state.Config.SetValue("bg", bgValue))
+            {
+                ApplySettingToRuntime("bg", state);
                 Theme.ActiveRushBgFile = null; // manual setbg overrides .rushbg tracking
+                if (saveBg)
+                {
+                    state.Config.Save();
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine($"  bg = {bgValue} (saved)");
+                    Console.ResetColor();
+                }
                 lastSegmentFailed = false;
             }
             else
@@ -1770,13 +1882,13 @@ while (true)
                 }
             }
             var catArgs = catCmd.Length > 3 ? catCmd[3..].TrimStart() : "";
-            lastSegmentFailed = !CatCommand.Execute(catArgs, catRedirect, catStdinContent, builtinCts.Token);
+            lastSegmentFailed = !CatCommand.Execute(catArgs, catRedirect, catStdinContent, state.BuiltinCts.Token);
             lastExitCode = lastSegmentFailed ? 1 : 0;
             continue;
         }
 
         // ── set -x trace ─────────────────────────────────────────
-        if (setX)
+        if (state.SetX)
         {
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Error.WriteLine($"+ {segment}");
@@ -1787,7 +1899,7 @@ while (true)
         var (cmdPart, redirect, stdinRedirect, stderrRedirect) = RedirectionParser.Parse(segment);
 
         // ── Translate & Execute (with timing) ────────────────────────
-        var translated = translator.Translate(cmdPart);
+        var translated = state.Translator.Translate(cmdPart);
         var commandToRun = translated ?? cmdPart;
 
         // Glob expansion: only for passthrough (native) commands
@@ -1797,10 +1909,13 @@ while (true)
         // ── Background Job ─────────────────────────────────────────
         if (runInBackground)
         {
-            var jobId = jobManager.StartBackground(segment, commandToRun);
-            Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine($"  [{jobId}] started: {segment}");
-            Console.ResetColor();
+            if (state.JobManager != null)
+            {
+                var jobId = state.JobManager.StartBackground(segment, commandToRun);
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine($"  [{jobId}] started: {segment}");
+                Console.ResetColor();
+            }
             lastSegmentFailed = false;
             continue;
         }
@@ -1816,7 +1931,7 @@ while (true)
             || CommandTranslator.HasUnquotedPipe(cmdPart);
 
         // ── Pipe-to-AI interception ── cmd | ai "prompt" ──────────
-        if (CommandTranslator.HasUnquotedPipe(cmdPart))
+        if (state.IsInteractive && CommandTranslator.HasUnquotedPipe(cmdPart))
         {
             var pipeSegs = CommandTranslator.SplitOnPipe(cmdPart);
             var lastPipeSeg = pipeSegs[^1].Trim();
@@ -1830,9 +1945,9 @@ while (true)
                 try
                 {
                     using var ps = PowerShell.Create();
-                    ps.Runspace = runspace;
+                    ps.Runspace = state.Runspace;
                     // Translate the prefix pipeline
-                    var preTrans = translator.Translate(prePipeline) ?? prePipeline;
+                    var preTrans = state.Translator.Translate(prePipeline) ?? prePipeline;
                     ps.AddScript(preTrans);
                     var results = ps.Invoke();
                     pipedContent = string.Join("\n", results.Select(r => r?.ToString() ?? ""));
@@ -1857,8 +1972,8 @@ while (true)
                 Console.CancelKeyPress += aiPipeCancel;
                 try
                 {
-                    var (aiPipeOk, _) = AiCommand.ExecuteAsync(aiPipeArgs, pipedContent, config,
-                        lineEditor.History, aiPipeCts.Token).GetAwaiter().GetResult();
+                    var (aiPipeOk, _) = AiCommand.ExecuteAsync(aiPipeArgs, pipedContent, state.Config,
+                        state.LineEditor!.History, aiPipeCts.Token).GetAwaiter().GetResult();
                     lastSegmentFailed = !aiPipeOk;
                 }
                 finally
@@ -1872,11 +1987,11 @@ while (true)
         if (!needsPowerShell)
         {
             var sw2 = Stopwatch.StartNew();
-            var nativeExitCode = RunInteractive(commandToRun, translator, builtinCts.Token, stderrRedirect);
+            var nativeExitCode = RunInteractive(commandToRun, state.Translator, state.BuiltinCts.Token, stderrRedirect);
             lastSegmentFailed = nativeExitCode != 0;
             lastExitCode = nativeExitCode;
             sw2.Stop();
-            if (config.ShowTiming && sw2.Elapsed.TotalSeconds >= 0.5)
+            if (state.Config.ShowTiming && sw2.Elapsed.TotalSeconds >= 0.5)
             {
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
@@ -1914,11 +2029,11 @@ while (true)
         try
         {
             using var ps = PowerShell.Create();
-            ps.Runspace = runspace;
+            ps.Runspace = state.Runspace;
             ps.AddScript(commandToRun);
 
             // Track for Ctrl+C interruption
-            runningPs = ps;
+            state.RunningPs = ps;
             List<PSObject> results;
             try
             {
@@ -1929,14 +2044,14 @@ while (true)
                 // Ctrl+C — cancel the running pipeline
                 Console.WriteLine();
                 sw.Stop();
-                runningPs = null;
+                state.RunningPs = null;
                 lastSegmentFailed = true;
                 lastExitCode = 130;
                 continue;
             }
             finally
             {
-                runningPs = null;
+                state.RunningPs = null;
             }
 
             sw.Stop();
@@ -1948,7 +2063,7 @@ while (true)
                 // Try to get the actual exit code from $LASTEXITCODE (set by native commands)
                 try
                 {
-                    var lec = runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+                    var lec = state.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
                     lastExitCode = lec is int code ? code : 1;
                 }
                 catch { lastExitCode = 1; }
@@ -1961,7 +2076,7 @@ while (true)
                     if (exType.Contains("CommandNotFoundException") || errId.Contains("CommandNotFoundException"))
                     {
                         var target = error.TargetObject?.ToString();
-                        if (target != null) ShowSuggestions(target, translator);
+                        if (target != null) ShowSuggestions(target, state.Translator);
                     }
                 }
             }
@@ -1972,11 +2087,11 @@ while (true)
 
                 // set -o pipefail: treat native command pipeline failures as errors
                 // even when PowerShell doesn't report HadErrors
-                if (setPipefail)
+                if (state.SetPipefail)
                 {
                     try
                     {
-                        var lec = runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
+                        var lec = state.Runspace.SessionStateProxy.GetVariable("LASTEXITCODE");
                         if (lec is int pipeCode && pipeCode != 0)
                         {
                             lastSegmentFailed = true;
@@ -1996,7 +2111,7 @@ while (true)
             }
 
             // Check if PowerShell called exit
-            if (host.ShouldExit)
+            if (state.Host?.ShouldExit == true)
             {
                 shouldExit = true;
                 break;
@@ -2022,7 +2137,7 @@ while (true)
         }
 
         // Show timing for slow commands (>500ms)
-        if (config.ShowTiming && sw.ElapsedMilliseconds > 500)
+        if (state.Config.ShowTiming && sw.ElapsedMilliseconds > 500)
         {
             Console.ForegroundColor = Theme.Current.Muted;
             var elapsed = sw.Elapsed;
@@ -2034,8 +2149,6 @@ while (true)
         }
     }
 
-    if (shouldExit || signalExit) break;
-
     // Clean up process substitution temp files
     if (procSubTempFiles != null)
         foreach (var f in procSubTempFiles)
@@ -2046,60 +2159,25 @@ while (true)
     if (!lastSegmentFailed) lastExitCode = 0;
 
     // set -e: exit on error
-    if (setE && lastSegmentFailed)
+    if (state.SetE && lastSegmentFailed)
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"  exit (set -e): command failed with status {lastExitCode}");
         Console.ResetColor();
-        break;
+        shouldExit = true;
     }
 
-    prompt.SetLastCommandFailed(lastSegmentFailed, lastExitCode);
-
     // Sync .NET CWD from PowerShell after every command.
-    // Catches cases where a script or function calls Set-Location
-    // without going through HandleCd (which normally does this sync).
-    // Without this, child processes (zsh, claude, etc.) inherit the
-    // wrong working directory.
     try
     {
-        var psDir = GetRunspaceDir(runspace);
+        var psDir = GetRunspaceDir(state.Runspace);
         if (psDir != null && psDir != Environment.CurrentDirectory)
             Environment.CurrentDirectory = psDir;
     }
     catch { /* best-effort */ }
 
-    lineEditor.SaveHistory();
+    return (lastSegmentFailed, lastExitCode, shouldExit);
 }
-
-// ── Graceful Exit ────────────────────────────────────────────────────
-
-// Fire EXIT trap if registered
-if (traps.TryGetValue("EXIT", out var exitTrap))
-{
-    var exitTranslated = translator.Translate(exitTrap) ?? exitTrap;
-    using var exitPs = PowerShell.Create();
-    exitPs.Runspace = runspace;
-    exitPs.AddScript(exitTranslated);
-    try { exitPs.Invoke(); } catch { }
-}
-
-jobManager.Dispose();
-lineEditor.SaveHistory();
-runspace.Close();
-runspace.Dispose();
-Console.Write("\x1b[0 q"); // Reset cursor shape
-Theme.RestoreBackground(); // Restore original bg if root shell changed it
-if (host.ShouldExit)
-    Environment.ExitCode = host.ExitCode;
-if (!signalExit) // Don't write to a dead terminal (SIGHUP)
-    Console.WriteLine("bye.");
-SshPool.Cleanup();
-
-// Dispose signal registrations
-sigtstpReg?.Dispose();
-sighupReg?.Dispose();
-sigtermReg?.Dispose();
 
 // ═══════════════════════════════════════════════════════════════════
 // Helper Methods
@@ -2108,9 +2186,12 @@ sigtermReg?.Dispose();
 // ── Startup Scripts ─────────────────────────────────────────────────
 
 /// <summary>
-/// Execute a .rush startup script through the scripting engine (transpiled).
+/// Execute a .rush startup script through the scripting engine.
+/// When a ShellState is provided, builtins (export, alias, set, cd, setbg, etc.)
+/// work by routing non-Rush-syntax lines through ProcessCommand.
+/// Without ShellState, falls back to transpile-the-whole-file mode.
 /// </summary>
-static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string filename)
+static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string filename, ShellState? state = null)
 {
     var path = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
@@ -2120,29 +2201,76 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
 
     try
     {
-        var source = File.ReadAllText(path);
-        var psCode = engine.TranspileFile(source);
-        if (psCode != null)
+        if (state != null)
         {
-            using var ps = PowerShell.Create();
-            ps.Runspace = runspace;
-            ps.AddScript(psCode);
-            ps.Invoke();
-            if (ps.HadErrors && ps.Streams.Error.Count > 0)
+            // New path: line-by-line processing with full builtin support
+            var lines = File.ReadAllLines(path);
+            var accumulated = new System.Text.StringBuilder();
+
+            foreach (var rawLine in lines)
             {
-                Console.ForegroundColor = Theme.Current.Error;
-                foreach (var err in ps.Streams.Error)
-                    Console.Error.WriteLine($"rush: {filename}: {err}");
-                Console.ResetColor();
+                var trimmed = rawLine.TrimStart();
+                if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith('#')) continue;
+
+                // Accumulate for multi-line Rush blocks
+                if (accumulated.Length > 0)
+                    accumulated.AppendLine().Append(rawLine);
+                else
+                    accumulated.Append(rawLine);
+
+                var current = accumulated.ToString();
+
+                // Rush syntax? Check if complete
+                if (engine.IsRushSyntax(current))
+                {
+                    if (engine.IsIncomplete(current)) continue;
+                    // Complete Rush block — transpile and execute
+                    var psCode = engine.TranspileLine(current);
+                    if (psCode != null)
+                        ExecuteTranspiledBlock(psCode, state);
+                    accumulated.Clear();
+                    continue;
+                }
+
+                // Not Rush syntax — process as shell command via shared dispatch
+                accumulated.Clear();
+                var (failed, _, shouldExit) = ProcessCommand(trimmed, state);
+                if (shouldExit) break;
             }
 
-            // Reset ErrorActionPreference — TranspileFile sets it to 'Stop'
-            // for script error handling, but we don't want it leaking into
-            // the interactive runspace where it produces verbose error messages.
-            using var reset = PowerShell.Create();
-            reset.Runspace = runspace;
-            reset.AddScript("$ErrorActionPreference = 'Continue'");
-            reset.Invoke();
+            // Handle any remaining accumulated Rush code
+            if (accumulated.Length > 0)
+            {
+                var psCode = engine.TranspileLine(accumulated.ToString());
+                if (psCode != null)
+                    ExecuteTranspiledBlock(psCode, state);
+            }
+        }
+        else
+        {
+            // Legacy path: transpile entire file at once (no builtin support)
+            var source = File.ReadAllText(path);
+            var psCode = engine.TranspileFile(source);
+            if (psCode != null)
+            {
+                using var ps = PowerShell.Create();
+                ps.Runspace = runspace;
+                ps.AddScript(psCode);
+                ps.Invoke();
+                if (ps.HadErrors && ps.Streams.Error.Count > 0)
+                {
+                    Console.ForegroundColor = Theme.Current.Error;
+                    foreach (var err in ps.Streams.Error)
+                        Console.Error.WriteLine($"rush: {filename}: {err}");
+                    Console.ResetColor();
+                }
+
+                // Reset ErrorActionPreference — TranspileFile sets it to 'Stop'
+                using var reset = PowerShell.Create();
+                reset.Runspace = runspace;
+                reset.AddScript("$ErrorActionPreference = 'Continue'");
+                reset.Invoke();
+            }
         }
     }
     catch (Exception ex)
@@ -2158,10 +2286,10 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
 /// Both are fully transpiled through the Rush engine.
 /// secrets.rush is never synced — safe for API keys and tokens.
 /// </summary>
-static void RunStartupScripts(Runspace runspace, ScriptEngine engine)
+static void RunStartupScripts(Runspace runspace, ScriptEngine engine, ShellState? state = null)
 {
-    RunStartupRushFile(runspace, engine, "init.rush");
-    RunStartupRushFile(runspace, engine, "secrets.rush");
+    RunStartupRushFile(runspace, engine, "init.rush", state);
+    RunStartupRushFile(runspace, engine, "secrets.rush", state);
 }
 
 /// <summary>
@@ -4390,7 +4518,7 @@ static string GetStartupTip(RushConfig config)
 
 // ── Settings Display & Runtime Apply ────────────────────────────────
 
-static void ShowAllSettings(RushConfig config, bool setE, bool setX, bool setPipefail)
+static void ShowAllSettings(ShellState state)
 {
     Console.WriteLine();
     string? lastCategory = null;
@@ -4400,10 +4528,10 @@ static void ShowAllSettings(RushConfig config, bool setE, bool setX, bool setPip
         // Sync runtime flags into config for display
         var currentVal = s.Key switch
         {
-            "stopOnError" => setE.ToString().ToLowerInvariant(),
-            "traceCommands" => setX.ToString().ToLowerInvariant(),
-            "pipefailMode" => setPipefail.ToString().ToLowerInvariant(),
-            _ => config.GetValue(s.Key)
+            "stopOnError" => state.SetE.ToString().ToLowerInvariant(),
+            "traceCommands" => state.SetX.ToString().ToLowerInvariant(),
+            "pipefailMode" => state.SetPipefail.ToString().ToLowerInvariant(),
+            _ => state.Config.GetValue(s.Key)
         };
         var isDefault = currentVal == s.DefaultValue;
 
@@ -4439,13 +4567,13 @@ static void ShowAllSettings(RushConfig config, bool setE, bool setX, bool setPip
     }
 
     // Aliases
-    if (config.Aliases.Count > 0)
+    if (state.Config.Aliases.Count > 0)
     {
         Console.WriteLine();
         Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine("  ── Aliases ──");
         Console.ResetColor();
-        foreach (var (alias, cmd) in config.Aliases)
+        foreach (var (alias, cmd) in state.Config.Aliases)
         {
             Console.Write("  ");
             Console.ForegroundColor = Theme.Current.Banner;
@@ -4464,30 +4592,32 @@ static void ShowAllSettings(RushConfig config, bool setE, bool setX, bool setPip
     Console.WriteLine();
 }
 
-static void ApplySettingToRuntime(string key, RushConfig config, ref bool setE, ref bool setX, ref bool setPipefail, LineEditor lineEditor)
+static void ApplySettingToRuntime(string key, ShellState state)
 {
     switch (key.ToLowerInvariant())
     {
-        case "stoponerror": setE = config.StopOnError; break;
-        case "tracecommands": setX = config.TraceCommands; break;
-        case "pipefailmode": setPipefail = config.PipefailMode; break;
+        case "stoponerror": state.SetE = state.Config.StopOnError; break;
+        case "tracecommands": state.SetX = state.Config.TraceCommands; break;
+        case "pipefailmode": state.SetPipefail = state.Config.PipefailMode; break;
         case "editmode":
-            lineEditor.Mode = config.EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
-                ? EditMode.Emacs : EditMode.Vi;
+            if (state.LineEditor != null)
+                state.LineEditor.Mode = state.Config.EditMode.Equals("emacs", StringComparison.OrdinalIgnoreCase)
+                    ? EditMode.Emacs : EditMode.Vi;
             break;
         case "historysize":
-            lineEditor.MaxHistory = config.HistorySize;
+            if (state.LineEditor != null)
+                state.LineEditor.MaxHistory = state.Config.HistorySize;
             break;
         case "bg":
-            if (string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(state.Config.Bg, "off", StringComparison.OrdinalIgnoreCase))
                 Theme.ResetBackground();
             else
-                Theme.SetBackground(config.Bg);
-            Theme.Initialize(config.GetThemeOverride());
+                Theme.SetBackground(state.Config.Bg);
+            Theme.Initialize(state.Config.GetThemeOverride());
             Theme.SetNativeColorEnvVars();
             break;
         case "theme":
-            Theme.Initialize(config.GetThemeOverride());
+            Theme.Initialize(state.Config.GetThemeOverride());
             Theme.SetNativeColorEnvVars();
             break;
     }
@@ -4786,3 +4916,35 @@ static void RunNonInteractive(string command)
 
 // ── Types ────────────────────────────────────────────────────────────
 // RedirectInfo and StdinInfo moved to RedirectionParser.cs
+
+/// <summary>
+/// Shared state bundle for the command dispatch pipeline.
+/// Used by ProcessCommand, ExecuteTranspiledBlock, and the REPL loop.
+/// Interactive-only fields (LineEditor, JobManager, etc.) are null in script contexts.
+/// </summary>
+class ShellState
+{
+    public required System.Management.Automation.Runspaces.Runspace Runspace { get; init; }
+    public required Rush.CommandTranslator Translator { get; init; }
+    public required Rush.ScriptEngine ScriptEngine { get; init; }
+    public required Rush.RushConfig Config { get; set; }
+
+    // Interactive-only (null in scripts)
+    public Rush.LineEditor? LineEditor { get; init; }
+    public Rush.JobManager? JobManager { get; init; }
+    public Rush.Prompt? Prompt { get; init; }
+    public Rush.RushHost? Host { get; init; }
+    public Rush.TabCompleter? TabCompleter { get; init; }
+
+    // Mutable state
+    public bool SetE { get; set; }
+    public bool SetX { get; set; }
+    public bool SetPipefail { get; set; }
+    public string? PreviousDirectory { get; set; }
+    public System.Collections.Generic.Stack<string> DirStack { get; set; } = new();
+    public System.Collections.Generic.Dictionary<string, string> Traps { get; set; } = new(System.StringComparer.OrdinalIgnoreCase);
+    public System.Threading.CancellationTokenSource BuiltinCts { get; set; } = new();
+    public System.Management.Automation.PowerShell? RunningPs { get; set; }
+
+    public bool IsInteractive => LineEditor != null;
+}
