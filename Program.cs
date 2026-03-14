@@ -192,6 +192,11 @@ Console.ForegroundColor = Theme.Current.Banner;
 Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R");
+if (!Theme.Current.HasDetectedRgb && config.GetThemeOverride() == null)
+{
+    Console.WriteLine("[theme] Terminal did not respond to background color query — using defaults.");
+    Console.WriteLine("        Set COLORFGBG=\";0\" (dark) or COLORFGBG=\";15\" (light) to override.");
+}
 Console.ResetColor();
 
 if (config.ShowTips)

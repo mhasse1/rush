@@ -14,6 +14,12 @@ public class Theme
 
     public bool IsDark { get; }
 
+    /// <summary>Background luminance (0.0–1.0). -1 = no RGB data available.</summary>
+    internal double BgLuminance { get; } = -1;
+
+    /// <summary>True if background RGB was detected via OSC 11 (actual terminal query).</summary>
+    public bool HasDetectedRgb { get; private set; }
+
     // ── ConsoleColor Properties (OutputRenderer, Program, Prompt, etc.) ──
 
     /// <summary>Banner text, help section headers.</summary>
@@ -245,6 +251,7 @@ public class Theme
         if (bgR >= 0)
         {
             double bgLum = TerminalBackground.RelativeLuminance(bgR, bgG, bgB);
+            BgLuminance = bgLum;
 
             // ConsoleColor properties
             Banner          = EnsureContrast(Banner, bgLum, isDark);
@@ -320,24 +327,11 @@ public class Theme
                 r = g = b = bg.IsDark ? 0.0 : 1.0;
             }
             Current = new Theme(bg.IsDark, r, g, b);
+            Current.HasDetectedRgb = bg.BgR >= 0;
         }
     }
 
     // ── Native Command Color Env Vars ──────────────────────────────────
-
-    // GNU LS_COLORS: dark uses bold (1;xx = bright), light uses plain (xx = darker shades)
-    private const string DarkLsColors =
-        "di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=37;41:sg=30;43:tw=30;42:ow=34;42";
-    private const string LightLsColors =
-        "di=34:ln=35:so=35:pi=33:ex=32:bd=33:cd=33:su=37;41:sg=30;43:tw=30;42:ow=34;42";
-
-    // BSD LSCOLORS (macOS): 22-char string, uppercase=bold. Same logic: bold for dark, plain for light.
-    private const string DarkLsColorsBsd  = "ExGxFxdxCxegedabagacad";
-    private const string LightLsColorsBsd = "exfxcxdxbxegedabagacad";
-
-    // GREP_COLORS: dark uses bold red matches, light uses plain red + dark blue filenames
-    private const string DarkGrepColors  = "ms=01;31:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36";
-    private const string LightGrepColors = "ms=31:mc=31:sl=:cx=:fn=34:ln=32:bn=32:se=36";
 
     /// <summary>Tracks which env vars Rush set (vs user-set) so theme changes update only ours.</summary>
     private static readonly HashSet<string> _rushSetVars = new();
@@ -358,9 +352,10 @@ public class Theme
                 System.Runtime.InteropServices.OSPlatform.OSX))
             SmartSet("CLICOLOR", "1");
 
-        SmartSet("LS_COLORS",   isDark ? DarkLsColors   : LightLsColors);
-        SmartSet("LSCOLORS",    isDark ? DarkLsColorsBsd : LightLsColorsBsd);
-        SmartSet("GREP_COLORS", isDark ? DarkGrepColors  : LightGrepColors);
+        double bgLum = Current.BgLuminance;
+        SmartSet("LS_COLORS",   BuildLsColors(isDark, bgLum));
+        SmartSet("LSCOLORS",    BuildLsColorsBsd(isDark, bgLum));
+        SmartSet("GREP_COLORS", BuildGrepColors(isDark, bgLum));
     }
 
     /// <summary>
@@ -580,5 +575,212 @@ public class Theme
         // Grayscale ramp: 232-255 → 8, 18, 28, ..., 238
         var gray = (8.0 + 10.0 * (idx - 232)) / 255.0;
         return (gray, gray, gray);
+    }
+
+    // ── SGR Contrast Validation (for LS_COLORS / GREP_COLORS) ────────
+
+    /// <summary>
+    /// Validate a bare SGR parameter string (e.g., "1;34", "35") against bgLum.
+    /// Skips entries that contain background codes (40-47, 100-107) since
+    /// text contrasts against that background, not the terminal background.
+    /// Returns the (possibly adjusted) SGR string.
+    /// </summary>
+    internal static string EnsureSgrContrast(string sgr, double bgLum, bool isDark)
+    {
+        if (string.IsNullOrEmpty(sgr)) return sgr;
+
+        var parts = sgr.Split(';');
+        string? fgCode = null;
+        string prefix = "";  // bold, underline, etc.
+        bool hasBgCode = false;
+
+        foreach (var p in parts)
+        {
+            if (int.TryParse(p, out var code))
+            {
+                if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+                {
+                    hasBgCode = true;
+                    break;
+                }
+                if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
+                    fgCode = p;
+                else if (code == 1)
+                    prefix = p + ";";  // preserve "01;" vs "1;"
+            }
+        }
+
+        // Has its own background — text contrasts against that, not terminal bg
+        if (hasBgCode) return sgr;
+        // No foreground color found — nothing to validate
+        if (fgCode == null) return sgr;
+
+        bool isBold = prefix.Length > 0;
+        if (!int.TryParse(fgCode, out var fc)) return sgr;
+
+        // When bold + basic color (30-37), terminals render as bright (90-97).
+        // Check contrast using the effective display color.
+        var effectiveCode = (isBold && fc >= 30 && fc <= 37) ? (fc + 60).ToString() : fgCode;
+        if (AnsiCodeRgb.TryGetValue(effectiveCode, out var rgb))
+        {
+            var fgLum = TerminalBackground.RelativeLuminance(rgb.r, rgb.g, rgb.b);
+            if (TerminalBackground.ContrastRatio(fgLum, bgLum) >= MinContrast)
+                return sgr; // already good
+        }
+
+        // Try toggling bright/normal: 30-37 ↔ 90-97
+        var alt = fc >= 90 ? (fc - 60).ToString() : (fc + 60).ToString();
+        if (AnsiCodeRgb.TryGetValue(alt, out var altRgb))
+        {
+            var altLum = TerminalBackground.RelativeLuminance(altRgb.r, altRgb.g, altRgb.b);
+            if (TerminalBackground.ContrastRatio(altLum, bgLum) >= MinContrast)
+                return prefix + alt;
+        }
+
+        // Nuclear fallback
+        return prefix + (isDark ? "97" : "30");
+    }
+
+    // ── Dynamic LS_COLORS / LSCOLORS / GREP_COLORS Builders ──────────
+
+    /// <summary>Base LS_COLORS entries: (key, dark SGR, light SGR).</summary>
+    private static readonly (string key, string darkSgr, string lightSgr)[] LsColorEntries =
+    {
+        ("di", "1;34", "34"),       // directory
+        ("ln", "1;36", "35"),       // symlink
+        ("so", "1;35", "35"),       // socket
+        ("pi", "33",   "33"),       // pipe
+        ("ex", "1;32", "32"),       // executable
+        ("bd", "1;33", "33"),       // block device
+        ("cd", "1;33", "33"),       // char device
+        ("su", "37;41", "37;41"),   // setuid (has bg)
+        ("sg", "30;43", "30;43"),   // setgid (has bg)
+        ("tw", "30;42", "30;42"),   // sticky+other-writable (has bg)
+        ("ow", "34;42", "34;42"),   // other-writable (has bg)
+    };
+
+    /// <summary>Build LS_COLORS with per-entry contrast validation.</summary>
+    internal static string BuildLsColors(bool isDark, double bgLum)
+    {
+        var entries = new string[LsColorEntries.Length];
+        for (int i = 0; i < LsColorEntries.Length; i++)
+        {
+            var (key, darkSgr, lightSgr) = LsColorEntries[i];
+            var sgr = isDark ? darkSgr : lightSgr;
+            if (bgLum >= 0)
+                sgr = EnsureSgrContrast(sgr, bgLum, isDark);
+            entries[i] = $"{key}={sgr}";
+        }
+        return string.Join(":", entries);
+    }
+
+    /// <summary>Base GREP_COLORS entries: (key, dark SGR, light SGR).</summary>
+    private static readonly (string key, string darkSgr, string lightSgr)[] GrepColorEntries =
+    {
+        ("ms", "01;31", "31"),    // match (selected)
+        ("mc", "01;31", "31"),    // match (context)
+        ("sl", "",      ""),      // selected line
+        ("cx", "",      ""),      // context line
+        ("fn", "35",    "34"),    // filename
+        ("ln", "32",    "32"),    // line number
+        ("bn", "32",    "32"),    // byte offset
+        ("se", "36",    "36"),    // separator
+    };
+
+    /// <summary>Build GREP_COLORS with per-entry contrast validation.</summary>
+    internal static string BuildGrepColors(bool isDark, double bgLum)
+    {
+        var entries = new string[GrepColorEntries.Length];
+        for (int i = 0; i < GrepColorEntries.Length; i++)
+        {
+            var (key, darkSgr, lightSgr) = GrepColorEntries[i];
+            var sgr = isDark ? darkSgr : lightSgr;
+            if (bgLum >= 0 && sgr.Length > 0)
+                sgr = EnsureSgrContrast(sgr, bgLum, isDark);
+            entries[i] = $"{key}={sgr}";
+        }
+        return string.Join(":", entries);
+    }
+
+    // ── BSD LSCOLORS Builder ─────────────────────────────────────────
+
+    /// <summary>BSD letter → ANSI foreground code mapping.</summary>
+    private static readonly Dictionary<char, string> BsdToAnsi = new()
+    {
+        ['a'] = "30", ['b'] = "31", ['c'] = "32", ['d'] = "33",
+        ['e'] = "34", ['f'] = "35", ['g'] = "36", ['h'] = "37",
+    };
+
+    /// <summary>ANSI foreground code → BSD letter mapping.</summary>
+    private static readonly Dictionary<string, char> AnsiToBsd = new()
+    {
+        ["30"] = 'a', ["31"] = 'b', ["32"] = 'c', ["33"] = 'd',
+        ["34"] = 'e', ["35"] = 'f', ["36"] = 'g', ["37"] = 'h',
+        ["90"] = 'a', ["91"] = 'b', ["92"] = 'c', ["93"] = 'd',
+        ["94"] = 'e', ["95"] = 'f', ["96"] = 'g', ["97"] = 'h',
+    };
+
+    /// <summary>
+    /// Base LSCOLORS: 11 fg+bg pairs. Uppercase = bold (bright).
+    /// Positions: dir, symlink, socket, pipe, exec, block, char, setuid, setgid, sticky+ow, ow.
+    /// </summary>
+    private static readonly (char darkFg, char darkBg, char lightFg, char lightBg)[] BsdColorEntries =
+    {
+        ('E', 'x', 'e', 'x'),  // 1: directory
+        ('G', 'x', 'f', 'x'),  // 2: symlink
+        ('F', 'x', 'f', 'x'),  // 3: socket
+        ('d', 'x', 'd', 'x'),  // 4: pipe
+        ('C', 'x', 'c', 'x'),  // 5: executable
+        ('e', 'g', 'e', 'g'),  // 6: block device (has bg)
+        ('e', 'd', 'e', 'd'),  // 7: char device (has bg)
+        ('a', 'b', 'a', 'b'),  // 8: setuid (has bg)
+        ('a', 'g', 'a', 'g'),  // 9: setgid (has bg)
+        ('a', 'c', 'a', 'c'),  // 10: sticky+other-writable (has bg)
+        ('a', 'd', 'a', 'd'),  // 11: other-writable (has bg)
+    };
+
+    /// <summary>Build BSD LSCOLORS with per-entry contrast validation.</summary>
+    internal static string BuildLsColorsBsd(bool isDark, double bgLum)
+    {
+        var chars = new char[BsdColorEntries.Length * 2];
+        for (int i = 0; i < BsdColorEntries.Length; i++)
+        {
+            var (darkFg, darkBg, lightFg, lightBg) = BsdColorEntries[i];
+            var fg = isDark ? darkFg : lightFg;
+            var bg = isDark ? darkBg : lightBg;
+
+            // Only validate fg-only entries (bg == 'x' means default/terminal bg)
+            if (bg == 'x' && bgLum >= 0)
+            {
+                bool isBold = char.IsUpper(fg);
+                var baseLetter = char.ToLower(fg);
+                if (BsdToAnsi.TryGetValue(baseLetter, out var ansiCode))
+                {
+                    // If bold, use bright ANSI code for contrast check
+                    var checkCode = isBold ? (int.Parse(ansiCode) + 60).ToString() : ansiCode;
+                    var validated = EnsureSgrContrast(checkCode, bgLum, isDark);
+
+                    // Map result back to BSD letter
+                    if (AnsiToBsd.TryGetValue(validated, out var newLetter))
+                    {
+                        // Determine if result is a bright code (90-97)
+                        bool resultBright = int.TryParse(validated, out var vc) && vc >= 90;
+                        fg = resultBright ? char.ToUpper(newLetter) : newLetter;
+                    }
+                    else if (validated == "97")
+                    {
+                        fg = 'H'; // bright white → bold light grey (closest BSD equivalent)
+                    }
+                    else if (validated == "30")
+                    {
+                        fg = 'a'; // black
+                    }
+                }
+            }
+
+            chars[i * 2] = fg;
+            chars[i * 2 + 1] = bg;
+        }
+        return new string(chars);
     }
 }

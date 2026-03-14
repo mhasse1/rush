@@ -107,10 +107,55 @@ PowerShell 7 provides built-in aliases for common commands:
 `df`, `uptime`, `curl` (PS7 has `Invoke-WebRequest` alias but different behavior),
 `wget` (same issue)
 
-Options for Windows:
-1. Bundle [BusyBox-w64](https://frippery.org/busybox/) (~500KB, covers most)
-2. Require Git for Windows (includes grep, find, head, tail, sort, etc.)
-3. Rely on PS7 aliases for basics, document gaps
+#### Option A: Git for Windows (recommended)
+
+Most Windows developers already have this. It includes `grep`, `find`, `head`, `tail`,
+`sort`, `touch`, `env`, `whoami`, and more in `C:\Program Files\Git\usr\bin`.
+
+```powershell
+# Check if Git for Windows commands are in PATH
+where.exe grep
+
+# If not, add Git's usr/bin to your Rush config
+# In ~/.config/rush/init.rush:
+path add "C:\Program Files\Git\usr\bin"
+```
+
+Still missing after Git for Windows: `df`, `uptime` (use Rush stdlib or PowerShell instead).
+
+#### Option B: BusyBox-w64
+
+Single ~500KB binary providing 100+ Unix commands. No installer needed.
+
+```powershell
+# Download and add to PATH
+curl -o C:\tools\busybox.exe https://frippery.org/files/busybox/busybox.exe
+
+# BusyBox works via symlinks or --install
+cd C:\tools && busybox --install .
+
+# In ~/.config/rush/init.rush:
+path add "C:\tools"
+```
+
+#### Option C: Rush alternatives (no external tools)
+
+Use Rush's built-in pipeline operators and stdlib instead of Unix commands:
+
+| Instead of | Use |
+|-----------|-----|
+| `grep pattern file` | `File.read_lines("file").select { \|l\| l.include?("pattern") }` |
+| `find . -name "*.txt"` | `Dir.files(".", recursive: true).select { \|f\| f =~ /\.txt$/ }` |
+| `head -5 file` | `File.read_lines("file").first(5)` |
+| `tail -5 file` | `File.read_lines("file").last(5)` |
+| `wc -l file` | `File.read_lines("file").count` |
+| `touch file` | `File.write("file", "")` if new; `File.append("file", "")` if exists |
+| `whoami` | `puts env["USERNAME"]` |
+| `hostname` | `puts hostname` (built-in variable) |
+| `curl URL` | Use `ai` for API calls, or PowerShell `Invoke-WebRequest` |
+
+After-pipe translations (`| grep`, `| head`, `| tail`, `| sort`, `| wc -l`, `| uniq`)
+work on all platforms — they're translated to PowerShell automatically.
 
 ## Native Command Colors (auto-configured)
 

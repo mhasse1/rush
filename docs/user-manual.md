@@ -494,6 +494,8 @@ my-tool | objectify --cols "pid,name,cpu" | where cpu > 10
 
 Numbers are automatically parsed as integers when the value matches `^\d+$`.
 
+Property names in `where`, `select`, and `sort` are case-insensitive: `where PID > 100` and `where pid > 100` are equivalent.
+
 ### Auto-Objectify
 
 Known commands auto-inject objectify when piped. You don't need to type `objectify` for commands Rush already knows about:

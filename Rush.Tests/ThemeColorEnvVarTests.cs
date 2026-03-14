@@ -144,6 +144,131 @@ public class ThemeColorEnvVarTests : IDisposable
         Theme.Initialize(isDarkOverride: false);
         Theme.SetNativeColorEnvVars();
         var light = Environment.GetEnvironmentVariable("LSCOLORS");
-        Assert.Equal("exfxcxdxbxegedabagacad", light);
+        // socket=magenta(f), exec=green(c) — consistent with LS_COLORS
+        Assert.Equal("exfxfxdxcxegedabagacad", light);
+    }
+
+    // ── Contrast Validation Tests (direct builder methods) ───────────
+
+    [Fact]
+    public void EnsureSgrContrast_BlueOnTeal_Substituted()
+    {
+        // Teal background: RGB(0, 0.55, 0.55) — blue (34) is invisible
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0.55, 0.55);
+        var result = Theme.EnsureSgrContrast("1;34", bgLum, isDark: true);
+        // Should NOT contain dark blue (34) — should substitute
+        Assert.DoesNotContain("34", result);
+    }
+
+    [Fact]
+    public void EnsureSgrContrast_MagentaOnPurple_Substituted()
+    {
+        // Deep purple background: RGB(0.25, 0, 0.35) — bright magenta (95) is too close
+        double bgLum = TerminalBackground.RelativeLuminance(0.25, 0.0, 0.35);
+        var result = Theme.EnsureSgrContrast("35", bgLum, isDark: true);
+        // Dark magenta (35) should be substituted — not enough contrast
+        Assert.NotEqual("35", result);
+    }
+
+    [Fact]
+    public void EnsureSgrContrast_WithBgCode_Unchanged()
+    {
+        // Entry with background code (37;41 = white on red) should not be modified
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0.55, 0.55);
+        var result = Theme.EnsureSgrContrast("37;41", bgLum, isDark: true);
+        Assert.Equal("37;41", result);
+    }
+
+    [Fact]
+    public void EnsureSgrContrast_GoodContrastUnchanged()
+    {
+        // White (97) on black background — excellent contrast, should stay
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+        var result = Theme.EnsureSgrContrast("1;97", bgLum, isDark: true);
+        Assert.Equal("1;97", result);
+    }
+
+    [Fact]
+    public void BuildLsColors_PureBlack_MatchesDarkDefaults()
+    {
+        // Pure black background — should produce the original dark LS_COLORS
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+        var result = Theme.BuildLsColors(isDark: true, bgLum);
+        Assert.Contains("di=1;34", result);   // bold blue
+        Assert.Contains("ln=1;36", result);   // bold cyan
+        Assert.Contains("su=37;41", result);  // bg entries unchanged
+    }
+
+    [Fact]
+    public void BuildLsColors_PureWhite_MatchesLightDefaults()
+    {
+        double bgLum = TerminalBackground.RelativeLuminance(1, 1, 1);
+        var result = Theme.BuildLsColors(isDark: false, bgLum);
+        Assert.Contains("di=34", result);
+        Assert.Contains("su=37;41", result);
+    }
+
+    [Fact]
+    public void BuildLsColors_NoBgLum_SkipsValidation()
+    {
+        // bgLum = -1 (no RGB data) — should return unmodified defaults
+        var dark = Theme.BuildLsColors(isDark: true, bgLum: -1);
+        Assert.Contains("di=1;34", dark);
+        var light = Theme.BuildLsColors(isDark: false, bgLum: -1);
+        Assert.Contains("di=34", light);
+    }
+
+    [Fact]
+    public void BuildLsColors_TealBg_AdjustsBlueAndCyan()
+    {
+        // Teal background — blue (34) and cyan (36) should be adjusted
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0.55, 0.55);
+        var result = Theme.BuildLsColors(isDark: true, bgLum);
+        // Directory should no longer be bold blue
+        Assert.DoesNotContain("di=1;34", result);
+        // But entries with bg codes should be untouched
+        Assert.Contains("su=37;41", result);
+        Assert.Contains("sg=30;43", result);
+    }
+
+    [Fact]
+    public void BuildLsColorsBsd_PureBlack_MatchesDarkDefaults()
+    {
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+        var result = Theme.BuildLsColorsBsd(isDark: true, bgLum);
+        Assert.Equal("ExGxFxdxCxegedabagacad", result);
+    }
+
+    [Fact]
+    public void BuildLsColorsBsd_PureWhite_MatchesLightDefaults()
+    {
+        double bgLum = TerminalBackground.RelativeLuminance(1, 1, 1);
+        var result = Theme.BuildLsColorsBsd(isDark: false, bgLum);
+        // Consistent with LS_COLORS: socket=magenta(f), exec=green(c)
+        Assert.Equal("exfxfxdxcxegedabagacad", result);
+    }
+
+    [Fact]
+    public void BuildGrepColors_PureBlack_MatchesDarkDefaults()
+    {
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+        var result = Theme.BuildGrepColors(isDark: true, bgLum);
+        Assert.Contains("ms=01;31", result);
+        // fn=35 (dark magenta) fails contrast on black → bumped to fn=95
+        Assert.Contains("fn=95", result);
+    }
+
+    [Fact]
+    public void BuildGrepColors_NoBgLum_SkipsValidation()
+    {
+        var result = Theme.BuildGrepColors(isDark: true, bgLum: -1);
+        Assert.Contains("ms=01;31", result);
+    }
+
+    [Fact]
+    public void EnsureSgrContrast_EmptyString_ReturnsEmpty()
+    {
+        var result = Theme.EnsureSgrContrast("", 0.5, isDark: true);
+        Assert.Equal("", result);
     }
 }
