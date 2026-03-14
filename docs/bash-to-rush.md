@@ -200,4 +200,4 @@ x/D/C       Delete/change        u           Undo
 
 **`puts` not `echo` for rush expressions** — `echo` still works for simple strings, but `puts` handles rush expressions and interpolation
 
-**Semicolons work as newlines** — `if x > 5; puts "yes"; end` on one line
+**Semicolons work as newlines** — `if x > 5; puts "yes"; end` on one 

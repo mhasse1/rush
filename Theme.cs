@@ -323,6 +323,59 @@ public class Theme
         }
     }
 
+    // ── Native Command Color Env Vars ──────────────────────────────────
+
+    // GNU LS_COLORS: dark uses bold (1;xx = bright), light uses plain (xx = darker shades)
+    private const string DarkLsColors =
+        "di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=1;33:cd=1;33:su=37;41:sg=30;43:tw=30;42:ow=34;42";
+    private const string LightLsColors =
+        "di=34:ln=35:so=35:pi=33:ex=32:bd=33:cd=33:su=37;41:sg=30;43:tw=30;42:ow=34;42";
+
+    // BSD LSCOLORS (macOS): 22-char string, uppercase=bold. Same logic: bold for dark, plain for light.
+    private const string DarkLsColorsBsd  = "ExGxFxdxCxegedabagacad";
+    private const string LightLsColorsBsd = "exfxcxdxbxegedabagacad";
+
+    // GREP_COLORS: dark uses bold red matches, light uses plain red + dark blue filenames
+    private const string DarkGrepColors  = "ms=01;31:mc=01;31:sl=:cx=:fn=35:ln=32:bn=32:se=36";
+    private const string LightGrepColors = "ms=31:mc=31:sl=:cx=:fn=34:ln=32:bn=32:se=36";
+
+    /// <summary>Tracks which env vars Rush set (vs user-set) so theme changes update only ours.</summary>
+    private static readonly HashSet<string> _rushSetVars = new();
+
+    /// <summary>
+    /// Set LS_COLORS, LSCOLORS, GREP_COLORS, and CLICOLOR so native commands
+    /// inherit theme-appropriate colors. Respects user-set values and NO_COLOR.
+    /// Call after Initialize().
+    /// </summary>
+    public static void SetNativeColorEnvVars()
+    {
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("NO_COLOR")))
+            return;
+
+        bool isDark = Current.IsDark;
+
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                System.Runtime.InteropServices.OSPlatform.OSX))
+            SmartSet("CLICOLOR", "1");
+
+        SmartSet("LS_COLORS",   isDark ? DarkLsColors   : LightLsColors);
+        SmartSet("LSCOLORS",    isDark ? DarkLsColorsBsd : LightLsColorsBsd);
+        SmartSet("GREP_COLORS", isDark ? DarkGrepColors  : LightGrepColors);
+    }
+
+    /// <summary>
+    /// Set env var if Rush previously set it OR if it's currently empty.
+    /// Preserves user-set values from .bashrc/.zshrc.
+    /// </summary>
+    private static void SmartSet(string name, string value)
+    {
+        if (_rushSetVars.Contains(name) || string.IsNullOrEmpty(Environment.GetEnvironmentVariable(name)))
+        {
+            Environment.SetEnvironmentVariable(name, value);
+            _rushSetVars.Add(name);
+        }
+    }
+
     // ── Contrast Validation ─────────────────────────────────────────────
 
     /// <summary>

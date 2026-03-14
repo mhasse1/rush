@@ -136,7 +136,7 @@ shell_integration:
       4. Method call on variable: identifier.method() pattern → Rush
       5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
       6. PascalCase receiver: ClassName.method() or EnumName.prop → Rush
-      7. Everything else → shell command (goes through CommandTranslator)
+      7. Everything else → shell command (native on *nix, CommandTranslator for pipeline operators)
     note: "ALL_CAPS names (ARGV, PATH) are not treated as class receivers"
 
   command_substitution:
@@ -177,8 +177,8 @@ variables:
       powershell: '$count = 42'
 
     - rush: 'files = ls /tmp'
-      powershell: '$files = Get-ChildItem /tmp'
-      note: "Command output captured into variable"
+      powershell: '$files = (ls /tmp)'
+      note: "Command output captured into variable — ls runs natively on *nix"
 
     - rush: 'a, b, c = 1, 2, 3'
       powershell: '$a = 1; $b = 2; $c = 3'
@@ -332,7 +332,7 @@ loops:
             puts f.name
           end
         powershell: |
-          foreach ($f in (Get-ChildItem /tmp)) {
+          foreach ($f in (ls /tmp)) {
             Write-Output $f.Name
           }
 
@@ -624,17 +624,20 @@ blocks:
 pipelines:
   description: |
     The | operator works for both shell commands and Rush object methods.
-    Shell commands in a pipeline use the existing command translation layer.
+    Shell commands run natively on *nix (ls, grep, find, etc.).
+    Rush pipeline operators (where, select, count, first, etc.) translate to PowerShell.
+    After-pipe special cases (grep→Where-Object, head→Select-Object, etc.) enable
+    structured filtering in pipelines.
 
   examples:
     - rush: "ps aux | grep nginx | grep -v grep"
-      note: "Pure shell pipeline — passes through to PowerShell as-is"
+      note: "Native shell pipeline — runs directly via OS"
 
     - rush: "ls /tmp | sort_by { |f| f.size } | first(5)"
       note: "Rush object pipeline — transpiles to PS pipeline"
 
     - rush: 'cat server.log | grep "ERROR" | wc -l'
-      note: "Mixed — shell commands translated by CommandTranslator"
+      note: "Mixed — grep after pipe becomes Where-Object, wc becomes Measure-Object"
 
   pipe_transforms:
     description: |
@@ -1418,15 +1421,6 @@ builtin_functions:
 # SHELL BUILTINS (REPL commands — not transpiled, handled directly)
 # ============================================================================
 shell_builtins:
-  - name: "ls"
-    description: "List files — custom .NET builtin (not PowerShell Get-ChildItem)"
-    examples:
-      - { rush: 'ls', note: "List current directory" }
-      - { rush: 'ls -la', note: "Long format, show hidden" }
-      - { rush: 'ls -ltS', note: "Long, sort by time then size" }
-      - { rush: 'ls -R src/', note: "Recursive listing" }
-    note: "Supports -l, -a/-A, -R, -r, -t, -S, -1, -d, -F, -G, -h. Color-coded by file type."
-
   - name: "cat"
     description: "Read/concatenate files — custom .NET builtin (not PowerShell Get-Content)"
     examples:

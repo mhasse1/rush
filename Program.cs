@@ -185,6 +185,7 @@ var config = RushConfig.Load();
 
 // ── Theme (detect terminal background for contrast-aware colors) ─────
 Theme.Initialize(config.GetThemeOverride());
+Theme.SetNativeColorEnvVars();
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = Theme.Current.Banner;
@@ -1128,6 +1129,7 @@ while (true)
                 var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
                 setE = reloadE; setX = reloadX; setPipefail = reloadPf;
                 Theme.Initialize(config.GetThemeOverride());
+                Theme.SetNativeColorEnvVars();
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  config reloaded");
                 Console.ResetColor();
@@ -2212,6 +2214,7 @@ static void RunScriptFile(string path, string[] scriptArgs)
     {
         // Initialize theme for output rendering
         Theme.Initialize(null);
+        Theme.SetNativeColorEnvVars();
 
         var source = File.ReadAllText(path);
         var iss = InitialSessionState.CreateDefault();
@@ -4330,6 +4333,10 @@ static void ApplySettingToRuntime(string key, RushConfig config, ref bool setE, 
         case "historysize":
             lineEditor.MaxHistory = config.HistorySize;
             break;
+        case "theme":
+            Theme.Initialize(config.GetThemeOverride());
+            Theme.SetNativeColorEnvVars();
+            break;
     }
 }
 
@@ -4438,6 +4445,7 @@ static void RunNonInteractive(string command)
 {
     var cfg = RushConfig.Load();
     Theme.Initialize(cfg.GetThemeOverride());
+    Theme.SetNativeColorEnvVars();
     var ui = new RushHostUI();
     var h = new RushHost(ui);
     var ss = InitialSessionState.CreateDefault();
