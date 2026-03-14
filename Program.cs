@@ -2070,6 +2070,8 @@ if (traps.TryGetValue("EXIT", out var exitTrap))
 
 jobManager.Dispose();
 lineEditor.SaveHistory();
+runspace.Close();
+runspace.Dispose();
 Console.Write("\x1b[0 q"); // Reset cursor shape
 Theme.RestoreBackground(); // Restore original bg if root shell changed it
 if (host.ShouldExit)
