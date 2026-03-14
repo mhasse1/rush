@@ -137,53 +137,67 @@ public static class TerminalBackground
             var query = "\x1b]11;?\x07";
             var queryBytes = Encoding.ASCII.GetBytes(query);
 
-            using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
-            ttyWrite.Write(queryBytes);
-            ttyWrite.Flush();
+            // Open /dev/tty for reading with a separate fd.
+            // We can't use fd 0 (stdin) because .NET's Console.In StreamReader
+            // has its own buffer over fd 0 — the terminal's response may be
+            // consumed by that buffer before our raw read() sees it.
+            var ttyReadFd = open(ttyPath, O_RDONLY);
+            if (ttyReadFd < 0) return false;
 
-            // Read response — use poll() before each read() to guarantee
-            // we never block, even if stty settings didn't take effect
-            // (which can happen in nested shells or broken ptys)
-            var response = new StringBuilder();
-            var deadline = DateTime.UtcNow.AddMilliseconds(300);
-            var buf = new byte[1];
-
-            while (DateTime.UtcNow < deadline)
+            try
             {
-                // poll() with 50ms timeout — returns >0 if data available
-                var pfd = new Pollfd { fd = 0, events = POLLIN };
-                var ready = poll(ref pfd, 1, 50);
+                using var ttyWrite = new FileStream(ttyPath, FileMode.Open, FileAccess.Write);
+                ttyWrite.Write(queryBytes);
+                ttyWrite.Flush();
 
-                if (ready > 0 && (pfd.revents & POLLIN) != 0)
+                // Read response — use poll() before each read() to guarantee
+                // we never block, even if stty settings didn't take effect
+                // (which can happen in nested shells or broken ptys)
+                var response = new StringBuilder();
+                var deadline = DateTime.UtcNow.AddMilliseconds(300);
+                var buf = new byte[1];
+
+                while (DateTime.UtcNow < deadline)
                 {
-                    var bytesRead = read(0, buf, 1);
-                    if (bytesRead > 0)
-                    {
-                        response.Append((char)buf[0]);
+                    // poll() with 50ms timeout — returns >0 if data available
+                    var pfd = new Pollfd { fd = ttyReadFd, events = POLLIN };
+                    var ready = poll(ref pfd, 1, 50);
 
-                        // Response ends with ST (ESC \) or BEL (\x07)
-                        var s = response.ToString();
-                        if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
-                            break;
-                    }
-                    else
+                    if (ready > 0 && (pfd.revents & POLLIN) != 0)
                     {
-                        break; // EOF or error
+                        var bytesRead = read(ttyReadFd, buf, 1);
+                        if (bytesRead > 0)
+                        {
+                            response.Append((char)buf[0]);
+
+                            // Response ends with ST (ESC \) or BEL (\x07)
+                            var s = response.ToString();
+                            if (s.EndsWith("\x1b\\") || s.EndsWith("\x07"))
+                                break;
+                        }
+                        else
+                        {
+                            break; // EOF or error
+                        }
                     }
+                    // poll returned 0 (timeout) or -1 (error) — loop checks deadline
                 }
-                // poll returned 0 (timeout) or -1 (error) — loop checks deadline
-            }
 
-            // Drain any remaining bytes before restoring echo
-            var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
-            while (DateTime.UtcNow < drainDeadline)
+                // Drain any remaining bytes before restoring echo
+                var drainDeadline = DateTime.UtcNow.AddMilliseconds(50);
+                while (DateTime.UtcNow < drainDeadline)
+                {
+                    var pfd2 = new Pollfd { fd = ttyReadFd, events = POLLIN };
+                    if (poll(ref pfd2, 1, 10) <= 0) break;
+                    if (read(ttyReadFd, buf, 1) <= 0) break;
+                }
+
+                return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
+            }
+            finally
             {
-                var pfd2 = new Pollfd { fd = 0, events = POLLIN };
-                if (poll(ref pfd2, 1, 10) <= 0) break;
-                if (read(0, buf, 1) <= 0) break;
+                close(ttyReadFd);
             }
-
-            return ParseOsc11Response(response.ToString(), out luminance, out bgR, out bgG, out bgB);
         }
         finally
         {
@@ -427,6 +441,14 @@ public static class TerminalBackground
 
     [DllImport("libc", SetLastError = true)]
     private static extern int read(int fd, byte[] buf, int count);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int open([MarshalAs(UnmanagedType.LPStr)] string path, int flags);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int close(int fd);
+
+    private const int O_RDONLY = 0;
 
     /// <summary>
     /// poll() — check if file descriptors have data available without blocking.
