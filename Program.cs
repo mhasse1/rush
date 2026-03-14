@@ -185,6 +185,10 @@ var config = RushConfig.Load();
 
 // ── Theme (detect terminal background for contrast-aware colors) ─────
 Theme.MinContrast = config.GetContrastRatio();
+// Apply saved background color BEFORE Theme.Initialize so the banner prints
+// with correct colors — no visible glitch window.
+if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+    Theme.SetBackground(config.Bg);
 Theme.Initialize(config.GetThemeOverride());
 bool rootBgApplied = false;
 if (Prompt.IsRoot())
@@ -387,7 +391,7 @@ while (true)
     }
 
     // ── Continuation Lines (trailing \, unclosed quotes/brackets) ──
-    input = ReadContinuationLines(input);
+    input = ReadContinuationLines(input, lineEditor);
 
     input = input.Trim();
     if (string.IsNullOrEmpty(input)) continue;
@@ -1136,6 +1140,10 @@ while (true)
                 var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
                 setE = reloadE; setX = reloadX; setPipefail = reloadPf;
                 Theme.MinContrast = config.GetContrastRatio();
+                if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+                    Theme.SetBackground(config.Bg);
+                else
+                    Theme.ResetBackground();
                 Theme.Initialize(config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
                 Console.ForegroundColor = Theme.Current.Muted;
@@ -1701,12 +1709,25 @@ while (true)
             continue;
         }
 
-        // ── setbg: set terminal background color ────────────────
+        // ── setbg: shorthand for `set bg` ────────────────────────
         if (segment.Equals("setbg", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase))
         {
             var bgArgs = segment.Length > 5 ? segment[5..].Trim() : "";
-            lastSegmentFailed = !HandleSetbg(bgArgs);
+            var bgValue = string.IsNullOrEmpty(bgArgs) ? "reset" : bgArgs.Trim('"', '\'');
+            if (config.SetValue("bg", bgValue))
+            {
+                ApplySettingToRuntime("bg", config, ref setE, ref setX, ref setPipefail, lineEditor);
+                Theme.ActiveRushBgFile = null; // manual setbg overrides .rushbg tracking
+                lastSegmentFailed = false;
+            }
+            else
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"setbg: invalid color '{bgValue}' — use #RGB or #RRGGBB format");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
             lastExitCode = lastSegmentFailed ? 1 : 0;
             continue;
         }
@@ -2100,24 +2121,7 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
     try
     {
         var source = File.ReadAllText(path);
-
-        // Pre-process Rush builtins that can't be transpiled to PowerShell.
-        // These are handled inline before the rest goes to the transpiler.
-        var transpilableLines = new List<string>();
-        foreach (var rawLine in source.Split('\n'))
-        {
-            var trimmed = rawLine.TrimStart();
-            if (trimmed.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase) ||
-                trimmed.Equals("setbg", StringComparison.OrdinalIgnoreCase))
-            {
-                HandleSetbgLine(trimmed, filename);
-                continue;
-            }
-            transpilableLines.Add(rawLine);
-        }
-
-        var filteredSource = string.Join('\n', transpilableLines);
-        var psCode = engine.TranspileFile(filteredSource);
+        var psCode = engine.TranspileFile(source);
         if (psCode != null)
         {
             using var ps = PowerShell.Create();
@@ -2145,29 +2149,6 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
     {
         Console.ForegroundColor = Theme.Current.Error;
         Console.Error.WriteLine($"rush: {filename}: {ex.Message}");
-        Console.ResetColor();
-    }
-}
-
-/// <summary>
-/// Handle a setbg line from a startup script (init.rush).
-/// Extracted because setbg is a Rush builtin, not transpilable to PowerShell.
-/// </summary>
-static void HandleSetbgLine(string line, string filename)
-{
-    var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-    if (parts.Length < 2)
-        return; // bare "setbg" with no arg — ignore in scripts
-
-    var hex = parts[1].Trim().Trim('"', '\'');
-    if (string.Equals(hex, "reset", StringComparison.OrdinalIgnoreCase))
-    {
-        Theme.ResetBackground();
-    }
-    else if (!Theme.SetBackground(hex))
-    {
-        Console.ForegroundColor = Theme.Current.Error;
-        Console.Error.WriteLine($"rush: {filename}: setbg: invalid color '{hex}'");
         Console.ResetColor();
     }
 }
@@ -3449,7 +3430,7 @@ static void TrackVariableAssignment(string input, TabCompleter tabCompleter)
     }
 }
 
-static string ReadContinuationLines(string input)
+static string ReadContinuationLines(string input, LineEditor? editor = null)
 {
     var sb = new System.Text.StringBuilder(input);
 
@@ -3466,8 +3447,9 @@ static string ReadContinuationLines(string input)
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(Prompt.Continuation);
             Console.ResetColor();
-            var next = Console.ReadLine();
-            if (next == null) break;
+            var next = editor != null ? editor.ReadLine() : Console.ReadLine();
+            if (next == null) break;            // Ctrl+D
+            if (next == "" && editor != null) return "";  // Ctrl+C — cancel
             sb.Append(next);
             continue;
         }
@@ -3478,8 +3460,9 @@ static string ReadContinuationLines(string input)
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(Prompt.Continuation);
             Console.ResetColor();
-            var next = Console.ReadLine();
-            if (next == null) break;
+            var next = editor != null ? editor.ReadLine() : Console.ReadLine();
+            if (next == null) break;            // Ctrl+D
+            if (next == "" && editor != null) return "";  // Ctrl+C — cancel
             sb.AppendLine();
             sb.Append(next);
             continue;
@@ -3491,8 +3474,9 @@ static string ReadContinuationLines(string input)
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write(Prompt.Continuation);
             Console.ResetColor();
-            var next = Console.ReadLine();
-            if (next == null) break;
+            var next = editor != null ? editor.ReadLine() : Console.ReadLine();
+            if (next == null) break;            // Ctrl+D
+            if (next == "" && editor != null) return "";  // Ctrl+C — cancel
             sb.AppendLine();
             sb.Append(next);
             continue;
@@ -4188,40 +4172,6 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
     }
 }
 
-// ── setbg: Terminal Background ──────────────────────────────────────
-
-static bool HandleSetbg(string args)
-{
-    if (string.IsNullOrEmpty(args))
-    {
-        // No args — reset to terminal default
-        Theme.ResetBackground();
-        Theme.ActiveRushBgFile = null;
-        return true;
-    }
-
-    if (string.Equals(args, "reset", StringComparison.OrdinalIgnoreCase))
-    {
-        Theme.ResetBackground();
-        Theme.ActiveRushBgFile = null;
-        return true;
-    }
-
-    // Strip quotes around the color value
-    var hex = args.Trim('"', '\'');
-
-    if (!Theme.SetBackground(hex))
-    {
-        Console.ForegroundColor = Theme.Current.Error;
-        Console.Error.WriteLine($"setbg: invalid color '{hex}' — use #RGB or #RRGGBB format");
-        Console.ResetColor();
-        return false;
-    }
-
-    Theme.ActiveRushBgFile = null; // manual setbg overrides .rushbg tracking
-    return true;
-}
-
 /// <summary>
 /// Walk up from dir looking for .rushbg. Apply if found and different from current.
 /// Reset to terminal default if no .rushbg found but one was previously active.
@@ -4528,6 +4478,14 @@ static void ApplySettingToRuntime(string key, RushConfig config, ref bool setE, 
         case "historysize":
             lineEditor.MaxHistory = config.HistorySize;
             break;
+        case "bg":
+            if (string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+                Theme.ResetBackground();
+            else
+                Theme.SetBackground(config.Bg);
+            Theme.Initialize(config.GetThemeOverride());
+            Theme.SetNativeColorEnvVars();
+            break;
         case "theme":
             Theme.Initialize(config.GetThemeOverride());
             Theme.SetNativeColorEnvVars();
@@ -4639,6 +4597,9 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 static void RunNonInteractive(string command)
 {
     var cfg = RushConfig.Load();
+    Theme.MinContrast = cfg.GetContrastRatio();
+    if (!string.IsNullOrEmpty(cfg.Bg) && !string.Equals(cfg.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+        Theme.SetBackground(cfg.Bg);
     Theme.Initialize(cfg.GetThemeOverride());
     Theme.SetNativeColorEnvVars();
     var ui = new RushHostUI();
