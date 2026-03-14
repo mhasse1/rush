@@ -184,6 +184,7 @@ if (llmMode)
 var config = RushConfig.Load();
 
 // ── Theme (detect terminal background for contrast-aware colors) ─────
+Theme.MinContrast = config.GetContrastRatio();
 Theme.Initialize(config.GetThemeOverride());
 bool rootBgApplied = false;
 if (Prompt.IsRoot())
@@ -197,13 +198,6 @@ Console.ForegroundColor = Theme.Current.Banner;
 Console.WriteLine($"rush v{Version} — a modern-day warrior");
 Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R");
-if (Theme.Current.DetectionMethod == TerminalBackground.DetectionMethod.Fallback
-    && config.GetThemeOverride() == null)
-{
-    Console.WriteLine("[theme] Could not detect terminal background — assuming dark.");
-    Console.WriteLine("        Run: export COLORFGBG=\";0\" (dark) or export COLORFGBG=\";15\" (light)");
-    Console.WriteLine("        Or set \"theme\": \"dark\" or \"light\" in ~/.config/rush/config.json");
-}
 Console.ResetColor();
 
 if (config.ShowTips)
@@ -1141,6 +1135,7 @@ while (true)
                 config = RushConfig.Load();
                 var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
                 setE = reloadE; setX = reloadX; setPipefail = reloadPf;
+                Theme.MinContrast = config.GetContrastRatio();
                 Theme.Initialize(config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
                 Console.ForegroundColor = Theme.Current.Muted;

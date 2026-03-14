@@ -151,13 +151,14 @@ public class ThemeColorEnvVarTests : IDisposable
     // ── Contrast Validation Tests (direct builder methods) ───────────
 
     [Fact]
-    public void EnsureSgrContrast_BlueOnTeal_Substituted()
+    public void EnsureSgrContrast_BlueOnTeal_AdjustedFromBoldBlue()
     {
-        // Teal background: RGB(0, 0.55, 0.55) — blue (34) is invisible
+        // Teal background: RGB(0, 0.55, 0.55) — bold blue (1;34 → renders as 94)
+        // fails contrast, but dark blue (34 without bold) passes (ratio ~3.77).
         double bgLum = TerminalBackground.RelativeLuminance(0, 0.55, 0.55);
         var result = Theme.EnsureSgrContrast("1;34", bgLum, isDark: true);
-        // Should NOT contain dark blue (34) — should substitute
-        Assert.DoesNotContain("34", result);
+        // Should drop bold — dark blue (34) without bold passes contrast on teal
+        Assert.Equal("34", result);
     }
 
     [Fact]
@@ -305,5 +306,181 @@ public class ThemeColorEnvVarTests : IDisposable
         Assert.False(Theme.TryParseHexColor("none", out _, out _, out _));
         Assert.False(Theme.TryParseHexColor("", out _, out _, out _));
         Assert.False(Theme.TryParseHexColor("#GG0000", out _, out _, out _));
+    }
+
+    // ── RUSH_BG Detection Tests ──────────────────────────────────────
+
+    [Fact]
+    public void RushBg_DetectsExactRgb()
+    {
+        var orig = Environment.GetEnvironmentVariable("RUSH_BG");
+        try
+        {
+            Environment.SetEnvironmentVariable("RUSH_BG", "#222733");
+            var bg = TerminalBackground.Detect();
+            Assert.Equal(TerminalBackground.DetectionMethod.RushBg, bg.Method);
+            Assert.True(bg.IsDark);
+            Assert.True(bg.BgR >= 0); // has exact RGB
+            Assert.True(bg.BgLuminance > 0 && bg.BgLuminance < 0.1); // dark
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RUSH_BG", orig);
+        }
+    }
+
+    [Fact]
+    public void RushBg_LightColorDetectedAsLight()
+    {
+        var orig = Environment.GetEnvironmentVariable("RUSH_BG");
+        try
+        {
+            Environment.SetEnvironmentVariable("RUSH_BG", "#F0F0F0");
+            var bg = TerminalBackground.Detect();
+            Assert.Equal(TerminalBackground.DetectionMethod.RushBg, bg.Method);
+            Assert.False(bg.IsDark);
+            Assert.True(bg.BgLuminance > 0.8);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RUSH_BG", orig);
+        }
+    }
+
+    [Fact]
+    public void RushBg_PriorityOverColorFgBg()
+    {
+        var origRushBg = Environment.GetEnvironmentVariable("RUSH_BG");
+        var origColorFgBg = Environment.GetEnvironmentVariable("COLORFGBG");
+        try
+        {
+            // COLORFGBG says light (;15), RUSH_BG says dark (#111111)
+            Environment.SetEnvironmentVariable("COLORFGBG", "0;15");
+            Environment.SetEnvironmentVariable("RUSH_BG", "#111111");
+            var bg = TerminalBackground.Detect();
+            Assert.Equal(TerminalBackground.DetectionMethod.RushBg, bg.Method);
+            Assert.True(bg.IsDark); // RUSH_BG wins
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("RUSH_BG", origRushBg);
+            Environment.SetEnvironmentVariable("COLORFGBG", origColorFgBg);
+        }
+    }
+
+    // ── Inter-Color Distinction Tests ────────────────────────────────
+
+    [Fact]
+    public void GetEffectiveFgCode_BoldBasic_ReturnsBright()
+    {
+        Assert.Equal("94", Theme.GetEffectiveFgCode("1;34")); // bold blue → bright blue
+        Assert.Equal("96", Theme.GetEffectiveFgCode("1;36")); // bold cyan → bright cyan
+    }
+
+    [Fact]
+    public void GetEffectiveFgCode_WithBg_ReturnsNull()
+    {
+        Assert.Null(Theme.GetEffectiveFgCode("37;41")); // has bg code
+        Assert.Null(Theme.GetEffectiveFgCode("30;43"));
+    }
+
+    [Fact]
+    public void SgrDistance_IdenticalColors_ReturnsOne()
+    {
+        Assert.Equal(1.0, Theme.SgrDistance("1;34", "1;34"));
+        Assert.Equal(1.0, Theme.SgrDistance("94", "1;34")); // both map to bright blue (94)
+    }
+
+    [Fact]
+    public void SgrDistance_DifferentColors_GreaterThanOne()
+    {
+        var dist = Theme.SgrDistance("1;34", "1;32"); // bright blue vs bright green
+        Assert.True(dist > 1.0);
+    }
+
+    [Fact]
+    public void BuildLsColors_BlueGrayBg_DistinctDirAndSymlink()
+    {
+        // #222733 dark blue-gray — directories and symlinks should be distinct
+        double bgLum = TerminalBackground.RelativeLuminance(0x22/255.0, 0x27/255.0, 0x33/255.0);
+        var result = Theme.BuildLsColors(isDark: true, bgLum);
+
+        // Parse out di= and ln= values
+        var entries = result.Split(':');
+        string? diSgr = null, lnSgr = null;
+        foreach (var e in entries)
+        {
+            if (e.StartsWith("di=")) diSgr = e[3..];
+            if (e.StartsWith("ln=")) lnSgr = e[3..];
+        }
+
+        Assert.NotNull(diSgr);
+        Assert.NotNull(lnSgr);
+        // They should be different
+        var diCode = Theme.GetEffectiveFgCode(diSgr!);
+        var lnCode = Theme.GetEffectiveFgCode(lnSgr!);
+        Assert.NotEqual(diCode, lnCode);
+    }
+
+    [Fact]
+    public void BuildLsColors_PrimaryEntriesDistinct()
+    {
+        // On a challenging teal background, the primary entries (di, ln, ex, so)
+        // must be visually distinct. Secondary entries (pi, bd, cd) may share
+        // colors with each other — they're rare file types that seldom appear together.
+        double bgLum = TerminalBackground.RelativeLuminance(0, 0.55, 0.55);
+        var result = Theme.BuildLsColors(isDark: true, bgLum);
+
+        // The primary entries that MUST be distinct from each other
+        var primaryKeys = new HashSet<string> { "di", "ln", "ex", "so" };
+        var primaryEntries = new List<(string key, string code)>();
+
+        foreach (var e in result.Split(':'))
+        {
+            var eq = e.IndexOf('=');
+            if (eq < 0) continue;
+            var key = e[..eq];
+            var sgr = e[(eq + 1)..];
+            var code = Theme.GetEffectiveFgCode(sgr);
+            if (code != null && primaryKeys.Contains(key))
+                primaryEntries.Add((key, code));
+        }
+
+        // All primary entries must have different effective fg codes
+        for (int i = 0; i < primaryEntries.Count; i++)
+        {
+            for (int j = i + 1; j < primaryEntries.Count; j++)
+            {
+                Assert.True(primaryEntries[i].code != primaryEntries[j].code,
+                    $"Primary entries {primaryEntries[i].key} and {primaryEntries[j].key} " +
+                    $"have identical fg code {primaryEntries[i].code}");
+            }
+        }
+    }
+
+    // ── Configurable Contrast Level Tests ────────────────────────────
+
+    [Fact]
+    public void ContrastSetting_AffectsValidation()
+    {
+        var origContrast = Theme.MinContrast;
+        try
+        {
+            // At standard (3.0), dark green (32) on black passes
+            Theme.MinContrast = 3.0;
+            double blackLum = TerminalBackground.RelativeLuminance(0, 0, 0);
+            var standard = Theme.EnsureSgrContrast("32", blackLum, isDark: true);
+
+            // At AAA (7.0), dark green (32, lum=0.153) has ratio 4.06 — should fail
+            Theme.MinContrast = 7.0;
+            var aaa = Theme.EnsureSgrContrast("32", blackLum, isDark: true);
+
+            // AAA should have substituted it
+            Assert.NotEqual("32", aaa);
+        }
+        finally
+        {
+            Theme.MinContrast = origContrast;
+        }
     }
 }

@@ -20,6 +20,14 @@ public class RushConfig
     public bool ShowTips { get; set; } = true;
     public bool ShowHints { get; set; } = true;
 
+    // ── Accessibility ────────────────────────────────────────────────────
+    /// <summary>
+    /// WCAG contrast level for color validation.
+    /// "standard" = 3:1 (default, WCAG large text minimum).
+    /// "aa" = 4.5:1 (WCAG AA normal text). "aaa" = 7:1 (WCAG AAA).
+    /// </summary>
+    public string Contrast { get; set; } = "standard";
+
     // ── Root Shell ──────────────────────────────────────────────────────
     /// <summary>
     /// Terminal background color for root/admin shells.
@@ -82,6 +90,7 @@ public class RushConfig
         new SettingInfo("traceCommands",       "Debugging",     "false", "true, false",      "Print each command before executing (like bash set -x). Shows: + command. Useful for debugging scripts."),
         new SettingInfo("strictGlobs",         "Globbing",      "false", "true, false",      "Error when a glob pattern (*.txt) matches nothing. false = pass the pattern through as literal text."),
         new SettingInfo("completionIgnoreCase","Completion",    "true",  "true, false",      "Case-insensitive Tab completion for paths and commands."),
+        new SettingInfo("contrast",            "Accessibility", "standard","standard, aa, aaa","WCAG contrast level. standard=3:1 (large text), aa=4.5:1 (normal text), aaa=7:1 (enhanced)."),
         new SettingInfo("aiProvider",          "AI",            "anthropic","anthropic, openai, gemini, ollama","AI provider for the `ai` command. Custom providers via ~/.config/rush/ai-providers/"),
         new SettingInfo("aiModel",             "AI",            "auto","model name","Override the default model for your AI provider. \"auto\" = use provider default."),
     };
@@ -177,6 +186,7 @@ public class RushConfig
         "tracecommands" => TraceCommands.ToString().ToLowerInvariant(),
         "strictglobs" => StrictGlobs.ToString().ToLowerInvariant(),
         "completionignorecase" => CompletionIgnoreCase.ToString().ToLowerInvariant(),
+        "contrast" => Contrast,
         "aiprovider" => AiProvider,
         "aimodel" => AiModel,
         _ => ""
@@ -236,6 +246,11 @@ public class RushConfig
                 if (!bool.TryParse(value, out var ci)) return false;
                 CompletionIgnoreCase = ci;
                 return true;
+            case "contrast":
+                var lv = value.ToLowerInvariant();
+                if (lv != "standard" && lv != "aa" && lv != "aaa") return false;
+                Contrast = lv;
+                return true;
             case "aiprovider":
                 AiProvider = value;
                 return true;
@@ -246,6 +261,16 @@ public class RushConfig
                 return false;
         }
     }
+
+    /// <summary>
+    /// Get the minimum contrast ratio for the current WCAG setting.
+    /// </summary>
+    public double GetContrastRatio() => Contrast.ToLowerInvariant() switch
+    {
+        "aa" => 4.5,
+        "aaa" => 7.0,
+        _ => 3.0  // "standard"
+    };
 
     public static string GetConfigPath() => ConfigPath;
     public static string GetConfigDir() => ConfigDir;

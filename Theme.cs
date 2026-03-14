@@ -17,7 +17,7 @@ public class Theme
     /// <summary>Background luminance (0.0–1.0). -1 = no RGB data available.</summary>
     internal double BgLuminance { get; } = -1;
 
-    /// <summary>True if background RGB was detected via OSC 11 (actual terminal query).</summary>
+    /// <summary>True if exact background RGB is known (via RUSH_BG env var or setbg).</summary>
     public bool HasDetectedRgb { get; private set; }
 
     /// <summary>How the background was detected.</summary>
@@ -323,7 +323,7 @@ public class Theme
             double r = bg.BgR, g = bg.BgG, b = bg.BgB;
             if (r < 0)
             {
-                // No OSC 11 RGB data (fallback detection) — assume
+                // No exact RGB data (COLORFGBG/macOS detection) — assume
                 // pure white for light themes, pure black for dark.
                 // Without this, contrast validation would be skipped
                 // and colors like Gray would wash out on light backgrounds.
@@ -381,7 +381,11 @@ public class Theme
     /// WCAG AA minimum for large text (terminal monospace qualifies).
     /// Full AA is 4.5:1 but that over-corrects for terminal use.
     /// </summary>
-    private const double MinContrast = 3.0;
+    /// <summary>
+    /// Minimum WCAG contrast ratio for color validation.
+    /// Configurable via "contrast" setting: standard=3.0, aa=4.5, aaa=7.0.
+    /// </summary>
+    internal static double MinContrast { get; set; } = 3.0;
 
     /// <summary>
     /// Approximate sRGB values for the 16 ConsoleColors.
@@ -620,6 +624,9 @@ public class Theme
         var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
         Console.Write(osc);
 
+        // Persist for reload — child processes inherit this env var
+        Environment.SetEnvironmentVariable("RUSH_BG", hexColor);
+
         // Re-initialize theme with the new background color for contrast validation
         var newBgR = r / 65535.0;
         var newBgG = g / 65535.0;
@@ -645,6 +652,9 @@ public class Theme
             Console.Write(_savedBgOsc);
             _savedBgOsc = null;
 
+            // Clear RUSH_BG so detection falls through to COLORFGBG/macOS/fallback
+            Environment.SetEnvironmentVariable("RUSH_BG", null);
+
             // Re-detect theme since we're back to the original background
             Initialize();
             SetNativeColorEnvVars();
@@ -660,6 +670,8 @@ public class Theme
         {
             Console.Write(_savedBgOsc);
             _savedBgOsc = null;
+            // Clear RUSH_BG so child processes don't inherit stale value
+            Environment.SetEnvironmentVariable("RUSH_BG", null);
         }
     }
 
@@ -750,16 +762,172 @@ public class Theme
         }
 
         // Try toggling bright/normal: 30-37 ↔ 90-97
-        var alt = fc >= 90 ? (fc - 60).ToString() : (fc + 60).ToString();
-        if (AnsiCodeRgb.TryGetValue(alt, out var altRgb))
+        // When bold+basic (e.g. 1;34), effective is bright (94) — try basic (34) without bold
+        // When bright (e.g. 94), try basic (34)
+        // When basic (e.g. 34), try bright (94)
+        string altCode;
+        string altPrefix;
+        if (isBold && fc >= 30 && fc <= 37)
+        {
+            // Bold+basic: effective was fc+60 (bright). Try fc itself (basic, no bold).
+            altCode = fc.ToString();
+            altPrefix = ""; // drop bold
+        }
+        else if (fc >= 90)
+        {
+            altCode = (fc - 60).ToString();
+            altPrefix = prefix;
+        }
+        else
+        {
+            altCode = (fc + 60).ToString();
+            altPrefix = prefix;
+        }
+
+        if (AnsiCodeRgb.TryGetValue(altCode, out var altRgb))
         {
             var altLum = TerminalBackground.RelativeLuminance(altRgb.r, altRgb.g, altRgb.b);
             if (TerminalBackground.ContrastRatio(altLum, bgLum) >= MinContrast)
-                return prefix + alt;
+                return altPrefix + altCode;
         }
 
         // Nuclear fallback
         return prefix + (isDark ? "97" : "30");
+    }
+
+    // ── Inter-Color Distinction ────────────────────────────────────────
+
+    /// <summary>
+    /// Get the effective ANSI foreground code from an SGR string.
+    /// Accounts for bold+basic → bright mapping.
+    /// Returns null if no foreground code found or entry has its own background.
+    /// </summary>
+    internal static string? GetEffectiveFgCode(string sgr)
+    {
+        if (string.IsNullOrEmpty(sgr)) return null;
+        var parts = sgr.Split(';');
+        string? fgCode = null;
+        bool isBold = false;
+
+        foreach (var p in parts)
+        {
+            if (int.TryParse(p, out var code))
+            {
+                if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107))
+                    return null; // has its own background — skip
+                if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))
+                    fgCode = code.ToString();
+                else if (code == 1)
+                    isBold = true;
+            }
+        }
+
+        if (fgCode == null) return null;
+        int fc = int.Parse(fgCode);
+        // Bold + basic (30-37) renders as bright (90-97)
+        if (isBold && fc >= 30 && fc <= 37)
+            return (fc + 60).ToString();
+        return fc.ToString();
+    }
+
+    /// <summary>
+    /// Compute perceptual distance between two SGR foreground colors.
+    /// Returns contrast ratio between the two colors (1.0 = identical, higher = more distinct).
+    /// </summary>
+    internal static double SgrDistance(string sgrA, string sgrB)
+    {
+        var codeA = GetEffectiveFgCode(sgrA);
+        var codeB = GetEffectiveFgCode(sgrB);
+        if (codeA == null || codeB == null) return 21.0; // can't compare — assume distinct
+        if (codeA == codeB) return 1.0; // identical
+
+        if (!AnsiCodeRgb.TryGetValue(codeA, out var rgbA) ||
+            !AnsiCodeRgb.TryGetValue(codeB, out var rgbB))
+            return 21.0; // unknown — assume distinct
+
+        var lumA = TerminalBackground.RelativeLuminance(rgbA.r, rgbA.g, rgbA.b);
+        var lumB = TerminalBackground.RelativeLuminance(rgbB.r, rgbB.g, rgbB.b);
+        return TerminalBackground.ContrastRatio(lumA, lumB);
+    }
+
+    /// <summary>
+    /// Minimum contrast ratio between two foreground colors in the same group
+    /// to consider them "distinguishable". Lower than MinContrast since we
+    /// just need visual distinction, not readability against each other.
+    /// </summary>
+    private const double MinDistinction = 1.3;
+
+    /// <summary>
+    /// Available ANSI foreground codes to try as alternatives, ordered by preference.
+    /// Bright colors first (more saturated), then basic.
+    /// </summary>
+    private static readonly string[] AlternativeFgCodes =
+    {
+        "91", "92", "93", "94", "95", "96", "97",  // bright colors (including white)
+        "31", "32", "33", "34", "35", "36", "37",  // basic colors (including gray)
+    };
+
+    /// <summary>
+    /// Ensure all fg-only entries in a group are visually distinct from each other.
+    /// Entries with background codes (su, sg, tw, ow) are skipped.
+    /// If two entries collide, the second one is shifted to an alternative that
+    /// passes both background contrast and inter-color distinction.
+    /// </summary>
+    internal static void EnsureGroupDistinction((string key, string sgr)[] entries, double bgLum, bool isDark)
+    {
+        if (bgLum < 0) return; // no RGB data — skip distinction check
+
+        for (int i = 0; i < entries.Length; i++)
+        {
+            var codeI = GetEffectiveFgCode(entries[i].sgr);
+            if (codeI == null) continue; // has bg or no fg — skip
+
+            for (int j = i + 1; j < entries.Length; j++)
+            {
+                var codeJ = GetEffectiveFgCode(entries[j].sgr);
+                if (codeJ == null) continue;
+
+                if (SgrDistance(entries[i].sgr, entries[j].sgr) >= MinDistinction)
+                    continue; // already distinct
+
+                // Find a replacement for entry j that's distinct from all others
+                foreach (var alt in AlternativeFgCodes)
+                {
+                    // Check contrast against background
+                    if (!AnsiCodeRgb.TryGetValue(alt, out var altRgb)) continue;
+                    var altLum = TerminalBackground.RelativeLuminance(altRgb.r, altRgb.g, altRgb.b);
+                    if (TerminalBackground.ContrastRatio(altLum, bgLum) < MinContrast)
+                        continue; // doesn't pass background contrast
+
+                    // Compute the actual SGR that would be stored, to ensure
+                    // distinction check matches the final representation
+                    int altInt = int.Parse(alt);
+                    string storedSgr = (isDark && altInt >= 90)
+                        ? $"1;{altInt - 60}"   // dark theme convention: bold+basic
+                        : alt;                  // use as-is
+
+                    // Check distinction from all other entries in the group
+                    bool distinctFromAll = true;
+                    for (int k = 0; k < entries.Length; k++)
+                    {
+                        if (k == j) continue;
+                        if (GetEffectiveFgCode(entries[k].sgr) == null) continue;
+
+                        if (SgrDistance(storedSgr, entries[k].sgr) < MinDistinction)
+                        {
+                            distinctFromAll = false;
+                            break;
+                        }
+                    }
+
+                    if (distinctFromAll)
+                    {
+                        entries[j] = (entries[j].key, storedSgr);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // ── Dynamic LS_COLORS / LSCOLORS / GREP_COLORS Builders ──────────
@@ -780,19 +948,52 @@ public class Theme
         ("ow", "34;42", "34;42"),   // other-writable (has bg)
     };
 
-    /// <summary>Build LS_COLORS with per-entry contrast validation.</summary>
+    /// <summary>
+    /// Primary LS_COLORS keys that must be visually distinct from each other.
+    /// These are the most commonly visible file types in `ls` output.
+    /// Secondary types (pi, bd, cd) may share colors — they're rare.
+    /// </summary>
+    private static readonly HashSet<string> PrimaryLsKeys = new() { "di", "ln", "so", "ex" };
+
+    /// <summary>Build LS_COLORS with per-entry contrast validation and inter-color distinction.</summary>
     internal static string BuildLsColors(bool isDark, double bgLum)
     {
-        var entries = new string[LsColorEntries.Length];
+        // Phase 1: Per-entry contrast validation against background
+        var validated = new (string key, string sgr)[LsColorEntries.Length];
         for (int i = 0; i < LsColorEntries.Length; i++)
         {
             var (key, darkSgr, lightSgr) = LsColorEntries[i];
             var sgr = isDark ? darkSgr : lightSgr;
             if (bgLum >= 0)
                 sgr = EnsureSgrContrast(sgr, bgLum, isDark);
-            entries[i] = $"{key}={sgr}";
+            validated[i] = (key, sgr);
         }
-        return string.Join(":", entries);
+
+        // Phase 2: Inter-color distinction for primary entries only
+        // Extract primary entries, run distinction, put back
+        var primaryIndices = new List<int>();
+        var primaryGroup = new List<(string key, string sgr)>();
+        for (int i = 0; i < validated.Length; i++)
+        {
+            if (PrimaryLsKeys.Contains(validated[i].key) && GetEffectiveFgCode(validated[i].sgr) != null)
+            {
+                primaryIndices.Add(i);
+                primaryGroup.Add(validated[i]);
+            }
+        }
+
+        if (primaryGroup.Count > 1)
+        {
+            var groupArray = primaryGroup.ToArray();
+            EnsureGroupDistinction(groupArray, bgLum, isDark);
+            for (int k = 0; k < primaryIndices.Count; k++)
+                validated[primaryIndices[k]] = groupArray[k];
+        }
+
+        var result = new string[validated.Length];
+        for (int i = 0; i < validated.Length; i++)
+            result[i] = $"{validated[i].key}={validated[i].sgr}";
+        return string.Join(":", result);
     }
 
     /// <summary>Base GREP_COLORS entries: (key, dark SGR, light SGR).</summary>
@@ -809,6 +1010,10 @@ public class Theme
     };
 
     /// <summary>Build GREP_COLORS with per-entry contrast validation.</summary>
+    /// <remarks>
+    /// No distinction pass here — GREP_COLORS has intentional duplicates
+    /// (ms/mc are both "match", ln/bn are related metadata).
+    /// </remarks>
     internal static string BuildGrepColors(bool isDark, double bgLum)
     {
         var entries = new string[GrepColorEntries.Length];
