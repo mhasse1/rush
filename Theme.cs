@@ -599,23 +599,22 @@ public class Theme
         if (string.Equals(hex, "auto", StringComparison.OrdinalIgnoreCase))
             hex = Current.IsDark ? "#330000" : "#FFFF88";
 
-        if (!TryParseHexColor(hex, out var r, out var g, out var b))
+        return SetBackground(hex);
+    }
+
+    /// <summary>
+    /// Set the terminal background to a hex color via OSC 11, re-theme Rush,
+    /// and update env vars (LS_COLORS, GREP_COLORS, etc.) for contrast.
+    /// Saves restore state so ResetBackground() can undo it on exit.
+    /// </summary>
+    public static bool SetBackground(string hexColor)
+    {
+        if (!TryParseHexColor(hexColor, out var r, out var g, out var b))
             return false;
 
-        // Save current background for restore (use OSC 11 query result if available)
-        // We can't re-query here (breaks terminal state), so save what we detected at init.
-        // If we had RGB from detection, build the restore string; otherwise skip.
-        if (Current.HasDetectedRgb && Current.BgLuminance >= 0)
-        {
-            // We don't store raw RGB on Theme, so we'll save a restore command
-            // to reset to default instead (OSC 111 resets bg to terminal default)
-            _savedBgOsc = "\x1b]111\x1b\\";
-        }
-        else
-        {
-            // No detection — still set bg, use OSC 111 to restore
-            _savedBgOsc = "\x1b]111\x1b\\";
-        }
+        // Save restore command (OSC 111 resets bg to terminal default)
+        // Only save the first time — preserves the original terminal background
+        _savedBgOsc ??= "\x1b]111\x1b\\";
 
         // Set background via OSC 11: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
         var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
@@ -629,11 +628,31 @@ public class Theme
         Current = new Theme(newLum < 0.5, newBgR, newBgG, newBgB);
         Current.HasDetectedRgb = true;
 
+        // Update native command color env vars for new background
+        SetNativeColorEnvVars();
+
         return true;
     }
 
     /// <summary>
-    /// Restore the original terminal background. Call on exit if root bg was applied.
+    /// Reset the terminal background to its original state (before Rush modified it).
+    /// Re-detects the theme via the normal cascade.
+    /// </summary>
+    public static void ResetBackground()
+    {
+        if (_savedBgOsc != null)
+        {
+            Console.Write(_savedBgOsc);
+            _savedBgOsc = null;
+
+            // Re-detect theme since we're back to the original background
+            Initialize();
+            SetNativeColorEnvVars();
+        }
+    }
+
+    /// <summary>
+    /// Restore the original terminal background on exit. Does not re-theme.
     /// </summary>
     public static void RestoreBackground()
     {
@@ -643,6 +662,12 @@ public class Theme
             _savedBgOsc = null;
         }
     }
+
+    /// <summary>
+    /// The currently active .rushbg file path, if any. Used to avoid re-applying
+    /// the same color on repeated cd's within the same directory tree.
+    /// </summary>
+    internal static string? ActiveRushBgFile { get; set; }
 
     /// <summary>Parse a hex color like "#330000" or "#FF8" to 16-bit RGB components.</summary>
     internal static bool TryParseHexColor(string hex, out int r, out int g, out int b)

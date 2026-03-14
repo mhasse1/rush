@@ -1706,6 +1706,16 @@ while (true)
             continue;
         }
 
+        // ── setbg: set terminal background color ────────────────
+        if (segment.Equals("setbg", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase))
+        {
+            var bgArgs = segment.Length > 5 ? segment[5..].Trim() : "";
+            lastSegmentFailed = !HandleSetbg(bgArgs);
+            lastExitCode = lastSegmentFailed ? 1 : 0;
+            continue;
+        }
+
         // ── sql builtin (when not piped) ────────────────────────
         // Native database queries with table/JSON/CSV output.
         // When piped (sql @db "query" | grep), falls through to stdout.
@@ -4082,6 +4092,9 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         try { Environment.CurrentDirectory = Path.GetFullPath(path); }
         catch { /* ignore — Set-Location succeeded, this is best-effort */ }
 
+        // Check for .rushbg in this directory or ancestors
+        ApplyDirBackground(Path.GetFullPath(path));
+
         return (false, currentDir);
     }
     catch (Exception ex)
@@ -4091,6 +4104,89 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         Console.ResetColor();
         return (true, null);
     }
+}
+
+// ── setbg: Terminal Background ──────────────────────────────────────
+
+static bool HandleSetbg(string args)
+{
+    if (string.IsNullOrEmpty(args))
+    {
+        // No args — reset to terminal default
+        Theme.ResetBackground();
+        Theme.ActiveRushBgFile = null;
+        return true;
+    }
+
+    if (string.Equals(args, "reset", StringComparison.OrdinalIgnoreCase))
+    {
+        Theme.ResetBackground();
+        Theme.ActiveRushBgFile = null;
+        return true;
+    }
+
+    // Strip quotes around the color value
+    var hex = args.Trim('"', '\'');
+
+    if (!Theme.SetBackground(hex))
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"setbg: invalid color '{hex}' — use #RGB or #RRGGBB format");
+        Console.ResetColor();
+        return false;
+    }
+
+    Theme.ActiveRushBgFile = null; // manual setbg overrides .rushbg tracking
+    return true;
+}
+
+/// <summary>
+/// Walk up from dir looking for .rushbg. Apply if found and different from current.
+/// Reset to terminal default if no .rushbg found but one was previously active.
+/// </summary>
+static void ApplyDirBackground(string dir)
+{
+    var rushBgFile = FindRushBgFile(dir);
+
+    if (rushBgFile != null)
+    {
+        // Found .rushbg — only apply if it's different from what's already active
+        if (!string.Equals(rushBgFile, Theme.ActiveRushBgFile, StringComparison.Ordinal))
+        {
+            try
+            {
+                var hex = File.ReadAllText(rushBgFile).Trim();
+                if (!string.IsNullOrEmpty(hex) && Theme.SetBackground(hex))
+                    Theme.ActiveRushBgFile = rushBgFile;
+            }
+            catch { /* file read error — silently ignore */ }
+        }
+    }
+    else if (Theme.ActiveRushBgFile != null)
+    {
+        // Left a .rushbg directory tree — restore original background
+        Theme.ResetBackground();
+        Theme.ActiveRushBgFile = null;
+    }
+}
+
+/// <summary>
+/// Walk up from dir to root looking for .rushbg file. Returns the path or null.
+/// </summary>
+static string? FindRushBgFile(string dir)
+{
+    var current = dir;
+    while (!string.IsNullOrEmpty(current))
+    {
+        var candidate = Path.Combine(current, ".rushbg");
+        if (File.Exists(candidate))
+            return candidate;
+
+        var parent = Path.GetDirectoryName(current);
+        if (parent == current) break; // reached root
+        current = parent;
+    }
+    return null;
 }
 
 // ── Redirection ─────────────────────────────────────────────────────
@@ -4119,7 +4215,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "init", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai" };
+    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "init", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai", "setbg" };
     var allCommands = translator.GetCommandNames().Concat(builtins);
 
     var suggestions = allCommands
