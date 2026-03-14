@@ -633,18 +633,19 @@ public class Theme
     /// and update env vars (LS_COLORS, GREP_COLORS, etc.) for contrast.
     /// Saves restore state so ResetBackground() can undo it on exit.
     /// </summary>
-    public static bool SetBackground(string hexColor)
+    public static bool SetBackground(string hexColor, bool emitOsc = true)
     {
         if (!TryParseHexColor(hexColor, out var r, out var g, out var b))
             return false;
 
-        // Save restore command (OSC 111 resets bg to terminal default)
-        // Only save the first time — preserves the original terminal background
-        _savedBgOsc ??= "\x1b]111\x1b\\";
-
         // Set background via OSC 11: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
-        var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
-        Console.Write(osc);
+        // Only emit when interactive (not rush -c) and stdout is a terminal.
+        if (emitOsc && !Console.IsOutputRedirected)
+        {
+            _savedBgOsc ??= "\x1b]111\x1b\\";
+            var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
+            Console.Write(osc);
+        }
 
         // Persist for reload — child processes inherit this env var
         Environment.SetEnvironmentVariable("RUSH_BG", hexColor);

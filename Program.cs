@@ -187,8 +187,8 @@ var config = RushConfig.Load();
 Theme.MinContrast = config.GetContrastRatio();
 // Apply saved background color BEFORE Theme.Initialize so the banner prints
 // with correct colors — no visible glitch window.
-if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
-    Theme.SetBackground(config.Bg);
+if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
+    Theme.SetBackground(config.Bg, emitOsc: false);
 Theme.Initialize(config.GetThemeOverride());
 bool rootBgApplied = false;
 if (Prompt.IsRoot())
@@ -1140,7 +1140,7 @@ while (true)
                 var (reloadE, reloadX, reloadPf) = config.Apply(lineEditor, translator);
                 setE = reloadE; setX = reloadX; setPipefail = reloadPf;
                 Theme.MinContrast = config.GetContrastRatio();
-                if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
                     Theme.SetBackground(config.Bg);
                 else
                     Theme.ResetBackground();
@@ -4479,7 +4479,7 @@ static void ApplySettingToRuntime(string key, RushConfig config, ref bool setE, 
             lineEditor.MaxHistory = config.HistorySize;
             break;
         case "bg":
-            if (string.Equals(config.Bg, "auto", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
                 Theme.ResetBackground();
             else
                 Theme.SetBackground(config.Bg);
@@ -4598,8 +4598,8 @@ static void RunNonInteractive(string command)
 {
     var cfg = RushConfig.Load();
     Theme.MinContrast = cfg.GetContrastRatio();
-    if (!string.IsNullOrEmpty(cfg.Bg) && !string.Equals(cfg.Bg, "auto", StringComparison.OrdinalIgnoreCase))
-        Theme.SetBackground(cfg.Bg);
+    if (!string.IsNullOrEmpty(cfg.Bg) && !string.Equals(cfg.Bg, "off", StringComparison.OrdinalIgnoreCase))
+        Theme.SetBackground(cfg.Bg, emitOsc: false);
     Theme.Initialize(cfg.GetThemeOverride());
     Theme.SetNativeColorEnvVars();
     var ui = new RushHostUI();

@@ -25,7 +25,7 @@ public class RushConfig
     /// "auto" = detect from env/OS. When set, enables 256-color palette with
     /// WCAG contrast validation. Applied before banner — no visible glitch.
     /// </summary>
-    public string Bg { get; set; } = "auto";
+    public string Bg { get; set; } = "off";
 
     // ── Accessibility ────────────────────────────────────────────────────
     /// <summary>
@@ -87,7 +87,7 @@ public class RushConfig
     {
         new SettingInfo("editMode",            "Editing",       "vi",    "vi, emacs",       "Editing mode. Vi: modal (Esc=normal, i=insert, /, ?, n, N=search). Emacs: always inserting, Ctrl+R=search."),
         new SettingInfo("historySize",         "Editing",       "500",   "number",          "Max commands saved to ~/.config/rush/history across sessions. Duplicates are collapsed."),
-        new SettingInfo("bg",                   "Display",       "auto",  "#hex, auto, reset", "Terminal background color. Enables precise 256-color palette. Use: set bg \"#222733\""),
+        new SettingInfo("bg",                   "Display",       "off",   "#hex, off",         "Terminal background color. Enables precise 256-color palette. Use: set bg \"#222733\""),
         new SettingInfo("theme",               "Display",       "auto",  "auto, dark, light","Color theme. \"auto\" detects terminal background. Force dark/light if detection is wrong."),
         new SettingInfo("promptFormat",        "Display",       "default","default",         "Prompt style. Override by defining rush_prompt() in init.rush for full control."),
         new SettingInfo("showTiming",          "Display",       "true",  "true, false",     "Show elapsed time for commands taking longer than 500ms."),
@@ -218,10 +218,10 @@ public class RushConfig
                 return true;
             case "bg":
                 var bgVal = value.Trim('"', '\'');
-                if (string.Equals(bgVal, "auto", StringComparison.OrdinalIgnoreCase))
-                { Bg = "auto"; return true; }
-                if (string.Equals(bgVal, "reset", StringComparison.OrdinalIgnoreCase))
-                { Bg = "auto"; return true; }
+                if (string.Equals(bgVal, "off", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(bgVal, "auto", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(bgVal, "reset", StringComparison.OrdinalIgnoreCase))
+                { Bg = "off"; return true; }
                 // Validate hex color
                 if (!Rush.Theme.TryParseHexColor(bgVal, out _, out _, out _)) return false;
                 Bg = bgVal;
