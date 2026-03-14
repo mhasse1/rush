@@ -3101,13 +3101,9 @@ static bool HandlePathCommand(string args, Runspace runspace)
         // Normalize: strip trailing slash
         expandedDir = expandedDir.TrimEnd('/', '\\');
 
-        // Check for duplicates
+        // Skip silently if already in path
         if (entries.Contains(expandedDir))
-        {
-            Console.ForegroundColor = Theme.Current.Warning;
-            Console.WriteLine($"  note: {expandedDir} already in {varName}");
-            Console.ResetColor();
-        }
+            return false;
 
         // Check existence
         if (!Directory.Exists(expandedDir))
@@ -3128,11 +3124,6 @@ static bool HandlePathCommand(string args, Runspace runspace)
             newValue = currentValue + PathUtils.PathListSeparator + expandedDir;
         }
         SetEnvVar(varName, newValue, runspace);
-
-        Console.ForegroundColor = Theme.Current.Muted;
-        Console.Write(front ? "  prepended: " : "  appended:  ");
-        Console.ResetColor();
-        Console.WriteLine(expandedDir);
 
         // Persist to init.rush if --save
         if (save)
