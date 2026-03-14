@@ -3038,9 +3038,13 @@ static bool HandlePathCommand(string args, Runspace runspace)
     var currentValue = Environment.GetEnvironmentVariable(varName) ?? "";
     var entries = currentValue.Split(PathUtils.PathListSeparator).Where(e => !string.IsNullOrEmpty(e)).ToList();
 
-    // ── path / path check — list entries with existence indicators ──
+    // ── path / path check — list entries with existence + duplicate indicators ──
     if (string.IsNullOrEmpty(args) || args.Equals("check", StringComparison.OrdinalIgnoreCase))
     {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        int dupeCount = 0;
+        int missingCount = 0;
+
         Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine($"  {varName} entries:");
         Console.ResetColor();
@@ -3048,17 +3052,96 @@ static bool HandlePathCommand(string args, Runspace runspace)
         {
             var dir = entries[i];
             var exists = Directory.Exists(dir);
+            var isDupe = !seen.Add(dir);
             var num = (i + 1).ToString().PadLeft(3);
+
+            if (isDupe) dupeCount++;
+            if (!exists && !isDupe) missingCount++;
 
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write($"  {num}  ");
-            Console.ForegroundColor = exists ? Theme.Current.PromptSuccess : Theme.Current.Warning;
-            Console.Write(exists ? "✓" : "✗");
-            Console.Write("  ");
-            Console.ForegroundColor = exists ? ConsoleColor.White : Theme.Current.Muted;
-            Console.WriteLine(dir);
+
+            if (isDupe)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Write("↑  ");
+                Console.ForegroundColor = Theme.Current.Muted;
+                Console.WriteLine(dir);
+            }
+            else
+            {
+                Console.ForegroundColor = exists ? Theme.Current.PromptSuccess : Theme.Current.Warning;
+                Console.Write(exists ? "✓" : "✗");
+                Console.Write("  ");
+                Console.ForegroundColor = exists ? ConsoleColor.White : Theme.Current.Muted;
+                Console.WriteLine(dir);
+            }
+        }
+
+        // Summary
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.Write($"  {seen.Count} unique");
+        if (dupeCount > 0)
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Write($", {dupeCount} duplicates (↑)");
+        }
+        if (missingCount > 0)
+        {
+            Console.ForegroundColor = Theme.Current.Warning;
+            Console.Write($", {missingCount} missing (✗)");
         }
         Console.ResetColor();
+        Console.WriteLine();
+        if (dupeCount > 0)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  run 'path dedupe' to remove duplicates");
+            Console.ResetColor();
+        }
+        return false;
+    }
+
+    // ── path dedupe [--save] — remove duplicate entries ─────────────
+    if (args.Equals("dedupe", StringComparison.OrdinalIgnoreCase) ||
+        args.Equals("dedupe --save", StringComparison.OrdinalIgnoreCase) ||
+        args.Equals("--save dedupe", StringComparison.OrdinalIgnoreCase))
+    {
+        bool save = args.Contains("--save", StringComparison.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var deduped = new List<string>();
+        int removed = 0;
+        foreach (var entry in entries)
+        {
+            if (seen.Add(entry))
+                deduped.Add(entry);
+            else
+                removed++;
+        }
+
+        if (removed == 0)
+        {
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine($"  {varName}: no duplicates found");
+            Console.ResetColor();
+            return false;
+        }
+
+        var newValue = string.Join(PathUtils.PathListSeparator.ToString(), deduped);
+        SetEnvVar(varName, newValue, runspace);
+
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.WriteLine($"  {varName}: removed {removed} duplicates ({deduped.Count} entries)");
+        Console.ResetColor();
+
+        if (save)
+        {
+            SavePathEditToInit(varName, deduped);
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine("  saved to:  ~/.config/rush/init.rush");
+            Console.ResetColor();
+        }
+
         return false;
     }
 
@@ -3219,10 +3302,12 @@ static bool HandlePathCommand(string args, Runspace runspace)
             }
             proc.Dispose();
 
-            // Read back, filter blanks and comments
+            // Read back, filter blanks and comments, dedupe
+            var newEntriesSeen = new HashSet<string>(StringComparer.Ordinal);
             var newEntries = File.ReadAllLines(tempFile)
                 .Select(l => l.Trim())
                 .Where(l => !string.IsNullOrEmpty(l) && !l.StartsWith('#'))
+                .Where(l => newEntriesSeen.Add(l))
                 .ToList();
 
             var newValue = string.Join(PathUtils.PathListSeparator.ToString(), newEntries);
@@ -3261,7 +3346,7 @@ static bool HandlePathCommand(string args, Runspace runspace)
     Console.Error.WriteLine($"  path: unknown subcommand '{args.Split(' ')[0]}'");
     Console.ResetColor();
     Console.ForegroundColor = Theme.Current.Muted;
-    Console.Error.WriteLine("  usage: path [--name=VAR] [add [--front] [--save] <dir> | rm [--save] <dir> | edit | check]");
+    Console.Error.WriteLine("  usage: path [check | dedupe | edit | add [--front] <dir> | rm <dir>] [--save]");
     Console.ResetColor();
     return true;
 }
