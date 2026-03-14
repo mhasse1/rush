@@ -87,6 +87,11 @@ public class LineEditor
         if (Console.IsInputRedirected)
             return Console.ReadLine();
 
+        // Drain any stale input (e.g., delayed OSC 11 responses that leaked
+        // into the input stream after background detection finished).
+        while (Console.KeyAvailable)
+            Console.ReadKey(intercept: true);
+
         // Treat Ctrl+C as a regular keystroke so Console.ReadKey can capture it.
         // Restored in finally so CancelKeyPress still works for running commands.
         Console.TreatControlCAsInput = true;
