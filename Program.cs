@@ -1705,20 +1705,6 @@ while (true)
             continue;
         }
 
-        // ── ls builtin (when not piped) ─────────────────────────
-        // Direct .NET file enumeration with multi-column/long format.
-        // When piped (ls | grep), falls through to Get-ChildItem path below.
-        if ((segment.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
-             segment.StartsWith("ls ", StringComparison.OrdinalIgnoreCase) ||
-             segment.StartsWith("ls\t", StringComparison.OrdinalIgnoreCase)) &&
-            !segment.Contains('|'))
-        {
-            var lsArgs = segment.Length > 2 ? segment[2..].TrimStart() : "";
-            lastSegmentFailed = !FileListCommand.Execute(lsArgs);
-            lastExitCode = lastSegmentFailed ? 1 : 0;
-            continue;
-        }
-
         // ── cat builtin (when not piped) ────────────────────────
         // Direct .NET file I/O — supports stdin, concatenation, -n.
         // When piped (cat file | grep), falls through to native cat
@@ -4518,19 +4504,6 @@ static void RunNonInteractive(string command)
     if (trimmedCmd.Contains("//ssh:") && UncHandler.TryHandle(trimmedCmd, out bool uncFailed))
     {
         if (uncFailed) Environment.ExitCode = 1;
-        return;
-    }
-
-    // ── ls builtin (same dispatch as interactive REPL) ──
-    if ((trimmedCmd.Equals("ls", StringComparison.OrdinalIgnoreCase) ||
-         trimmedCmd.StartsWith("ls ", StringComparison.OrdinalIgnoreCase) ||
-         trimmedCmd.StartsWith("ls\t", StringComparison.OrdinalIgnoreCase)) &&
-        !CommandTranslator.HasUnquotedPipe(trimmedCmd) &&
-        !CommandTranslator.HasUnquotedRedirection(trimmedCmd))
-    {
-        var lsArgs = trimmedCmd.Length > 2 ? trimmedCmd[2..].TrimStart() : "";
-        if (!FileListCommand.Execute(lsArgs))
-            Environment.ExitCode = 1;
         return;
     }
 

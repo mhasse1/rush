@@ -24,11 +24,9 @@ public class CommandTranslatorTests
     }
 
     [Fact]
-    public void NativeCommands_ReturnNull_OnNonWindows()
+    public void NativeCommands_ReturnNull()
     {
-        if (OperatingSystem.IsWindows()) return; // Skip on Windows
-
-        // Standard Unix commands should NOT be translated on *nix
+        // Standard Unix commands run natively — no translation
         Assert.Null(_translator.Translate("ls"));
         Assert.Null(_translator.Translate("grep -i users file.txt"));
         Assert.Null(_translator.Translate("cp -r src/ dest/"));

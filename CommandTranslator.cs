@@ -360,13 +360,11 @@ public class CommandTranslator
 
     private void RegisterDefaults()
     {
-        // On *nix, standard Unix commands run natively — no translation needed.
-        // On Windows, translate to PowerShell cmdlets as fallback (until GNU
-        // utils are bundled). The isAfterPipe special cases (grep→Where-Object,
-        // head→Select-Object, sort→Sort-Object, etc.) are independent of these
-        // registrations and always work in pipeline context.
-        if (OperatingSystem.IsWindows())
-            RegisterWindowsFallbacks();
+        // Standard Unix commands run natively — no translation needed.
+        // PS7 has built-in aliases on Windows (ls→Get-ChildItem, etc.).
+        // The isAfterPipe special cases (grep→Where-Object, head→Select-Object,
+        // sort→Sort-Object, etc.) are independent of registrations and always
+        // work in pipeline context.
 
         // echo: always translate — needs Write-Output for PS variable expansion
         Register("echo", "Write-Output", quotePositionalArgs: true);
@@ -393,72 +391,6 @@ public class CommandTranslator
         Register("columns", null);  // Special handling — index-based column selection
     }
 
-    /// <summary>
-    /// Windows-only: translate standard Unix commands to PowerShell cmdlets.
-    /// On *nix these commands exist natively; on Windows they don't (yet).
-    /// Will be removed once GNU utils (BusyBox-w64) are bundled.
-    /// </summary>
-    private void RegisterWindowsFallbacks()
-    {
-        // File system
-        Register("ls", "Get-ChildItem", new Dictionary<string, string>
-        {
-            ["-l"] = "",
-            ["-a"] = "-Force",
-            ["-la"] = "-Force",
-            ["-al"] = "-Force",
-            ["-r"] = "-Recurse",
-            ["-R"] = "-Recurse",
-        });
-        Register("pwd", "Get-Location");
-        Register("cd", "Set-Location");
-        Register("cp", "Copy-Item", new Dictionary<string, string>
-        {
-            ["-r"] = "-Recurse",
-            ["-R"] = "-Recurse",
-        });
-        Register("mv", "Move-Item");
-        Register("rm", "Remove-Item", new Dictionary<string, string>
-        {
-            ["-r"] = "-Recurse",
-            ["-rf"] = "-Recurse -Force",
-            ["-f"] = "-Force",
-        });
-        Register("touch", "New-Item -ItemType File -Path");
-        Register("mkdir", "New-Item -ItemType Directory -Path");
-
-        // Process management
-        Register("ps", "Get-Process");
-        Register("kill", "Stop-Process -Id");
-
-        // Text/search
-        Register("grep", "Select-String -Pattern");
-
-        // Environment
-        Register("env", "Get-ChildItem Env:");
-        Register("which", "Get-Command");
-        Register("type", "Get-Command");
-
-        // System info
-        Register("whoami", "[Environment]::UserName");
-        Register("hostname", "[Environment]::MachineName");
-        Register("df", "Get-PSDrive -PSProvider FileSystem");
-        Register("uptime", "(Get-Date) - (Get-Process -Id $PID).StartTime");
-
-        // Standalone head/tail/sort
-        Register("head", "Get-Content", new Dictionary<string, string>
-        {
-            ["-n"] = "-TotalCount",
-        });
-        Register("tail", "Get-Content", new Dictionary<string, string>
-        {
-            ["-n"] = "-Tail",
-        });
-        Register("sort", "Sort-Object");
-
-        // Shell
-        Register("clear", "Clear-Host");
-    }
 
     // ── Objectify PS Code Generation ────────────────────────────────────
 
