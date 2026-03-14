@@ -2049,20 +2049,20 @@ Both servers provide a `rush://lang-spec` resource containing the Rush language 
 
 ## SSH Requirements
 
-Rush uses SSH in three different ways, with different requirements for each:
+Rush uses SSH in several ways, with different requirements for each:
 
 | Mode | What it does | Rush on remote? | Auth |
 |------|-------------|----------------|------|
 | `//ssh:host/path` | UNC file operations | **Yes** (runs `rush -c`) | Key-based |
 | `ssh host "rush --llm"` | Structured remote shell | **Yes** | Key-based |
-| `rush --mcp-ssh` | MCP gateway for Claude | **No** (uses remote shell) | Key-based (BatchMode) |
+| `rush --mcp-ssh` | MCP gateway for Claude | **Recommended** — persistent session with structured JSON, variable/cwd persistence. Falls back to raw shell if Rush not installed. | Key-based (BatchMode) |
 | `sync init ssh host:path` | Config sync | **No** (uses scp) | Key-based |
 
 ### Prerequisites
 
 - **SSH key-based auth** — all modes use `BatchMode=yes` or equivalent (no password prompts)
 - **`ssh` in PATH** on the local machine
-- **Rush on remote** — only for UNC paths and LLM mode. Copy the binary or build from source
+- **Rush on remote** — required for UNC paths and LLM mode, recommended for MCP-SSH (enables persistent sessions with structured output)
 
 ### Deploying Rush to Remote Hosts
 
