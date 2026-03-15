@@ -5110,78 +5110,102 @@ static void RunNonInteractive(string command)
         return;
     }
 
-    // Full expansion pipeline (same order as interactive mode)
-    command = ExpandBraces(command);
-    command = ExpandTilde(command);
-    command = ExpandEnvVars(command);
-    command = ExpandArithmetic(command, rs);
-    var (procExpanded, procTempFiles) = ExpandProcessSubstitution(command, tr, rs);
-    command = procExpanded;
-    command = ExpandCommandSubstitution(command, tr, rs);
+    // Split chain operators (&&, ||, ;) — same as interactive REPL
+    var (chainSegments, chainOps) = SplitChainOperators(command);
+    bool lastFailed = false;
+    List<string>? allProcTempFiles = null;
 
-    // Parse redirections before translation
-    var (cmdPart, redirect, stdinRedirect, _) = RedirectionParser.Parse(command);
-    var translated = tr.Translate(cmdPart) ?? cmdPart;
-    var commandToRun = translated;
-
-    // Stdin redirection — pipe file content into command
-    if (stdinRedirect != null)
+    for (int ci = 0; ci < chainSegments.Count; ci++)
     {
+        var segment = chainSegments[ci].Trim();
+        if (string.IsNullOrEmpty(segment)) continue;
+
+        // Check chain operator conditions
+        if (ci > 0)
+        {
+            var op = chainOps[ci - 1];
+            if (op == "&&" && lastFailed) continue;
+            if (op == "||" && !lastFailed) continue;
+        }
+
+        // Full expansion pipeline (same order as interactive mode)
+        segment = ExpandBraces(segment);
+        segment = ExpandTilde(segment);
+        segment = ExpandEnvVars(segment);
+        segment = ExpandArithmetic(segment, rs);
+        var (procExpanded, procTempFiles) = ExpandProcessSubstitution(segment, tr, rs);
+        segment = procExpanded;
+        segment = ExpandCommandSubstitution(segment, tr, rs);
+        if (procTempFiles != null)
+        {
+            allProcTempFiles ??= new List<string>();
+            allProcTempFiles.AddRange(procTempFiles);
+        }
+
+        // Parse redirections before translation
+        var (cmdPart, redirect, stdinRedirect, _) = RedirectionParser.Parse(segment);
+        var translated = tr.Translate(cmdPart) ?? cmdPart;
+        var commandToRun = translated;
+
+        // Stdin redirection — pipe file content into command
+        if (stdinRedirect != null)
+        {
+            try
+            {
+                var stdinContent = File.ReadAllText(stdinRedirect.FilePath);
+                commandToRun = $"@'\n{stdinContent}\n'@ | {commandToRun}";
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"redirect: {ex.Message}");
+                Console.ResetColor();
+                lastFailed = true;
+                continue;
+            }
+        }
+
+        // Stderr merge — inject PS redirect
+        if (redirect?.MergeStderr == true)
+            commandToRun += " 2>&1";
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = rs;
+        ps.AddScript(commandToRun);
+
+        PowerShell? activePs = ps;
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            try { activePs?.Stop(); } catch { }
+        };
+
         try
         {
-            var stdinContent = File.ReadAllText(stdinRedirect.FilePath);
-            commandToRun = $"@'\n{stdinContent}\n'@ | {commandToRun}";
+            var results = ps.Invoke().ToList();
+            if (results.Count > 0)
+            {
+                if (redirect != null)
+                    WriteRedirectedOutput(results, redirect);
+                else
+                    OutputRenderer.Render(results.ToArray());
+            }
+            if (ps.Streams.Error.Count > 0) OutputRenderer.RenderErrors(ps.Streams);
+            lastFailed = ps.HadErrors;
         }
-        catch (Exception ex)
+        catch (PipelineStoppedException)
         {
-            Console.ForegroundColor = Theme.Current.Error;
-            Console.Error.WriteLine($"redirect: {ex.Message}");
-            Console.ResetColor();
-            Environment.ExitCode = 1;
-            return;
+            Console.Error.WriteLine();
+            lastFailed = true;
         }
     }
 
-    // Stderr merge — inject PS redirect
-    if (redirect?.MergeStderr == true)
-        commandToRun += " 2>&1";
+    Environment.ExitCode = lastFailed ? 1 : 0;
 
-    using var ps = PowerShell.Create();
-    ps.Runspace = rs;
-    ps.AddScript(commandToRun);
-
-    PowerShell? activePs = ps;
-    Console.CancelKeyPress += (_, e) =>
-    {
-        e.Cancel = true;
-        try { activePs?.Stop(); } catch { }
-    };
-
-    try
-    {
-        var results = ps.Invoke().ToList();
-        if (results.Count > 0)
-        {
-            if (redirect != null)
-                WriteRedirectedOutput(results, redirect);
-            else
-                OutputRenderer.Render(results.ToArray());
-        }
-        if (ps.Streams.Error.Count > 0) OutputRenderer.RenderErrors(ps.Streams);
-        Environment.ExitCode = ps.HadErrors ? 1 : 0;
-    }
-    catch (PipelineStoppedException)
-    {
-        Console.Error.WriteLine();
-        Environment.ExitCode = 130; // Standard Ctrl+C exit code
-    }
-    finally
-    {
-        // Clean up process substitution temp files
-        if (procTempFiles != null)
-            foreach (var f in procTempFiles)
-                try { File.Delete(f); } catch { }
-    }
+    // Clean up process substitution temp files
+    if (allProcTempFiles != null)
+        foreach (var f in allProcTempFiles)
+            try { File.Delete(f); } catch { }
 }
 
 // ── Types ────────────────────────────────────────────────────────────
