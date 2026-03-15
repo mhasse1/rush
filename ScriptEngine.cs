@@ -383,7 +383,8 @@ public class ScriptEngine
             return false;
 
         var afterWord = input[firstWord.Length..].TrimStart();
-        return afterWord.StartsWith("+=") || afterWord.StartsWith("-=");
+        return afterWord.StartsWith("+=") || afterWord.StartsWith("-=")
+            || afterWord.StartsWith("*=") || afterWord.StartsWith("/=");
     }
 
     /// <summary>

@@ -12,10 +12,15 @@ public class ObjectifyConfig
     /// <summary>Built-in defaults — ships with Rush.</summary>
     private static readonly Dictionary<string, string[]> BuiltInDefaults = new(StringComparer.OrdinalIgnoreCase)
     {
+        ["ps"] = Array.Empty<string>(),
         ["netstat"] = new[] { "--fixed" },
         ["ss"] = Array.Empty<string>(),
         ["lsof"] = new[] { "--fixed" },
         ["free"] = new[] { "--skip", "1" },
+        ["df"] = Array.Empty<string>(),
+        ["w"] = Array.Empty<string>(),
+        ["who"] = Array.Empty<string>(),
+        ["last"] = Array.Empty<string>(),
         ["docker ps"] = new[] { "--delim", @"\s{2,}" },
         ["docker images"] = new[] { "--delim", @"\s{2,}" },
         ["kubectl get"] = Array.Empty<string>(),

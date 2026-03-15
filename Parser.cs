@@ -609,7 +609,8 @@ public class Parser
     {
         // Check for compound assignment: identifier += expr or identifier -= expr
         if (Current.Type == RushTokenType.Identifier &&
-            Peek(1).Type is RushTokenType.PlusAssign or RushTokenType.MinusAssign)
+            Peek(1).Type is RushTokenType.PlusAssign or RushTokenType.MinusAssign
+                         or RushTokenType.StarAssign or RushTokenType.SlashAssign)
         {
             var name = Advance().Value;
             var op = Advance().Value; // += or -=
