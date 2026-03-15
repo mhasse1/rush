@@ -34,12 +34,12 @@ cd ~/projects                  $HOME, $PATH
 Filter, slice, and aggregate structured data without `awk`/`sed`/`jq`:
 
 ```bash
-# Filter by property (objectify turns text into structured objects)
-ps -ef | objectify | where CMD =~ rush
-netstat -an | objectify | where State == LISTEN
+# Filter by property (known commands auto-objectify when piped)
+ps -ef | where CMD =~ rush
+netstat -an | where State == LISTEN
 
 # Select columns
-ps -ef | objectify | select PID, CMD
+ps -ef | select PID, CMD
 
 # Count
 ls | count
@@ -73,13 +73,22 @@ ls | tee listing.txt | count
 
 ### objectify — Text to Objects
 
-Convert any tabular command output to structured objects:
+Known commands (ps, netstat, df, docker ps, kubectl get, etc.) **auto-objectify** when piped
+to pipeline operators — no need to type `| objectify |` explicitly:
 
 ```bash
-netstat -an | objectify | where State == LISTEN | select LocalAddress | count
-ps -ef | objectify | where CMD =~ rush | select PID, CMD
-docker ps | objectify | where Status =~ Up | select Names, Ports
+ps -ef | where CMD =~ rush | select PID, CMD
+netstat -an | where State == LISTEN | select LocalAddress | count
+docker ps | where Status =~ Up | select Names, Ports
 ```
+
+For other commands, use `objectify` explicitly:
+
+```bash
+lsblk | objectify | where TYPE == disk
+```
+
+Customize which commands auto-objectify in `~/.config/rush/objectify.rush`.
 
 ### String Methods
 
@@ -150,7 +159,7 @@ end                                 end
 
 | Task | Bash | Rush |
 |------|------|------|
-| Filter processes | `ps aux \| grep chrome` | `ps aux \| objectify \| where COMMAND =~ chrome` |
+| Filter processes | `ps aux \| grep chrome` | `ps aux \| where COMMAND =~ chrome` |
 | Count files | `ls | wc -l` | `ls | count` |
 | Extract column | `awk '{print $1}'` | `| .PropertyName` |
 | Top 5 items | `head -5` | `| first 5` |
@@ -161,8 +170,9 @@ end                                 end
 | If statement | `if [ $x -gt 5 ]; then ... fi` | `if x > 5 ... end` |
 | For loop | `for x in 1 2 3; do ... done` | `for x in [1,2,3] ... end` |
 | Loop over files | `for f in *; do echo $f; done` | `for f in Dir.list(".") ... end` |
-| Format as table | `column -t` | `| as table` |
 | Sum a column | `awk '{s+=$1}END{print s}'` | `| sum ColumnName` |
+| Export as CSV | (manual) | `| as csv` |
+| Export as JSON | (manual) | `| as json` |
 
 ---
 
@@ -237,4 +247,4 @@ x/D/C       Delete/change        u           Undo
 
 **`puts` not `echo` for rush expressions** — `echo` still works for simple strings, but `puts` handles rush expressions and interpolation
 
-**Semicolons work as newlines** — `if x > 5; puts "yes"; end` on one 
+**Semicolons work as newlines** — `if x > 5; puts "yes"; end` on one line

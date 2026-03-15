@@ -38,6 +38,8 @@ public enum RushTokenType
     PipePipe,       // ||
     PlusAssign,     // +=
     MinusAssign,    // -=
+    StarAssign,     // *=
+    SlashAssign,    // /=
     SafeNav,        // &.
 
     // Delimiters
@@ -268,6 +270,12 @@ public class Lexer
                 case "-=":
                     _pos += 2;
                     return new RushToken(RushTokenType.MinusAssign, "-=", start);
+                case "*=":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.StarAssign, "*=", start);
+                case "/=":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.SlashAssign, "/=", start);
                 case "=~":
                     _pos += 2;
                     return new RushToken(RushTokenType.MatchOp, "=~", start);
@@ -432,6 +440,7 @@ public class Lexer
             or RushTokenType.Slash or RushTokenType.Percent
             or RushTokenType.AmpAmp or RushTokenType.PipePipe or RushTokenType.Pipe
             or RushTokenType.PlusAssign or RushTokenType.MinusAssign
+            or RushTokenType.StarAssign or RushTokenType.SlashAssign
                 => true,
             // After opening delimiters, comma, semicolon, newline → regex
             RushTokenType.LParen or RushTokenType.LBracket or RushTokenType.LBrace
