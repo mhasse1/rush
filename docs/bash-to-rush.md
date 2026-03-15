@@ -34,12 +34,12 @@ cd ~/projects                  $HOME, $PATH
 Filter, slice, and aggregate structured data without `awk`/`sed`/`jq`:
 
 ```bash
-# Filter by property (Get-Process returns objects; native commands use objectify)
-Get-Process | where CPU > 10
+# Filter by property (objectify turns text into structured objects)
 ps -ef | objectify | where CMD =~ rush
+netstat -an | objectify | where State == LISTEN
 
 # Select columns
-Get-Process | select ProcessName, CPU
+ps -ef | objectify | select PID, CMD
 
 # Count
 ls | count
@@ -48,9 +48,11 @@ ls | count
 ls | first 5                    ls | last 3
 ls | skip 2                     ls | skip 2 | first 3
 
-# Aggregate
-Get-Process | sum WorkingSet64   Get-Process | avg CPU
-Get-Process | min CPU            Get-Process | max CPU
+# Aggregate (on structured data via from json or objectify)
+cat data.json | from json | sum amount
+cat data.json | from json | avg score
+cat data.json | from json | min score
+cat data.json | from json | max score
 
 # Unique (works unsorted)
 data | distinct                  data | distinct Name
@@ -59,11 +61,11 @@ data | distinct                  data | distinct Name
 data | sort Name                 data | sort -r
 
 # Extract single property
-Get-Process | .ProcessName       data | .items[].id
+cat data.json | from json | .name
 
 # Format & parse
-Get-Process | as json            cat data.json | from json
-Get-Process | as csv             cat data.csv | from csv
+cat data.json | from json        cat data.csv | from csv
+data | as json                   data | as csv
 
 # Save and pass through
 ls | tee listing.txt | count
@@ -137,9 +139,9 @@ done                                 end
 ### Platform Blocks
 
 ```bash
-macos { brew install ripgrep }
-linux { apt install ripgrep }
-win64 { choco install ripgrep }
+macos                               linux
+  brew install ripgrep                apt install ripgrep
+end                                 end
 ```
 
 ---
@@ -148,7 +150,7 @@ win64 { choco install ripgrep }
 
 | Task | Bash | Rush |
 |------|------|------|
-| Filter processes | `ps aux \| grep chrome` | `Get-Process \| where ProcessName =~ chrome` |
+| Filter processes | `ps aux \| grep chrome` | `ps aux \| objectify \| where COMMAND =~ chrome` |
 | Count files | `ls | wc -l` | `ls | count` |
 | Extract column | `awk '{print $1}'` | `| .PropertyName` |
 | Top 5 items | `head -5` | `| first 5` |

@@ -618,4 +618,339 @@ public class BashToRushDocTests
         Assert.Equal(0, exitCode);
         Assert.Equal("matched", stdout);
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 4: objectify — Text to Objects ───────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Objectify_PsEf_WhereSelect()
+    {
+        // ps -ef | objectify | where CMD =~ rush | select PID, CMD
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | select PID, CMD | first 2");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("PID", stdout);
+        Assert.Contains("CMD", stdout);
+    }
+
+    [Fact]
+    public void Objectify_WhereRegex()
+    {
+        // objectify + where with =~ regex match
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | where CMD =~ launchd | first 1 | .CMD");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("launchd", stdout);
+    }
+
+    [Fact]
+    public void Objectify_Count()
+    {
+        // objectify + count
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | count");
+        Assert.Equal(0, exitCode);
+        int count = int.Parse(stdout);
+        Assert.True(count > 1, $"Expected more than 1 process, got {count}");
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 5: String Methods ────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void StringMethod_Strip()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"  hello  \".strip");
+        Assert.Equal("hello", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Upcase()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello\".upcase");
+        Assert.Equal("HELLO", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Split()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello world\".split(\" \")");
+        Assert.Contains("hello", stdout);
+        Assert.Contains("world", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Include()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello\".include?(\"ell\")");
+        Assert.Equal("True", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_IncludeFalse()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello\".include?(\"xyz\")");
+        Assert.Equal("False", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_StartWith()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello\".start_with?(\"hel\")");
+        Assert.Equal("True", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Replace()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts \"hello\".replace(\"l\", \"L\")");
+        Assert.Equal("heLLo", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Red()
+    {
+        // .red adds ANSI escape codes — just verify it doesn't error
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"error\".red");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("error", stdout);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 6: File & Dir Stdlib ─────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void FileStdlib_Read()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_read_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmpFile, "test data");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.read(\"{tmpFile}\")");
+            Assert.Contains("test data", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void FileStdlib_Write()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_write_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            TestHelper.RunRush($"File.write(\"{tmpFile}\", \"hello\")");
+            Assert.True(File.Exists(tmpFile));
+            Assert.Contains("hello", File.ReadAllText(tmpFile));
+        }
+        finally { if (File.Exists(tmpFile)) File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void FileStdlib_Append()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_append_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmpFile, "hello");
+            TestHelper.RunRush($"File.append(\"{tmpFile}\", \"world\")");
+            var content = File.ReadAllText(tmpFile);
+            Assert.Contains("hello", content);
+            Assert.Contains("world", content);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void FileStdlib_Exist()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_exist_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmpFile, "data");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
+            Assert.Equal("True", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void FileStdlib_ExistFalse()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts File.exist?(\"/tmp/rush_nonexistent_file_12345\")");
+        Assert.Equal("False", stdout);
+    }
+
+    [Fact]
+    public void FileStdlib_Size()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_size_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmpFile, "12345");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{tmpFile}\")");
+            Assert.Equal("5", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void FileStdlib_ReadJson()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_rjson_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpFile, "{\"key\":\"value\"}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.key");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("value", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void DirStdlib_List()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_dirlist_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("a.txt", stdout);
+            Assert.Contains("b.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void DirStdlib_ListRecursive()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_dirlistrec_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(Path.Combine(tmpDir, "sub"));
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            File.WriteAllText(Path.Combine(tmpDir, "sub", "b.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts Dir.list(\"{tmpDir}\", recursive: true)");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("a.txt", stdout);
+            Assert.Contains("b.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void DirStdlib_Mkdir()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_mkdir_" + Guid.NewGuid().ToString("N")[..8], "sub", "deep");
+        try
+        {
+            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")");
+            Assert.Equal(0, exitCode);
+            Assert.True(Directory.Exists(tmpDir));
+        }
+        finally
+        {
+            // Clean up root
+            var root = Path.GetDirectoryName(Path.GetDirectoryName(tmpDir));
+            if (root != null && Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 7: Duration Literals ─────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Duration_Seconds()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts 2.seconds");
+        Assert.Equal("00:00:02", stdout);
+    }
+
+    [Fact]
+    public void Duration_Minutes()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts 5.minutes");
+        Assert.Equal("00:05:00", stdout);
+    }
+
+    [Fact]
+    public void Duration_Arithmetic()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts 1.hours + 30.minutes");
+        Assert.Equal("01:30:00", stdout);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 8: Loops ─────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Loop_ForInArray()
+    {
+        // Doc: for x in [1, 2, 3] \n puts x \n end
+        var (stdout, _, exitCode) = TestHelper.RunRush("for x in [1, 2, 3]\n  puts x\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("1", stdout);
+        Assert.Contains("2", stdout);
+        Assert.Contains("3", stdout);
+    }
+
+    [Fact]
+    public void Loop_ForInDirList()
+    {
+        // Doc: for f in Dir.list(".") \n puts f \n end
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_loop_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "x.txt"), "");
+            File.WriteAllText(Path.Combine(tmpDir, "y.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("x.txt", stdout);
+            Assert.Contains("y.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 9: Platform Blocks ───────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void PlatformBlock_Macos()
+    {
+        // macos block should execute on macOS, skip on Linux
+        var (stdout, _, exitCode) = TestHelper.RunRush("macos\n  echo \"on mac\"\nend");
+        if (OperatingSystem.IsMacOS())
+        {
+            Assert.Equal(0, exitCode);
+            Assert.Equal("on mac", stdout);
+        }
+        else
+        {
+            // On non-macOS, the block should be skipped
+            Assert.Equal(0, exitCode);
+        }
+    }
+
+    [Fact]
+    public void PlatformBlock_Linux()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("linux\n  echo \"on linux\"\nend");
+        if (OperatingSystem.IsLinux())
+        {
+            Assert.Equal(0, exitCode);
+            Assert.Equal("on linux", stdout);
+        }
+        else
+        {
+            Assert.Equal(0, exitCode);
+            Assert.DoesNotContain("on linux", stdout);
+        }
+    }
 }

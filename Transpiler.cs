@@ -1239,7 +1239,11 @@ public class RushTranspiler
     private string TranspileInclude(string receiver, List<RushNode> args)
     {
         if (args.Count > 0)
-            return $"({receiver} -contains {TranspileExpression(args[0])})";
+        {
+            var arg = TranspileExpression(args[0]);
+            // For strings use .Contains(); for collections use -contains
+            return $"$(if ({receiver} -is [string]) {{ ({receiver}).Contains({arg}) }} else {{ {receiver} -contains {arg} }})";
+        }
         return "$false";
     }
 
