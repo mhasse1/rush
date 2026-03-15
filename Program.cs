@@ -5025,9 +5025,18 @@ static void RunNonInteractive(string command)
     // Check if the command contains Rush scripting syntax (multi-line blocks,
     // method chaining, assignments, etc.). If so, route through the transpiler
     // instead of the shell command path.
-    bool isRushScript = command.Contains('\n')
-        ? scriptEngine.IsRushSyntax(command.Split('\n', StringSplitOptions.RemoveEmptyEntries)[0].Trim())
-        : scriptEngine.IsRushSyntax(command);
+    // For multi-line scripts, check if ANY line is Rush syntax (not just the first).
+    // TranspileFile handles mixed Rush/shell lines per-line, so this is safe.
+    bool isRushScript;
+    if (command.Contains('\n'))
+    {
+        var lines = command.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        isRushScript = lines.Any(l => scriptEngine.IsRushSyntax(l.Trim()));
+    }
+    else
+    {
+        isRushScript = scriptEngine.IsRushSyntax(command);
+    }
 
     if (isRushScript)
     {

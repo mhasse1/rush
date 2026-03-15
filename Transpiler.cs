@@ -1017,9 +1017,13 @@ public class RushTranspiler
         }
 
         var expr = TranspileExpression(arg);
-        // Wrap in parens if expression contains PS operators that could be
-        // misinterpreted as Write-Output parameters (e.g., -join, -split, -match)
-        if (expr.Contains(" -") || expr.StartsWith("["))
+        // Wrap in parens if expression contains spaces (function calls, operators)
+        // that PS would misinterpret as multiple Write-Output arguments.
+        // Also wrap size literals (1kb, 5mb) — PS treats bare Write-Output 1kb as string.
+        // Exempt quoted strings and variable references which are safe as-is.
+        if (expr.StartsWith("[") ||
+            System.Text.RegularExpressions.Regex.IsMatch(expr, @"^\d+[kmgt]b$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ||
+            (expr.Contains(' ') && !expr.StartsWith('"') && !expr.StartsWith("'") && !expr.StartsWith("$")))
             return $"Write-Output ({expr})";
         return $"Write-Output {expr}";
     }

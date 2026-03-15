@@ -131,6 +131,11 @@ public class ScriptEngine
         if (IsBuiltinFunction(firstWord))
             return true;
 
+        // Rule 7b: Standalone function call — identifier followed immediately by (
+        // e.g., greet(), add(2, 3). No shell command uses word( syntax.
+        if (firstSpace >= 0 && firstSpace < trimmed.Length && trimmed[firstSpace] == '(')
+            return true;
+
         // Rule 2: Assignment — IDENTIFIER = EXPR, IDENTIFIER += EXPR,
         //         or multiple: a, b, c = 1, 2, 3
         if (IsMultipleAssignment(trimmed))
