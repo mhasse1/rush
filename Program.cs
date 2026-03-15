@@ -3732,7 +3732,10 @@ static string ExpandTilde(string input)
         if (!inSingleQuote && !inDoubleQuote && input[i] == '~')
         {
             // Only expand at word boundary (start of input, after space, or after =)
-            bool atWordStart = i == 0 || input[i - 1] is ' ' or '\t' or '=';
+            // After = only when it's assignment (VAR=~/path), not operator (=~ !~)
+            // Assignment = is preceded by a word char; operator = is preceded by space/!/=
+            bool atWordStart = i == 0 || input[i - 1] is ' ' or '\t'
+                || (input[i - 1] == '=' && i >= 2 && char.IsLetterOrDigit(input[i - 2]));
             if (atWordStart)
             {
                 // ~/... or standalone ~

@@ -192,6 +192,14 @@ public class NewFeaturesIntegrationTests
     }
 
     [Fact]
+    public void TildeExpansion_RegexOperator_NoExpansion()
+    {
+        // =~ and !~ operators should NOT trigger tilde expansion
+        var (stdout, _, _) = TestHelper.RunRush("x = \"hello\"\nif x =~ \"hell\"\n  puts \"matched\"\nend");
+        Assert.Equal("matched", stdout);
+    }
+
+    [Fact]
     public void TildeUser_CurrentUser_Resolves()
     {
         var username = Environment.UserName;
