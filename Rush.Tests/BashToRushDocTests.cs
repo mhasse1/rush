@@ -240,7 +240,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            var (stdout, _, _) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
             Assert.Contains("a.txt", stdout);
             Assert.Contains("b.txt", stdout);
         }
@@ -652,6 +652,37 @@ public class BashToRushDocTests
         Assert.True(count > 1, $"Expected more than 1 process, got {count}");
     }
 
+    // ── Auto-objectify (ps is in ObjectifyConfig defaults) ──────────
+
+    [Fact]
+    public void AutoObjectify_Ps_Where()
+    {
+        // ps is a known command — auto-objectify injects objectify when piped
+        // No explicit "| objectify |" needed
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | where CMD =~ launchd | first 1 | .CMD");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("launchd", stdout);
+    }
+
+    [Fact]
+    public void AutoObjectify_Ps_SelectCount()
+    {
+        // ps with auto-objectify: select + count
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | select PID, CMD | count");
+        Assert.Equal(0, exitCode);
+        int count = int.Parse(stdout);
+        Assert.True(count > 1, $"Expected more than 1 process, got {count}");
+    }
+
+    [Fact]
+    public void AutoObjectify_Ps_StandaloneNoInject()
+    {
+        // ps alone (no pipe) should NOT inject objectify — just runs natively
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("PID", stdout); // raw text header
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // ── Section 5: String Methods ────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════
@@ -816,7 +847,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
             Assert.Contains("b.txt", stdout);
@@ -909,7 +940,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "x.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "y.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
             Assert.Equal(0, exitCode);
             Assert.Contains("x.txt", stdout);
             Assert.Contains("y.txt", stdout);
@@ -952,5 +983,225 @@ public class BashToRushDocTests
             Assert.Equal(0, exitCode);
             Assert.DoesNotContain("on linux", stdout);
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 10: Side by Side ────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+    // These verify the exact Rush examples from the comparison table.
+    // Many overlap with earlier sections — the point is the doc examples work.
+
+    [Fact]
+    public void SideBySide_FilterProcesses()
+    {
+        // Doc: ps aux | where COMMAND =~ chrome (auto-objectify)
+        // We use a term we know exists: rush itself
+        var (stdout, _, exitCode) = TestHelper.RunRush("ps aux | where COMMAND =~ rush | count");
+        Assert.Equal(0, exitCode);
+        int count = int.Parse(stdout);
+        Assert.True(count >= 1, $"Expected at least 1 rush process, got {count}");
+    }
+
+    [Fact]
+    public void SideBySide_CountFiles()
+    {
+        // Doc: ls | count
+        var (stdout, _, exitCode) = TestHelper.RunRush("ls /tmp | count");
+        Assert.Equal(0, exitCode);
+        int count = int.Parse(stdout);
+        Assert.True(count >= 0);
+    }
+
+    [Fact]
+    public void SideBySide_First5()
+    {
+        // Doc: | first 5
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' | first 5");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(5, lines.Length);
+        Assert.Equal("a", lines[0]);
+        Assert.Equal("e", lines[4]);
+    }
+
+    [Fact]
+    public void SideBySide_Distinct()
+    {
+        // Doc: | distinct
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf 'a\\nb\\na\\nc\\nb\\n' | distinct");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(3, lines.Length);
+    }
+
+    [Fact]
+    public void SideBySide_ParseJson()
+    {
+        // Doc: File.read_json("f").name
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_sbs_json_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpFile, "{\"name\":\"alice\"}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.read_json(\"{tmpFile}\").name");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("alice", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void SideBySide_CheckFileExists()
+    {
+        // Doc: File.exist?("file")
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_sbs_exist_" + Guid.NewGuid().ToString("N")[..8]);
+        File.WriteAllText(tmpFile, "");
+        try
+        {
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
+            Assert.Equal("True", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void SideBySide_StringInterpolation()
+    {
+        // Doc: "Hello #{name}"
+        var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs \"Hello #{name}\"");
+        Assert.Equal("Hello world", stdout);
+    }
+
+    [Fact]
+    public void SideBySide_IfStatement()
+    {
+        // Doc: if x > 5 ... end
+        var (stdout, _, _) = TestHelper.RunRush("x = 10\nif x > 5\n  puts \"yes\"\nend");
+        Assert.Equal("yes", stdout);
+    }
+
+    [Fact]
+    public void SideBySide_ForLoop()
+    {
+        // Doc: for x in [1,2,3] ... end
+        var (stdout, _, exitCode) = TestHelper.RunRush("for x in [1,2,3]\n  puts x\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("1", stdout);
+        Assert.Contains("2", stdout);
+        Assert.Contains("3", stdout);
+    }
+
+    [Fact]
+    public void SideBySide_LoopOverFiles()
+    {
+        // Doc: for f in Dir.list(".") ... end
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_sbs_loop_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "m.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("m.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void SideBySide_SumColumn()
+    {
+        // Doc: | sum ColumnName
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_sbs_sum_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpFile, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpFile}\" | from json | sum v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("60", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 11: Configuration ───────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+    // Most config commands are REPL-only (set, path). We test what works via rush -c.
+
+    [Fact]
+    public void Config_SetVi()
+    {
+        // "set vi" should not error (even in non-interactive mode)
+        var (_, _, exitCode) = TestHelper.RunRush("set vi");
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Config_SetEmacs()
+    {
+        var (_, _, exitCode) = TestHelper.RunRush("set emacs");
+        Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public void Config_PathShow_IsReplOnly()
+    {
+        // "path" is a REPL-only builtin — not available via rush -c
+        var (_, stderr, exitCode) = TestHelper.RunRush("path");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("not found", stderr);
+    }
+
+    [Fact]
+    public void Config_PathCheck_IsReplOnly()
+    {
+        // "path check" is a REPL-only builtin — not available via rush -c
+        var (_, stderr, exitCode) = TestHelper.RunRush("path check");
+        Assert.Equal(1, exitCode);
+        Assert.Contains("not found", stderr);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 12: Gotchas ─────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Gotcha_NoDollarOnVariables()
+    {
+        // "name = 'world'" not "$name = 'world'"
+        var (stdout, _, exitCode) = TestHelper.RunRush("name = \"world\"\nputs name");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("world", stdout);
+    }
+
+    [Fact]
+    public void Gotcha_HashInterpolation()
+    {
+        // #{} not ${}
+        var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs \"Hello #{name}\"");
+        Assert.Equal("Hello world", stdout);
+    }
+
+    [Fact]
+    public void Gotcha_EndNotFi()
+    {
+        // blocks close with 'end'
+        var (stdout, _, exitCode) = TestHelper.RunRush("if true\n  puts \"yes\"\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("yes", stdout);
+    }
+
+    [Fact]
+    public void Gotcha_PutsForExpressions()
+    {
+        // "puts" handles rush expressions, "echo" is for simple strings
+        var (stdout, _, _) = TestHelper.RunRush("arr = [1, 2, 3]\nputs arr.length");
+        Assert.Equal("3", stdout);
+    }
+
+    [Fact]
+    public void Gotcha_SemicolonsAsNewlines()
+    {
+        // Doc: "if x > 5; puts 'yes'; end" on one line
+        var (stdout, _, _) = TestHelper.RunRush("x = 10; if x > 5; puts \"yes\"; end");
+        Assert.Equal("yes", stdout);
     }
 }

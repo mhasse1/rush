@@ -692,6 +692,140 @@ public class NewFeaturesIntegrationTests
         finally { Directory.Delete(tmpDir, true); }
     }
 
+    // ── Dir.list Symbol Flags ─────────────────────────────────────────────
+
+    [Fact]
+    public void Dir_List_Default_Returns_RelativePaths()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\")");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("a.txt", stdout);
+            // Should not be absolute paths (starts with /)
+            Assert.False(stdout.TrimStart().StartsWith("/"), "Dir.list should return relative paths, not absolute");
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_Symbol_Files()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            Directory.CreateDirectory(Path.Combine(tmpDir, "sub"));
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :files)\nputs items.Count");
+            Assert.Equal("1", stdout); // only the file, not the dir
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_Symbol_Dirs()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
+            Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :dirs)\nputs items.Count");
+            Assert.Equal("2", stdout); // only dirs
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_Symbol_Recurse()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        var subDir = Path.Combine(tmpDir, "sub");
+        Directory.CreateDirectory(subDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :recurse, :files)\nputs items.Count");
+            Assert.Equal("2", stdout); // a.txt + sub/b.txt
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_Symbol_Ls()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "hello");
+            // :ls returns FileInfo objects — in rush -c they render as full paths
+            var (stdout, _, exitCode) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :ls)\nputs items[0].Name");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("a.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_Symbol_Hidden()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, ".hidden"), "");
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "visible.txt"), "");
+            // Without :hidden, dotfiles are excluded on macOS/Linux Get-ChildItem
+            var (stdoutHidden, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :hidden)\nputs items.Count");
+            var countWithHidden = int.Parse(stdoutHidden.Trim());
+            var (stdoutNormal, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\")\nputs items.Count");
+            var countNormal = int.Parse(stdoutNormal.Trim());
+            Assert.True(countWithHidden > countNormal, "Hidden flag should include dotfiles");
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_RecursivePaths_IncludeSubdir()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        var subDir = Path.Combine(tmpDir, "sub");
+        Directory.CreateDirectory(subDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(subDir, "deep.txt"), "");
+            var (stdout, _, _) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\", :recurse, :files)");
+            // Relative path should include subdirectory
+            Assert.Contains("sub", stdout);
+            Assert.Contains("deep.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_BackwardCompat_NamedArgs()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        var subDir = Path.Combine(tmpDir, "sub");
+        Directory.CreateDirectory(subDir);
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", type: \"file\", recursive: true)\nputs items.Count");
+            Assert.Equal("2", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
     // ── Multiple Assignment ──────────────────────────────────────────────
 
     [Fact]

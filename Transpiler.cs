@@ -1105,30 +1105,38 @@ public class RushTranspiler
 
     private string TranspileDirList(MethodCallNode node)
     {
-        var path = node.Args.Count > 0 ? TranspileExpression(node.Args[0]) : "'.'";
+        // First positional arg is path (skip symbols and named args)
+        var pathArg = node.Args.FirstOrDefault(a => a is not NamedArgNode and not SymbolNode);
+        var path = pathArg != null ? TranspileExpression(pathArg) : "'.'";
 
-        // Extract named args
+        // Symbol flags: :files, :dirs, :recurse, :hidden, :ls
+        bool HasSymbol(string name) => node.Args.OfType<SymbolNode>().Any(s => s.Name == ":" + name);
+
+        // Named args (backward compat)
         var typeArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "type");
         var recursiveArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "recursive");
         var hiddenArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "hidden");
 
         var cmd = $"Get-ChildItem {path}";
 
-        // type: "file" or "dir"
-        if (typeArg?.Value is LiteralNode typeLit)
-        {
-            var typeVal = typeLit.Value.Trim('"', '\'');
-            if (typeVal == "file") cmd += " -File";
-            else if (typeVal == "dir") cmd += " -Directory";
-        }
+        // type: files/dirs
+        if (HasSymbol("files") || (typeArg?.Value is LiteralNode typeLit && typeLit.Value.Trim('"', '\'') == "file"))
+            cmd += " -File";
+        else if (HasSymbol("dirs") || (typeArg?.Value is LiteralNode typeLit2 && typeLit2.Value.Trim('"', '\'') == "dir"))
+            cmd += " -Directory";
 
-        if (recursiveArg?.Value is LiteralNode recLit && recLit.Value == "true")
+        if (HasSymbol("recurse") || (recursiveArg?.Value is LiteralNode recLit && recLit.Value == "true"))
             cmd += " -Recurse";
 
-        if (hiddenArg?.Value is LiteralNode hidLit && hidLit.Value == "true")
+        if (HasSymbol("hidden") || (hiddenArg?.Value is LiteralNode hidLit && hidLit.Value == "true"))
             cmd += " -Force";
 
-        return cmd;
+        // :ls → return objects for verbose OutputRenderer display
+        // default → return relative path strings (script-friendly)
+        if (HasSymbol("ls"))
+            return cmd;
+
+        return $"{cmd} | ForEach-Object {{ [IO.Path]::GetRelativePath($PWD.Path, $_.FullName) }}";
     }
 
     private string TranspileTimeMethod(MethodCallNode node)
