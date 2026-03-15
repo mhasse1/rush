@@ -501,6 +501,10 @@ while (true)
     var (cmdFailed, cmdExitCode, cmdShouldExit) = ProcessCommand(input, state);
     if (cmdShouldExit || signalExit) break;
 
+    // Re-emit background after external commands that may have changed terminal bg
+    // (e.g., sudo -s, ssh). Cheap and idempotent — just resends the OSC escape.
+    Theme.ReemitBackground();
+
     prompt.SetLastCommandFailed(cmdFailed, cmdExitCode);
     lineEditor.SaveHistory();
 }
@@ -1135,13 +1139,31 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 }
                 else
                 {
-                    // Set value for session
+                    // Handle: set key --save value (e.g., set bg --save "#hex")
+                    bool saveFromValue = false;
+                    if (parts[1].StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        saveFromValue = true;
+                        parts[1] = parts[1][7..].TrimStart();
+                    }
+
+                    // Set value for session (and persist if --save)
                     if (state.Config.SetValue(parts[0], parts[1]))
                     {
                         ApplySettingToRuntime(parts[0], state);
-                        Console.ForegroundColor = Theme.Current.Muted;
-                        Console.WriteLine($"  {parts[0]} = {parts[1]}");
-                        Console.ResetColor();
+                        if (saveFromValue)
+                        {
+                            state.Config.Save();
+                            Console.ForegroundColor = Theme.Current.Muted;
+                            Console.WriteLine($"  {parts[0]} = {parts[1]} (saved)");
+                            Console.ResetColor();
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = Theme.Current.Muted;
+                            Console.WriteLine($"  {parts[0]} = {parts[1]}");
+                            Console.ResetColor();
+                        }
                     }
                     else
                     {
@@ -4554,7 +4576,12 @@ static void ApplyDirBackground(string dir)
             {
                 var hex = File.ReadAllText(rushBgFile).Trim();
                 if (!string.IsNullOrEmpty(hex) && Theme.SetBackground(hex))
+                {
                     Theme.ActiveRushBgFile = rushBgFile;
+                    // Re-initialize theme so contrast validation matches the set bg path
+                    Theme.Initialize();
+                    Theme.SetNativeColorEnvVars();
+                }
             }
             catch { /* file read error — silently ignore */ }
         }

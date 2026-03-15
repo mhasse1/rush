@@ -452,18 +452,26 @@ public class Theme
         if (GetContrastRatio(color, bgLum) >= MinContrast)
             return color;
 
-        // Try brighter or darker variant
+        // Try primary direction (brighter for dark bg, darker for light bg)
         var alt = isDark ? Brighten(color) : Darken(color);
         if (alt != color && GetContrastRatio(alt, bgLum) >= MinContrast)
             return alt;
-
-        // Try one more step
         var alt2 = isDark ? Brighten(alt) : Darken(alt);
         if (alt2 != alt && GetContrastRatio(alt2, bgLum) >= MinContrast)
             return alt2;
 
-        // Nuclear fallback
-        return isDark ? ConsoleColor.White : ConsoleColor.Black;
+        // Try opposite direction (helps mid-luminance backgrounds like #9D836E)
+        var opp = isDark ? Darken(color) : Brighten(color);
+        if (opp != color && GetContrastRatio(opp, bgLum) >= MinContrast)
+            return opp;
+        var opp2 = isDark ? Darken(opp) : Brighten(opp);
+        if (opp2 != opp && GetContrastRatio(opp2, bgLum) >= MinContrast)
+            return opp2;
+
+        // Nuclear fallback: pick whichever of White/Black has better contrast
+        var whiteRatio = GetContrastRatio(ConsoleColor.White, bgLum);
+        var blackRatio = GetContrastRatio(ConsoleColor.Black, bgLum);
+        return whiteRatio > blackRatio ? ConsoleColor.White : ConsoleColor.Black;
     }
 
     /// <summary>
@@ -612,6 +620,9 @@ public class Theme
     /// <summary>Saved original background for restore on exit. Null if not changed.</summary>
     private static string? _savedBgOsc;
 
+    /// <summary>Current background OSC sequence. Used by ReemitBackground() after external commands.</summary>
+    private static string? _currentBgOsc;
+
     /// <summary>
     /// If root/admin, set the terminal background via OSC 11.
     /// Call after Initialize(). Returns true if background was changed.
@@ -638,12 +649,15 @@ public class Theme
         if (!TryParseHexColor(hexColor, out var r, out var g, out var b))
             return false;
 
-        // Set background via OSC 11: ESC]11;rgb:RRRR/GGGG/BBBB ESC\
+        // Build OSC 11 sequence. Use BEL (\x07) terminator for broad terminal
+        // compatibility (works in iTerm2, Terminal.app, xterm, etc.)
+        var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x07";
+        _currentBgOsc = osc;
+
         // Only emit when interactive (not rush -c) and stdout is a terminal.
         if (emitOsc && !Console.IsOutputRedirected)
         {
-            _savedBgOsc ??= "\x1b]111\x1b\\";
-            var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x1b\\";
+            _savedBgOsc ??= "\x1b]111\x07";
             Console.Write(osc);
         }
 
@@ -674,6 +688,7 @@ public class Theme
         {
             Console.Write(_savedBgOsc);
             _savedBgOsc = null;
+            _currentBgOsc = null;
 
             // Clear RUSH_BG so detection falls through to COLORFGBG/macOS/fallback
             Environment.SetEnvironmentVariable("RUSH_BG", null);
@@ -696,6 +711,16 @@ public class Theme
             // Clear RUSH_BG so child processes don't inherit stale value
             Environment.SetEnvironmentVariable("RUSH_BG", null);
         }
+    }
+
+    /// <summary>
+    /// Re-emit the current background OSC sequence without rebuilding the theme.
+    /// Cheap and idempotent — call after external commands that may change terminal bg.
+    /// </summary>
+    public static void ReemitBackground()
+    {
+        if (_currentBgOsc != null && !Console.IsOutputRedirected)
+            Console.Write(_currentBgOsc);
     }
 
     /// <summary>

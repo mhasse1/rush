@@ -98,52 +98,56 @@ public class TabCompleter
         if (string.IsNullOrEmpty(token) && tokenStart == 0)
             return null;
 
+        // Strip leading quote from token for matching purposes
+        // (ApplyCompletion handles re-quoting the result)
+        var matchToken = token.StartsWith('"') ? token[1..] : token;
+
         // Determine context
         var beforeToken = input[..tokenStart].TrimEnd();
         bool isFirstToken = string.IsNullOrEmpty(beforeToken);
         var firstWord = ExtractFirstWord(beforeToken);
-        bool isPathLike = token.Contains('/') || token.Contains(Path.DirectorySeparatorChar)
-            || token.StartsWith("./") || token.StartsWith("../");
+        bool isPathLike = matchToken.Contains('/') || matchToken.Contains(Path.DirectorySeparatorChar)
+            || matchToken.StartsWith("./") || matchToken.StartsWith("../");
 
         // Dot-completion: variable.method or receiver.property
-        var dotPos = token.LastIndexOf('.');
-        if (dotPos > 0 && !isPathLike && !token.StartsWith('-'))
+        var dotPos = matchToken.LastIndexOf('.');
+        if (dotPos > 0 && !isPathLike && !matchToken.StartsWith('-'))
         {
-            var receiver = token[..dotPos];
-            var memberPrefix = token[(dotPos + 1)..];
-            _completionStart = tokenStart + dotPos + 1; // Point after the dot
+            var receiver = matchToken[..dotPos];
+            var memberPrefix = matchToken[(dotPos + 1)..];
+            _completionStart = tokenStart + dotPos + 1 + (token.StartsWith('"') ? 1 : 0);
             CompleteDotMembers(receiver, memberPrefix);
         }
-        else if (token.StartsWith('$'))
+        else if (matchToken.StartsWith('$'))
         {
             // $VAR completion
-            CompleteEnvironmentVariables(token);
+            CompleteEnvironmentVariables(matchToken);
         }
-        else if (token.StartsWith('-') && !isFirstToken)
+        else if (matchToken.StartsWith('-') && !isFirstToken)
         {
             // Flag completion
-            CompleteFlags(firstWord, token);
+            CompleteFlags(firstWord, matchToken);
         }
         else if (isPathLike)
         {
             // Path-like tokens (contain / or start with ./ ../) always get path completion
-            CompletePaths(token);
+            CompletePaths(matchToken);
         }
         else if (isFirstToken)
         {
             // Complete command names (builtins + translator + PATH binaries)
-            CompleteCommands(token);
+            CompleteCommands(matchToken);
         }
         else if (firstWord.Equals("cd", StringComparison.OrdinalIgnoreCase) ||
                  firstWord.Equals("pushd", StringComparison.OrdinalIgnoreCase))
         {
             // cd/pushd: directories only
-            CompleteDirectoriesOnly(token);
+            CompleteDirectoriesOnly(matchToken);
         }
         else
         {
             // Complete file/directory paths
-            CompletePaths(token);
+            CompletePaths(matchToken);
         }
 
         // If no local completions, try PowerShell's built-in completion
@@ -176,7 +180,8 @@ public class TabCompleter
         for (int i = 0; i < _completions.Count; i++)
         {
             var comp = _completions[i];
-            if (comp.EndsWith(Path.DirectorySeparatorChar) || comp.EndsWith('/'))
+            bool isDir = comp.EndsWith(Path.DirectorySeparatorChar) || comp.EndsWith('/');
+            if (isDir)
             {
                 Console.ForegroundColor = Theme.Current.Directory;
                 Console.Write(comp.PadRight(maxLen));
@@ -207,15 +212,34 @@ public class TabCompleter
         var afterTokenEnd = FindTokenEnd(originalInput, _completionStart);
         var after = originalInput[afterTokenEnd..];
 
+        // If the completion contains spaces, wrap in double quotes
+        var quoted = completion;
+        bool needsQuoting = completion.Contains(' ');
+        bool alreadyQuoted = _completionStart < originalInput.Length
+            && originalInput[_completionStart] == '"';
+
+        if (needsQuoting && alreadyQuoted)
+        {
+            // User already started a quote — include opening quote and add closing quote
+            // FindTokenEnd consumed the opening " so we must re-add it
+            quoted = $"\"{completion}\"";
+        }
+        else if (needsQuoting)
+        {
+            // Wrap in double quotes
+            quoted = $"\"{completion}\"";
+        }
+
         // Add trailing space if it's a complete match (not a directory or dot-completion)
         bool isDotCompletion = _completionStart > 0
             && _completionStart <= originalInput.Length
             && originalInput[_completionStart - 1] == '.';
-        var suffix = (completion.EndsWith('/') || completion.EndsWith(Path.DirectorySeparatorChar) || isDotCompletion) ? "" : " ";
+        bool isDir = completion.EndsWith('/') || completion.EndsWith(Path.DirectorySeparatorChar);
+        var suffix = (isDir || isDotCompletion) ? "" : " ";
         if (!string.IsNullOrEmpty(after)) suffix = ""; // Don't add space if there's already text after
 
-        var newInput = before + completion + suffix + after;
-        var newCursor = before.Length + completion.Length + suffix.Length;
+        var newInput = before + quoted + suffix + after;
+        var newCursor = before.Length + quoted.Length + suffix.Length;
 
         _lastCompletionInput = newInput;
         return (newInput, newCursor);
@@ -709,18 +733,62 @@ public class TabCompleter
         if (cursor <= 0 || string.IsNullOrEmpty(input))
             return ("", 0);
 
-        // Walk backwards from cursor to find token start
-        int pos = Math.Min(cursor, input.Length) - 1;
+        int end = Math.Min(cursor, input.Length);
+
+        // Check if cursor is inside a quoted string by counting quotes up to cursor
+        int quoteCount = 0;
+        int lastQuotePos = -1;
+        for (int i = 0; i < end; i++)
+        {
+            if (input[i] == '"')
+            {
+                quoteCount++;
+                lastQuotePos = i;
+            }
+        }
+
+        if (quoteCount % 2 == 1)
+        {
+            // Inside an open quote — token starts at the opening quote
+            // Find the opening quote by walking back
+            int qPos = end - 1;
+            int qCount = 0;
+            while (qPos >= 0)
+            {
+                if (input[qPos] == '"')
+                {
+                    qCount++;
+                    if (qCount % 2 == 1)
+                    {
+                        // This is the unmatched opening quote
+                        var token = input[qPos..end];
+                        return (token, qPos);
+                    }
+                }
+                qPos--;
+            }
+        }
+
+        // Standard: walk backwards from cursor to find token start (space-delimited)
+        int pos = end - 1;
         while (pos >= 0 && input[pos] != ' ') pos--;
         int start = pos + 1;
 
-        var token = input[start..Math.Min(cursor, input.Length)];
-        return (token, start);
+        var tok = input[start..end];
+        return (tok, start);
     }
 
     internal static int FindTokenEnd(string input, int tokenStart)
     {
         int pos = tokenStart;
+        if (pos < input.Length && input[pos] == '"')
+        {
+            // Quoted token — find closing quote
+            pos++;
+            while (pos < input.Length && input[pos] != '"') pos++;
+            if (pos < input.Length) pos++; // skip closing quote
+            return pos;
+        }
         while (pos < input.Length && input[pos] != ' ') pos++;
         return pos;
     }

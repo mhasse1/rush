@@ -176,4 +176,49 @@ public class TabCompleterHelperTests
     {
         Assert.Equal(12, TabCompleter.FindTokenEnd("/usr/local/b file", 0));
     }
+
+    // ── Quote-Aware ExtractToken ─────────────────────────────────────
+
+    [Fact]
+    public void ExtractToken_InsideQuotes_ReturnsFromOpeningQuote()
+    {
+        // rm "Boo — cursor at end, inside open quote
+        var (token, start) = TabCompleter.ExtractToken("rm \"Boo", 7);
+        Assert.Equal("\"Boo", token);
+        Assert.Equal(3, start);
+    }
+
+    [Fact]
+    public void ExtractToken_InsideQuotesWithSpace_ReturnsFullQuotedToken()
+    {
+        // rm "Book 2 — cursor at end, inside open quote with space
+        var (token, start) = TabCompleter.ExtractToken("rm \"Book 2", 10);
+        Assert.Equal("\"Book 2", token);
+        Assert.Equal(3, start);
+    }
+
+    [Fact]
+    public void ExtractToken_ClosedQuotes_StandardWalkBack()
+    {
+        // rm "Book 2.xlsx" — cursor at end, quotes are closed (even count)
+        // Standard walk-back treats it as unquoted — finds space inside the string
+        // This is fine: closed quotes mean the user is done completing
+        var (token, start) = TabCompleter.ExtractToken("rm \"Book 2.xlsx\"", 16);
+        Assert.Equal("2.xlsx\"", token);
+        Assert.Equal(9, start);
+    }
+
+    // ── Quote-Aware FindTokenEnd ─────────────────────────────────────
+
+    [Fact]
+    public void FindTokenEnd_QuotedToken_FindsClosingQuote()
+    {
+        Assert.Equal(16, TabCompleter.FindTokenEnd("rm \"Book 2.xlsx\" next", 3));
+    }
+
+    [Fact]
+    public void FindTokenEnd_UnclosedQuote_ReturnsEnd()
+    {
+        Assert.Equal(10, TabCompleter.FindTokenEnd("rm \"Book 2", 3));
+    }
 }

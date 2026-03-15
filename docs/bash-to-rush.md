@@ -135,18 +135,18 @@ win64 { choco install ripgrep }
 
 | Task | Bash | Rush |
 |------|------|------|
-| Filter processes | `ps aux \| grep chrome` | `ps \| where ProcessName == chrome` |
-| Count files | `ls \| wc -l` | `ls \| count` |
-| Extract column | `awk '{print $1}'` | `\| .PropertyName` |
-| Top 5 items | `head -5` | `\| first 5` |
-| Unique lines | `sort \| uniq` | `\| distinct` |
+| Filter processes | `ps aux | grep chrome` | `ps | where ProcessName == chrome` |
+| Count files | `ls | wc -l` | `ls | count` |
+| Extract column | `awk '{print $1}'` | `| .PropertyName` |
+| Top 5 items | `head -5` | `| first 5` |
+| Unique lines | `sort | uniq` | `| distinct` |
 | Parse JSON | `jq '.name'` | `File.read_json("f").name` |
 | Check file exists | `[ -f file ]` | `File.exist?("file")` |
 | String interpolation | `"Hello $name"` | `"Hello #{name}"` |
 | If statement | `if [ $x -gt 5 ]; then ... fi` | `if x > 5 ... end` |
 | For loop | `for x in 1 2 3; do ... done` | `for x in [1,2,3] ... end` |
-| Format as table | `column -t` | `\| as table` |
-| Sum a column | `awk '{s+=$1}END{print s}'` | `\| sum ColumnName` |
+| Format as table | `column -t` | `| as table` |
+| Sum a column | `awk '{s+=$1}END{print s}'` | `| sum ColumnName` |
 
 ---
 
