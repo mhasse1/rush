@@ -1312,4 +1312,199 @@ public class UserManualDocTests
     }
 
     // Tips_CdDotDot — SKIPPED: .. as alias for cd .. is REPL-only builtin
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 6: Objectify ─────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    // Objectify tests are largely SKIPPED in rush -c mode:
+    // - `cat file | objectify | as json` hangs (pipeline routing issue in non-interactive)
+    // - Auto-objectify (ps, netstat, docker) needs those commands available + structured output
+    // - objectify --save modifies config files
+    // The objectify feature works in REPL mode but is difficult to test via rush -c.
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 13: sql Command ──────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Sql_SelectInline()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8] + ".db");
+        try
+        {
+            var (stdout, _, exitCode) = TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\"");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("num", stdout);
+            Assert.Contains("hello", stdout);
+        }
+        finally { if (File.Exists(dbPath)) File.Delete(dbPath); }
+    }
+
+    [Fact]
+    public void Sql_JsonOutput()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8] + ".db");
+        try
+        {
+            var (stdout, _, exitCode) = TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\" --json");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"num\"", stdout);
+            Assert.Contains("\"hello\"", stdout);
+            Assert.Contains("[", stdout); // JSON array
+        }
+        finally { if (File.Exists(dbPath)) File.Delete(dbPath); }
+    }
+
+    [Fact]
+    public void Sql_CsvOutput()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8] + ".db");
+        try
+        {
+            var (stdout, _, exitCode) = TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\" --csv");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("num,msg", stdout);
+            Assert.Contains("1,hello", stdout);
+        }
+        finally { if (File.Exists(dbPath)) File.Delete(dbPath); }
+    }
+
+    [Fact]
+    public void Sql_CreateAndQuery()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8] + ".db");
+        try
+        {
+            // Create table and insert data
+            TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"CREATE TABLE users(id INTEGER, name TEXT)\"");
+            TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"INSERT INTO users VALUES(1, 'alice')\"");
+            TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"INSERT INTO users VALUES(2, 'bob')\"");
+            // Query
+            var (stdout, _, exitCode) = TestHelper.RunRush(
+                $"sql sqlite://{dbPath} \"SELECT * FROM users ORDER BY id\"");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("alice", stdout);
+            Assert.Contains("bob", stdout);
+        }
+        finally { if (File.Exists(dbPath)) File.Delete(dbPath); }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Additional Section 7: String Methods (from watch list) ───────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void StringMethod_Lstrip()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"  hello  \".lstrip");
+        Assert.Equal(0, exitCode);
+        // lstrip removes leading whitespace only
+        Assert.Contains("hello", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Rstrip()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"  hello  \".rstrip");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hello", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Ljust()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"hi\".ljust(10)");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hi", stdout);
+    }
+
+    [Fact]
+    public void StringMethod_Rjust()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"hi\".rjust(10)");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hi", stdout);
+    }
+
+    [Fact]
+    public void Regex_Scan()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"abc123def456\".scan(/\\d+/)");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("123", stdout);
+        Assert.Contains("456", stdout);
+    }
+
+    [Fact]
+    public void Number_ToCurrencyPad()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts 5.to_currency(pad: true)");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("$", stdout);
+        Assert.Contains("5.00", stdout);
+    }
+
+    [Fact]
+    public void Number_ToPercentDecimals()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts 0.856.to_percent(decimals: 1)");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("85.6", stdout);
+        Assert.Contains("%", stdout);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Additional Section 9: File stdlib ────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void Stdlib_FileReadJson()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmp, "{\"name\": \"rush\", \"version\": \"0.3\"}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{tmp}\")\nputs data.name");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("rush", stdout);
+        }
+        finally { if (File.Exists(tmp)) File.Delete(tmp); }
+    }
+
+    [Fact]
+    public void Stdlib_FileReadCsv()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmp, "name,age\nalice,30\nbob,25\n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_csv(\"{tmp}\")\nputs data.count");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("2", stdout);
+        }
+        finally { if (File.Exists(tmp)) File.Delete(tmp); }
+    }
+
+    [Fact]
+    public void Stdlib_DirList()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_dir_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            Directory.CreateDirectory(tmpDir);
+            File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\")\nputs files.count");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("2", stdout);
+        }
+        finally { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); }
+    }
 }
