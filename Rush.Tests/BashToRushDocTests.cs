@@ -183,4 +183,81 @@ public class BashToRushDocTests
         var (_, _, exitCode) = TestHelper.RunRush("pushd /tmp && popd");
         Assert.Equal(0, exitCode);
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 2: Ruby-Like Syntax ──────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    [Fact]
+    public void RubySyntax_VariableAssignment()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs name");
+        Assert.Equal("world", stdout);
+    }
+
+    [Fact]
+    public void RubySyntax_StringInterpolation()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs \"Hello #{name}\"");
+        Assert.Equal("Hello world", stdout);
+    }
+
+    [Fact]
+    public void RubySyntax_IfEnd()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("x = 10\nif x > 5\n  puts \"big\"\nend");
+        Assert.Equal("big", stdout);
+    }
+
+    [Fact]
+    public void RubySyntax_IfFileExist()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_exist_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmpFile, "data");
+            var (stdout, _, _) = TestHelper.RunRush($"if File.exist?(\"{tmpFile}\")\n  puts \"found\"\nend");
+            Assert.Equal("found", stdout);
+        }
+        finally { File.Delete(tmpFile); }
+    }
+
+    [Fact]
+    public void RubySyntax_ForInArray()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("for x in [\"a\", \"b\", \"c\"]\n  puts x\nend");
+        Assert.Contains("a", stdout);
+        Assert.Contains("b", stdout);
+        Assert.Contains("c", stdout);
+    }
+
+    [Fact]
+    public void RubySyntax_ForInDirList()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_fordir_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        try
+        {
+            File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
+            var (stdout, _, _) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f.Name\nend");
+            Assert.Contains("a.txt", stdout);
+            Assert.Contains("b.txt", stdout);
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void RubySyntax_ArrayIndex()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("arr = [1, 2, 3]\nputs arr[0]");
+        Assert.Equal("1", stdout);
+    }
+
+    [Fact]
+    public void RubySyntax_Arithmetic()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts 5 + 3");
+        Assert.Equal("8", stdout);
+    }
 }
