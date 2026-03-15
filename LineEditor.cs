@@ -71,11 +71,18 @@ public class LineEditor
     private int _startLeft;
     private int _startTop;
     private string? _savedInput;
+    private volatile bool _resized;
 
     /// <summary>
     /// Get a read-only view of the history (for the 'history' built-in).
     /// </summary>
     public IReadOnlyList<string> History => _history;
+
+    /// <summary>
+    /// Signal that the terminal was resized (SIGWINCH).
+    /// The next keypress will recapture the cursor position.
+    /// </summary>
+    public void NotifyResize() => _resized = true;
 
     /// <summary>
     /// Read a line of input with full editing support.
@@ -111,6 +118,14 @@ public class LineEditor
             while (true)
             {
                 var key = Console.ReadKey(intercept: true);
+
+                // Terminal resized while waiting — recapture cursor position
+                if (_resized)
+                {
+                    _resized = false;
+                    _startLeft = Console.CursorLeft;
+                    _startTop = Console.CursorTop;
+                }
 
                 string? result;
                 if (Mode == EditMode.Vi)
@@ -1022,6 +1037,10 @@ public class LineEditor
 
         // No single completion — show list if multiple exist
         ShowCompletionsHandler?.Invoke();
+        // Recapture cursor position after completions redrew the prompt
+        _startLeft = Console.CursorLeft;
+        _startTop = Console.CursorTop;
+        Redraw();
     }
 
     // ── Reverse Search (Ctrl+R) ──────────────────────────────────────────
@@ -1439,6 +1458,15 @@ public class LineEditor
 
         int row = _startTop + totalPos / width;
         int col = totalPos % width;
+
+        // Bounds check: clamp row to valid buffer range
+        try
+        {
+            var bufferHeight = Console.BufferHeight;
+            if (row >= bufferHeight) row = bufferHeight - 1;
+            if (row < 0) row = 0;
+        }
+        catch { }
 
         try { Console.SetCursorPosition(col, row); }
         catch { }

@@ -353,6 +353,7 @@ Console.CancelKeyPress += (_, e) =>
 PosixSignalRegistration? sigtstpReg = null;
 PosixSignalRegistration? sighupReg = null;
 PosixSignalRegistration? sigtermReg = null;
+PosixSignalRegistration? sigwinchReg = null;
 if (!OperatingSystem.IsWindows())
 {
     sigtstpReg = PosixSignalRegistration.Create(PosixSignal.SIGTSTP, ctx =>
@@ -376,6 +377,14 @@ if (!OperatingSystem.IsWindows())
         signalExit = true;
         Theme.RestoreBackground();
         try { state.RunningPs?.Stop(); } catch { }
+    });
+
+    // SIGWINCH — terminal resized. Flag the LineEditor so it recaptures
+    // cursor position on the next keypress (prevents stale _startTop).
+    sigwinchReg = PosixSignalRegistration.Create(PosixSignal.SIGWINCH, ctx =>
+    {
+        ctx.Cancel = true;
+        lineEditor.NotifyResize();
     });
 }
 
@@ -537,6 +546,7 @@ SshPool.Cleanup();
 sigtstpReg?.Dispose();
 sighupReg?.Dispose();
 sigtermReg?.Dispose();
+sigwinchReg?.Dispose();
 
 // ═══════════════════════════════════════════════════════════════════
 // Shared State & Dispatch
