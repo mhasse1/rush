@@ -73,6 +73,9 @@ public class LineEditor
     private string? _savedInput;
     private volatile bool _resized;
 
+    // Autosuggestion (fish-style ghost text from history)
+    private string? _suggestion;
+
     /// <summary>
     /// Get a read-only view of the history (for the 'history' built-in).
     /// </summary>
@@ -105,6 +108,7 @@ public class LineEditor
             _startTop = Console.CursorTop;
             _historyIndex = _history.Count;
             _savedInput = null;
+            _suggestion = null;
             _viCount = 0;
             _viCountActive = false;
             _lineBaseline = (new List<char>(_buffer), _cursor);
@@ -221,8 +225,13 @@ public class LineEditor
                 SetCursorPos();
                 return null;
             case 'l':
-                for (int i = 0; i < count && _cursor < _buffer.Count - 1; i++) _cursor++;
-                SetCursorPos();
+                if (_cursor >= _buffer.Count - 1 && _suggestion != null)
+                    AcceptSuggestion();
+                else
+                {
+                    for (int i = 0; i < count && _cursor < _buffer.Count - 1; i++) _cursor++;
+                    SetCursorPos();
+                }
                 return null;
             case '0':
             case '^':
@@ -230,8 +239,13 @@ public class LineEditor
                 SetCursorPos();
                 return null;
             case '$':
-                _cursor = Math.Max(0, _buffer.Count - 1);
-                SetCursorPos();
+                if (_cursor >= Math.Max(0, _buffer.Count - 1) && _suggestion != null)
+                    AcceptSuggestion();
+                else
+                {
+                    _cursor = Math.Max(0, _buffer.Count - 1);
+                    SetCursorPos();
+                }
                 return null;
             case 'w':
                 for (int i = 0; i < count; i++)
@@ -603,7 +617,10 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.RightArrow:
-                if (_cursor < _buffer.Count - 1) _cursor++;
+                if (_cursor >= _buffer.Count - 1 && _suggestion != null)
+                    AcceptSuggestion();
+                else if (_cursor < _buffer.Count - 1)
+                    _cursor++;
                 SetCursorPos();
                 return null;
 
@@ -912,7 +929,14 @@ public class LineEditor
 
             case ConsoleKey.RightArrow:
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Alt))
-                    _cursor = FindWORDBoundaryRight(_buffer, _cursor);
+                {
+                    if (_cursor == _buffer.Count && _suggestion != null)
+                        AcceptSuggestionWord();
+                    else
+                        _cursor = FindWORDBoundaryRight(_buffer, _cursor);
+                }
+                else if (_cursor == _buffer.Count && _suggestion != null)
+                    AcceptSuggestion();
                 else if (_cursor < _buffer.Count)
                     _cursor++;
                 SetCursorPos();
@@ -924,6 +948,11 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.End:
+                if (_cursor == _buffer.Count && _suggestion != null)
+                {
+                    AcceptSuggestion();
+                    return null;
+                }
                 _cursor = _buffer.Count;
                 SetCursorPos();
                 return null;
@@ -934,8 +963,13 @@ public class LineEditor
                 return null;
 
             case ConsoleKey.E when key.Modifiers.HasFlag(ConsoleModifiers.Control):
-                _cursor = _buffer.Count;
-                SetCursorPos();
+                if (_cursor == _buffer.Count && _suggestion != null)
+                    AcceptSuggestion();
+                else
+                {
+                    _cursor = _buffer.Count;
+                    SetCursorPos();
+                }
                 return null;
 
             case ConsoleKey.UpArrow:
@@ -1421,6 +1455,7 @@ public class LineEditor
 
     private void Redraw()
     {
+        UpdateSuggestion();
         Console.SetCursorPosition(_startLeft, _startTop);
         var text = new string(_buffer.ToArray());
 
@@ -1434,7 +1469,15 @@ public class LineEditor
             Console.Write(text);
         }
 
-        int ghostLen = 0;
+        // Ghost text (autosuggestion from history)
+        string ghost = GetGhostText();
+        int ghostLen = ghost.Length;
+        if (ghostLen > 0)
+        {
+            Console.Write("\x1b[90m"); // dim gray
+            Console.Write(ghost);
+            Console.Write("\x1b[0m");  // reset
+        }
 
         // Clear trailing chars
         try
@@ -1620,5 +1663,69 @@ public class LineEditor
         while (pos < buffer.Count && char.IsWhiteSpace(buffer[pos])) pos++;
         while (pos < buffer.Count - 1 && !char.IsWhiteSpace(buffer[pos + 1])) pos++;
         return pos;
+    }
+
+    // ── Autosuggestion (fish-style ghost text from history) ──────────
+
+    /// <summary>
+    /// Find the most recent history entry that starts with the given prefix
+    /// and is strictly longer than it. Returns null if no match.
+    /// </summary>
+    internal static string? FindSuggestion(IReadOnlyList<string> history, string prefix)
+    {
+        if (string.IsNullOrEmpty(prefix)) return null;
+        for (int i = history.Count - 1; i >= 0; i--)
+        {
+            if (history[i].Length > prefix.Length
+                && history[i].StartsWith(prefix, StringComparison.Ordinal))
+                return history[i];
+        }
+        return null;
+    }
+
+    private void UpdateSuggestion()
+    {
+        var prefix = new string(_buffer.ToArray());
+        _suggestion = FindSuggestion(_history, prefix);
+    }
+
+    private string GetGhostText()
+    {
+        if (_suggestion == null || _cursor != _buffer.Count || _buffer.Count == 0)
+            return "";
+        if (_suggestion.Length <= _buffer.Count)
+            return "";
+        return _suggestion[_buffer.Count..];
+    }
+
+    private void AcceptSuggestion()
+    {
+        if (_suggestion == null || _suggestion.Length <= _buffer.Count) return;
+        _buffer.AddRange(_suggestion[_buffer.Count..]);
+        _cursor = _buffer.Count;
+        _suggestion = null;
+        Redraw();
+    }
+
+    private void AcceptSuggestionWord()
+    {
+        if (_suggestion == null || _suggestion.Length <= _buffer.Count) return;
+
+        // Find next WORD boundary in the suggestion text
+        int start = _buffer.Count;
+        int pos = start;
+        // Skip non-whitespace (the current word)
+        while (pos < _suggestion.Length && !char.IsWhiteSpace(_suggestion[pos])) pos++;
+        // Skip whitespace after the word
+        while (pos < _suggestion.Length && char.IsWhiteSpace(_suggestion[pos])) pos++;
+
+        // Append from start to pos
+        for (int i = start; i < pos; i++)
+            _buffer.Add(_suggestion[i]);
+        _cursor = _buffer.Count;
+
+        // Re-evaluate suggestion for remaining ghost text
+        UpdateSuggestion();
+        Redraw();
     }
 }
