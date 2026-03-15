@@ -266,8 +266,8 @@ public class ScriptEngineTriageTests
     [InlineData("File.read_json(\"config.json\")")]
     [InlineData("File.read_csv(\"data.csv\")")]
     [InlineData("Dir.mkdir(\"new_dir\")")]
-    [InlineData("Dir.files(\".\")")]
-    [InlineData("Dir.dirs(\"/tmp\")")]
+    [InlineData("Dir.list(\".\")")]
+    [InlineData("Dir.list(\"/tmp\", type: \"dir\")")]
     public void StdlibCalls_Standalone_AreRushSyntax(string input)
     {
         Assert.True(_engine.IsRushSyntax(input));
@@ -277,7 +277,7 @@ public class ScriptEngineTriageTests
     [InlineData("content = File.read(\"test.txt\")")]
     [InlineData("exists = File.exist?(\"test.txt\")")]
     [InlineData("data = File.read_json(\"config.json\")")]
-    [InlineData("files = Dir.files(\".\", recursive: true)")]
+    [InlineData("files = Dir.list(\".\", recursive: true)")]
     public void StdlibCalls_Assignment_AreRushSyntax(string input)
     {
         Assert.True(_engine.IsRushSyntax(input));

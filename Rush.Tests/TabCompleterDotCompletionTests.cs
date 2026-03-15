@@ -231,19 +231,11 @@ public class TabCompleterDotCompletionTests : IDisposable
     }
 
     [Fact]
-    public void TrackAssignment_DirFiles_InfersFileInfoArray()
+    public void TrackAssignment_DirList_InfersFileSystemInfoArray()
     {
-        _completer.TrackAssignment("files", "Dir.files(\".\")");
-        var completions = GetCompletions("files.fir");
+        _completer.TrackAssignment("items", "Dir.list(\".\")");
+        var completions = GetCompletions("items.fir");
         Assert.Contains("first", completions);
-    }
-
-    [Fact]
-    public void TrackAssignment_DirDirs_InfersDirectoryInfoArray()
-    {
-        _completer.TrackAssignment("folders", "Dir.dirs(\".\")");
-        var completions = GetCompletions("folders.ma");
-        Assert.Contains("map", completions);
     }
 
     [Fact]

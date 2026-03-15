@@ -24,7 +24,8 @@ cd ~/projects                  $HOME, $PATH
 | `name="world"` | `name = "world"` |
 | `echo "Hello $name"` | `puts "Hello #{name}"` |
 | `if [ -f f ]; then ... fi` | `if File.exist?("f") ... end` |
-| `for x in a b c; do ... done` | `for x in [a, b, c] ... end` |
+| `for x in a b c; do ... done` | `for x in ["a", "b", "c"] ... end` |
+| `for f in *; do echo $f; done` | `for f in Dir.list("."); puts f; end` |
 | `arr=(1 2 3); echo ${arr[0]}` | `arr = [1, 2, 3]; puts arr[0]` |
 | `echo $((5 + 3))` | `puts 5 + 3` |
 
@@ -94,7 +95,7 @@ docker ps | objectify | where Status =~ /Up/ | select Names, Ports
 File.read("config.txt")         File.read_json("data.json")
 File.write("out.txt", data)     File.append("log.txt", line)
 File.exist?("path")             File.size("path")
-Dir.files(".", recursive: true) Dir.mkdir("path/to/dir")
+Dir.list(".", recursive: true)  Dir.mkdir("path/to/dir")
 ```
 
 ### Duration Literals
@@ -121,6 +122,19 @@ sql @db "SELECT * FROM users WHERE age > 18"
 sql @db "SELECT * FROM logs" | objectify | where status == error
 ```
 
+### Loops
+
+```bash
+# Bash                              # Rush
+for f in *; do                       for f in Dir.list(".")
+  echo "$f"                            puts f
+done                                 end
+
+for x in 1 2 3; do                   for x in [1, 2, 3]
+  echo "$x"                            puts x
+done                                 end
+```
+
 ### Platform Blocks
 
 ```bash
@@ -145,6 +159,7 @@ win64 { choco install ripgrep }
 | String interpolation | `"Hello $name"` | `"Hello #{name}"` |
 | If statement | `if [ $x -gt 5 ]; then ... fi` | `if x > 5 ... end` |
 | For loop | `for x in 1 2 3; do ... done` | `for x in [1,2,3] ... end` |
+| Loop over files | `for f in *; do echo $f; done` | `for f in Dir.list(".") ... end` |
 | Format as table | `column -t` | `| as table` |
 | Sum a column | `awk '{s+=$1}END{print s}'` | `| sum ColumnName` |
 

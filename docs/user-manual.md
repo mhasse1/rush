@@ -773,7 +773,7 @@ end
 **for / in / end:**
 
 ```rush
-for file in Dir.files(".")
+for file in Dir.list(".")
   puts file.Name
 end
 
@@ -1097,7 +1097,7 @@ small_files = files.reject { |f| f.Length > 1mb }
 **Method chaining:**
 
 ```rush
-Dir.files("/var/log", recursive: true)
+Dir.list("/var/log", type: "file", recursive: true)
   .select { |f| f.Name =~ /\.log$/ }
   .sort_by { |f| f.Length }
   .reverse
@@ -1108,7 +1108,7 @@ Dir.files("/var/log", recursive: true)
 **Chained output:**
 
 ```rush
-Dir.files(".", recursive: true).print
+Dir.list(".", recursive: true).print
 [1, 2, 3].map { |x| x * 2 }.puts
 ```
 
@@ -1325,7 +1325,7 @@ puts "Database: #{db_name}"
 
 ## Standard Library
 
-Receivers are case-insensitive: `Dir.files()` and `dir.files()` both work.
+Receivers are case-insensitive: `Dir.list()` and `dir.list()` both work.
 
 ### File
 
@@ -1370,13 +1370,12 @@ File.append("log.txt", "#{Time.now}: task complete\n")
 ### Dir
 
 ```rush
-Dir.files(".")                         # Files in current directory
-Dir.files("src")                       # Files in src/
-Dir.files(".", recursive: true)        # All files recursively
-Dir.files("*.log")                     # Files matching pattern
-Dir.files("*.rb", recursive: true)     # Pattern + recursive
+Dir.list(".")                          # All entries (files + dirs)
+Dir.list(".", type: "file")            # Files only
+Dir.list(".", type: "dir")             # Directories only
+Dir.list("src", recursive: true)       # All entries recursively
+Dir.list(".", type: "file", hidden: true) # Include hidden files
 
-Dir.dirs(".")                          # Subdirectories
 Dir.exist?("path")                     # Check if directory exists
 Dir.mkdir("path")                      # Create directory (+ parents)
 ```
@@ -1385,12 +1384,12 @@ Dir.mkdir("path")                      # Create directory (+ parents)
 
 ```rush
 # Find all log files
-logs = Dir.files("/var/log", recursive: true)
+logs = Dir.list("/var/log", type: "file", recursive: true)
   .select { |f| f.Name =~ /\.log$/ }
 puts "Found #{logs.count} log files"
 
 # List project structure
-Dir.dirs(".").each { |d| puts d.Name }
+Dir.list(".", type: "dir").each { |d| puts d.Name }
 
 # Create output directory
 Dir.mkdir("output/reports") unless Dir.exist?("output/reports")

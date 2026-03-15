@@ -1095,10 +1095,7 @@ public class RushTranspiler
     {
         return node.Method switch
         {
-            "files" => TranspileDirFiles(node),
-            "dirs" => node.Args.Count > 0
-                ? $"Get-ChildItem {TranspileExpression(node.Args[0])} -Directory"
-                : "Get-ChildItem -Directory",
+            "list" => TranspileDirList(node),
             "exist?" or "exists" => $"(Test-Path {TranspileExpression(node.Args[0])} -PathType Container)",
             "mkdir" => $"$null = New-Item -ItemType Directory -Force -Path {TranspileExpression(node.Args[0])}",
             "rmdir" => $"Remove-Item -Recurse -Force {TranspileExpression(node.Args[0])}",
@@ -1106,20 +1103,32 @@ public class RushTranspiler
         };
     }
 
-    private string TranspileDirFiles(MethodCallNode node)
+    private string TranspileDirList(MethodCallNode node)
     {
         var path = node.Args.Count > 0 ? TranspileExpression(node.Args[0]) : "'.'";
 
-        // Check for recursive: true named arg
-        var recursiveArg = node.Args.OfType<NamedArgNode>()
-            .FirstOrDefault(a => a.Name == "recursive");
-        var isRecursive = recursiveArg != null
-            && recursiveArg.Value is LiteralNode lit
-            && lit.Value == "true";
+        // Extract named args
+        var typeArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "type");
+        var recursiveArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "recursive");
+        var hiddenArg = node.Args.OfType<NamedArgNode>().FirstOrDefault(a => a.Name == "hidden");
 
-        return isRecursive
-            ? $"Get-ChildItem {path} -File -Recurse"
-            : $"Get-ChildItem {path} -File";
+        var cmd = $"Get-ChildItem {path}";
+
+        // type: "file" or "dir"
+        if (typeArg?.Value is LiteralNode typeLit)
+        {
+            var typeVal = typeLit.Value.Trim('"', '\'');
+            if (typeVal == "file") cmd += " -File";
+            else if (typeVal == "dir") cmd += " -Directory";
+        }
+
+        if (recursiveArg?.Value is LiteralNode recLit && recLit.Value == "true")
+            cmd += " -Recurse";
+
+        if (hiddenArg?.Value is LiteralNode hidLit && hidLit.Value == "true")
+            cmd += " -Force";
+
+        return cmd;
     }
 
     private string TranspileTimeMethod(MethodCallNode node)

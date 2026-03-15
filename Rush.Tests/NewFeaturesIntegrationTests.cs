@@ -623,7 +623,23 @@ public class NewFeaturesIntegrationTests
     }
 
     [Fact]
-    public void Dir_Files_Count()
+    public void Dir_List_All()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
+        try
+        {
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
+            System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\")\nputs items.Count");
+            Assert.Equal("3", stdout); // 2 files + 1 dir
+        }
+        finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void Dir_List_FilesOnly()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tmpDir);
@@ -631,14 +647,15 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.files(\"{tmpDir}\")\nputs files.Count");
+            Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\", type: \"file\")\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
     }
 
     [Fact]
-    public void Dir_Files_Recursive()
+    public void Dir_List_Recursive()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         var subDir = Path.Combine(tmpDir, "sub");
@@ -647,21 +664,21 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.files(\"{tmpDir}\", recursive: true)\nputs files.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\", type: \"file\", recursive: true)\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
     }
 
     [Fact]
-    public void Dir_Dirs_Count()
+    public void Dir_List_DirsOnly()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
         Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"subdirs = Dir.dirs(\"{tmpDir}\")\nputs subdirs.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"subdirs = Dir.list(\"{tmpDir}\", type: \"dir\")\nputs subdirs.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }

@@ -676,12 +676,9 @@ public class TabCompleter
         else if (rhs.StartsWith("File.read", StringComparison.OrdinalIgnoreCase)
                 || rhs.StartsWith("file.read", StringComparison.OrdinalIgnoreCase))
             inferredType = typeof(string);
-        else if (rhs.StartsWith("Dir.files", StringComparison.OrdinalIgnoreCase)
-                || rhs.StartsWith("dir.files", StringComparison.OrdinalIgnoreCase))
-            inferredType = typeof(System.IO.FileInfo[]);
-        else if (rhs.StartsWith("Dir.dirs", StringComparison.OrdinalIgnoreCase)
-                || rhs.StartsWith("dir.dirs", StringComparison.OrdinalIgnoreCase))
-            inferredType = typeof(System.IO.DirectoryInfo[]);
+        else if (rhs.StartsWith("Dir.list", StringComparison.OrdinalIgnoreCase)
+                || rhs.StartsWith("dir.list", StringComparison.OrdinalIgnoreCase))
+            inferredType = typeof(System.IO.FileSystemInfo[]);
         else if (rhs.StartsWith("Time.now", StringComparison.OrdinalIgnoreCase)
                 || rhs.StartsWith("time.now", StringComparison.OrdinalIgnoreCase)
                 || rhs.StartsWith("Time.utc_now", StringComparison.OrdinalIgnoreCase)

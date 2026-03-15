@@ -31,8 +31,8 @@ manifest = File.read_lines(manifest_file)
 
 ignore = File.read_lines(ignore_file)
 
-# [RESOLVED] Dir.files() for listing — replaces `find . -type f`
-files = Dir.files(".", recursive: true)
+# [RESOLVED] Dir.list() for listing — replaces `find . -type f`
+files = Dir.list(".", type: "file", recursive: true)
   .reject { |f| f.start_with?(".") }
   .sort
 
@@ -88,7 +88,7 @@ puts "#{not_found} not found on disk"
 | 4 | `match/when/end` | ✅ Resolved | `case/when/end`, `switch/case` | `match` is modern. Avoids bash `case/esac` baggage |
 | 5 | `next` for skip | ✅ Resolved | `continue` | Clean, short, reads naturally in blocks |
 | 6 | `ask()` built-in | ✅ Resolved | `input()`, `read`, `prompt()` | `ask` is human-readable. `char: true` for single-char input |
-| 7 | `Dir.files()` | ✅ Resolved | `Dir.glob()`, `ls`, `find` | `files` is instantly clear. Shell `find` still works for complex cases |
+| 7 | `Dir.list()` | ✅ Resolved | `Dir.glob()`, `Dir.files()`, `find` | One method with named arg filters (`type:`, `recursive:`, `hidden:`). Shell `find` still works for complex cases |
 | 8 | `+=` for increment (no `++`) | ✅ Resolved | `++`, `+= 1` | `+=` is accessible to non-C developers. No pre/post ambiguity |
 
 ---

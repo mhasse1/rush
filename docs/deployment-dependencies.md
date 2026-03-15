@@ -145,7 +145,7 @@ Use Rush's built-in pipeline operators and stdlib instead of Unix commands:
 | Instead of | Use |
 |-----------|-----|
 | `grep pattern file` | `File.read_lines("file").select { \|l\| l.include?("pattern") }` |
-| `find . -name "*.txt"` | `Dir.files(".", recursive: true).select { \|f\| f =~ /\.txt$/ }` |
+| `find . -name "*.txt"` | `Dir.list(".", type: "file", recursive: true).select { \|f\| f =~ /\.txt$/ }` |
 | `head -5 file` | `File.read_lines("file").first(5)` |
 | `tail -5 file` | `File.read_lines("file").last(5)` |
 | `wc -l file` | `File.read_lines("file").count` |
