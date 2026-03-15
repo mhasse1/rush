@@ -745,17 +745,17 @@ public class UserManualDocTests
     [Fact]
     public void Function_DefaultArgs()
     {
-        // Note: greet() with empty parens fails in PowerShell — call with explicit arg
-        var (stdout, _, exitCode) = TestHelper.RunRush("def greet(name = \"world\")\n  puts \"hello #{name}\"\nend\ngreet(\"rush\")");
+        // greet() with empty parens now works (Fix 2: standalone function call triage)
+        var (stdout, _, exitCode) = TestHelper.RunRush("def greet(name = \"world\")\n  puts \"hello #{name}\"\nend\ngreet()");
         Assert.Equal(0, exitCode);
-        Assert.Contains("hello rush", stdout);
+        Assert.Contains("hello world", stdout);
     }
 
     [Fact]
     public void Function_Return()
     {
-        // Note: puts add(2, 3) doesn't work — need to capture result first
-        var (stdout, _, exitCode) = TestHelper.RunRush("def add(a, b)\n  return a + b\nend\nresult = add(2, 3)\nputs result");
+        // puts add(2, 3) now works directly (Fix 1: TranspilePuts wraps in parens)
+        var (stdout, _, exitCode) = TestHelper.RunRush("def add(a, b)\n  return a + b\nend\nputs add(2, 3)");
         Assert.Equal(0, exitCode);
         Assert.Contains("5", stdout);
     }
@@ -763,8 +763,8 @@ public class UserManualDocTests
     [Fact]
     public void Function_ImplicitReturn()
     {
-        // Note: puts double(5) doesn't work — need to capture result first
-        var (stdout, _, exitCode) = TestHelper.RunRush("def double(x)\n  x * 2\nend\nresult = double(5)\nputs result");
+        // puts double(5) now works directly (Fix 1: TranspilePuts wraps in parens)
+        var (stdout, _, exitCode) = TestHelper.RunRush("def double(x)\n  x * 2\nend\nputs double(5)");
         Assert.Equal(0, exitCode);
         Assert.Contains("10", stdout);
     }
@@ -1171,9 +1171,14 @@ public class UserManualDocTests
         Assert.Contains("/", stdout); // Should be a path
     }
 
-    // Builtin_Export — SKIPPED: export on first line routes block to shell mode
-    // where puts is not available. export works in REPL and TranspileFile but
-    // not as first line of rush -c (IsRushSyntax returns false for "export").
+    [Fact]
+    public void Builtin_Export()
+    {
+        // Fix 4: multi-line triage now checks all lines, so export on first line works
+        var (stdout, _, exitCode) = TestHelper.RunRush("export FOO=hello\nputs env.FOO");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hello", stdout);
+    }
 
     [Fact]
     public void Builtin_Sleep()
@@ -1257,8 +1262,25 @@ public class UserManualDocTests
     // ── Section 14: Pipeline Operations ──────────────────────────────
     // ══════════════════════════════════════════════════════════════════
 
-    // Pipeline_WhereRegex — SKIPPED: where with regex (/^a/) doesn't produce
-    // output in rush -c mode. The cat | where pipeline routing needs investigation.
+    [Fact]
+    public void Pipeline_WhereRegex()
+    {
+        // Fix 5: where now handles single-arg regex pattern
+        var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            File.WriteAllText(tmp, "apple\nbanana\napricot\ncherry\n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat {tmp} | where /^a/");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("apple", stdout);
+            Assert.Contains("apricot", stdout);
+            Assert.DoesNotContain("banana", stdout);
+        }
+        finally
+        {
+            if (File.Exists(tmp)) File.Delete(tmp);
+        }
+    }
 
     [Fact]
     public void Pipeline_Head()
@@ -1297,11 +1319,22 @@ public class UserManualDocTests
     // Tips_MathPI — SKIPPED: [Math]::PI is raw PowerShell syntax, Rush parser
     // chokes on :: (Colon token). Works in REPL shell mode but not as Rush expression.
 
-    // Tips_SizeLiteral_KB — SKIPPED: puts 1kb outputs "1" not "1024".
-    // Size literal suffixes (kb, mb, gb) are PowerShell features, not Rush.
-    // They work when code goes through shell path but not transpiler.
+    [Fact]
+    public void Tips_SizeLiteral_KB()
+    {
+        // Fix 6: lexer now recognizes size suffixes, transpiler wraps in parens
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts 1kb");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("1024", stdout);
+    }
 
-    // Tips_SizeLiteral_MB — SKIPPED: same as KB above.
+    [Fact]
+    public void Tips_SizeLiteral_MB()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts 5mb");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("5242880", stdout);
+    }
 
     [Fact]
     public void Tips_CdDash()

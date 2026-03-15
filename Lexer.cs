@@ -394,6 +394,16 @@ public class Lexer
         }
 
         var value = _source[start.._pos];
+        // Check for size suffix (kb, mb, gb, tb) — pass through to PowerShell which handles them natively
+        if (_pos + 1 < _source.Length)
+        {
+            var next2 = _source.Substring(_pos, Math.Min(2, _source.Length - _pos)).ToLowerInvariant();
+            if (next2 is "kb" or "mb" or "gb" or "tb")
+            {
+                _pos += 2;
+                value = _source[start.._pos];
+            }
+        }
         return new RushToken(isFloat ? RushTokenType.Float : RushTokenType.Integer, value, start);
     }
 

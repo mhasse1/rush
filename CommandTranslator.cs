@@ -258,6 +258,19 @@ public class CommandTranslator
 
                 return $"Where-Object {{ $_.{prop} {op} {val} }}";
             }
+            // Single-arg regex: where /pattern/ → Where-Object { $_ -match 'pattern' }
+            if (args.Length == 1 && args[0].StartsWith('/') && args[0].EndsWith('/') && args[0].Length > 2)
+            {
+                var regex = args[0][1..^1];
+                return $"Where-Object {{ $_ -match '{regex}' }}";
+            }
+            // Two-arg with regex: where PROPERTY /pattern/
+            if (args.Length == 2 && args[1].StartsWith('/') && args[1].EndsWith('/') && args[1].Length > 2)
+            {
+                var prop = args[0];
+                var regex = args[1][1..^1];
+                return $"Where-Object {{ $_.{prop} -match '{regex}' }}";
+            }
             // Fall through to standard translation for PS-style where
         }
 
