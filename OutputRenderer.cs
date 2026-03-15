@@ -161,17 +161,27 @@ public static class OutputRenderer
             rows.Add(row);
         }
 
-        // Cap column widths to terminal width
+        // Fit columns to terminal width: use natural widths, give overflow to last column
         int termWidth;
         try { termWidth = Console.WindowWidth - 1; }
         catch { termWidth = 119; }
 
-        int totalWidth = widths.Sum() + (properties.Length - 1) * 3;
+        int gutterTotal = (properties.Length - 1) * 3;
+        int totalWidth = widths.Sum() + gutterTotal;
         if (totalWidth > termWidth)
         {
-            var maxColWidth = Math.Max(12, (termWidth - (properties.Length - 1) * 3) / properties.Length);
-            for (int i = 0; i < widths.Length; i++)
-                widths[i] = Math.Min(widths[i], maxColWidth);
+            // Shrink only the last column to fit — it usually has the long content
+            int otherWidth = widths[..^1].Sum() + gutterTotal;
+            int lastWidth = termWidth - otherWidth;
+            if (lastWidth >= 4)
+            {
+                widths[^1] = lastWidth;
+            }
+            else
+            {
+                // Even shrinking last col isn't enough — just let it overflow naturally
+                // (terminal will wrap or user can pipe to `as json`)
+            }
         }
 
         // Header
@@ -415,7 +425,7 @@ public static class OutputRenderer
                      || p.MemberType == PSMemberTypes.NoteProperty)
             .Select(p => p.Name)
             .Where(name => !name.StartsWith("PS"))
-            .Take(6)
+            .Take(12)
             .ToArray();
     }
 
