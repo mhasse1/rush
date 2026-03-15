@@ -466,7 +466,9 @@ public class CommandTranslator
                $"$__v = @(($__oLines[$__i] -split '{psDelim}').Where({{ $_ -ne '' }})); " +
                "$__o = [ordered]@{}; " +
                "for ($__j = 0; $__j -lt $__hdr.Count; $__j++) { " +
-               "$__val = if ($__j -lt $__v.Count) { $__v[$__j] } else { $null }; " +
+               "$__val = if ($__j -eq ($__hdr.Count - 1) -and $__v.Count -gt $__hdr.Count) { " +
+               "[string]::Join(' ', $__v[$__j..($__v.Count - 1)]) " +
+               "} elseif ($__j -lt $__v.Count) { $__v[$__j] } else { $null }; " +
                "if ($null -ne $__val -and $__val -match '^\\d+$') { $__val = [long]$__val }; " +
                "$__o[$__hdr[$__j]] = $__val " +
                "}; " +
