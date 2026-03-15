@@ -22,12 +22,23 @@ public static class RedirectionParser
         // but they stay in the command string for PowerShell to handle natively.
         var ops = new List<(int pos, string op)>();
 
+        // Track the start of the current pipe segment so we can detect
+        // comparison operators inside `where` clauses (e.g. `| where v > 10`).
+        int pipeSegStart = 0;
+
         for (int i = 0; i < trimmed.Length; i++)
         {
             char ch = trimmed[i];
             if (ch == '\'' && !inDQ) { inSQ = !inSQ; continue; }
             if (ch == '"' && !inSQ) { inDQ = !inDQ; continue; }
             if (inSQ || inDQ) continue;
+
+            // Track pipe boundaries to know current segment
+            if (ch == '|')
+            {
+                pipeSegStart = i + 1;
+                continue;
+            }
 
             // 2>&1 — tracked (may need stripping when combined with stdout redirect)
             if (ch == '2' && i + 3 < trimmed.Length
@@ -43,12 +54,15 @@ public static class RedirectionParser
             // >>
             else if (ch == '>' && i + 1 < trimmed.Length && trimmed[i + 1] == '>')
             { ops.Add((i, ">>")); i += 1; }
-            // >
-            else if (ch == '>')
-            { ops.Add((i, ">")); }
-            // <
-            else if (ch == '<')
-            { ops.Add((i, "<")); }
+            // > or < — but NOT if inside a `where` pipe segment (comparison operators)
+            else if (ch is '>' or '<')
+            {
+                // Check if the current pipe segment starts with "where "
+                var seg = trimmed[pipeSegStart..].TrimStart();
+                if (seg.StartsWith("where ", StringComparison.OrdinalIgnoreCase))
+                    continue; // comparison operator, not redirect
+                ops.Add((i, ch == '>' ? ">" : "<"));
+            }
         }
 
         if (ops.Count == 0) return (input, null, null, null);

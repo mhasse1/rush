@@ -34,12 +34,12 @@ cd ~/projects                  $HOME, $PATH
 Filter, slice, and aggregate structured data without `awk`/`sed`/`jq`:
 
 ```bash
-# Filter by property
-ps | where CPU > 10
-netstat | objectify | where State == LISTEN
+# Filter by property (Get-Process returns objects; native commands use objectify)
+Get-Process | where CPU > 10
+ps -ef | objectify | where CMD =~ rush
 
 # Select columns
-ps | select ProcessName, CPU
+Get-Process | select ProcessName, CPU
 
 # Count
 ls | count
@@ -49,8 +49,8 @@ ls | first 5                    ls | last 3
 ls | skip 2                     ls | skip 2 | first 3
 
 # Aggregate
-ps | sum WorkingSet64            ps | avg CPU
-ps | min CPU                     ps | max CPU
+Get-Process | sum WorkingSet64   Get-Process | avg CPU
+Get-Process | min CPU            Get-Process | max CPU
 
 # Unique (works unsorted)
 data | distinct                  data | distinct Name
@@ -59,15 +59,14 @@ data | distinct                  data | distinct Name
 data | sort Name                 data | sort -r
 
 # Extract single property
-ps | .ProcessName                data | .items[].id
+Get-Process | .ProcessName       data | .items[].id
 
 # Format & parse
-ps | as json                     cat data.json | from json
-ps | as csv                      cat data.csv | from csv
-ps | as table                    ps | as list
+Get-Process | as json            cat data.json | from json
+Get-Process | as csv             cat data.csv | from csv
 
 # Save and pass through
-ps | tee processes.txt | count
+ls | tee listing.txt | count
 ```
 
 ### objectify — Text to Objects
@@ -76,8 +75,8 @@ Convert any tabular command output to structured objects:
 
 ```bash
 netstat -an | objectify | where State == LISTEN | select LocalAddress | count
-df -h | objectify | where Use% > 80
-docker ps | objectify | where Status =~ /Up/ | select Names, Ports
+ps -ef | objectify | where CMD =~ rush | select PID, CMD
+docker ps | objectify | where Status =~ Up | select Names, Ports
 ```
 
 ### String Methods
@@ -149,7 +148,7 @@ win64 { choco install ripgrep }
 
 | Task | Bash | Rush |
 |------|------|------|
-| Filter processes | `ps aux | grep chrome` | `ps | where ProcessName == chrome` |
+| Filter processes | `ps aux \| grep chrome` | `Get-Process \| where ProcessName =~ chrome` |
 | Count files | `ls | wc -l` | `ls | count` |
 | Extract column | `awk '{print $1}'` | `| .PropertyName` |
 | Top 5 items | `head -5` | `| first 5` |

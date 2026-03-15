@@ -260,4 +260,362 @@ public class BashToRushDocTests
         var (stdout, _, _) = TestHelper.RunRush("puts 5 + 3");
         Assert.Equal("8", stdout);
     }
+
+    // ══════════════════════════════════════════════════════════════════
+    // ── Section 3: Pipeline Operators ────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════
+
+    // Count
+
+    [Fact]
+    public void Pipeline_Count()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\n\" | count");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("3", stdout);
+    }
+
+    // First / Last / Skip
+
+    [Fact]
+    public void Pipeline_First()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | first 2");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("a", stdout);
+        Assert.Contains("b", stdout);
+        Assert.DoesNotContain("e", stdout);
+    }
+
+    [Fact]
+    public void Pipeline_Last()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | last 2");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("d", stdout);
+        Assert.Contains("e", stdout);
+        Assert.DoesNotContain("a", stdout);
+    }
+
+    [Fact]
+    public void Pipeline_Skip()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\n\" | skip 2");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("c", stdout);
+        Assert.Contains("d", stdout);
+        Assert.DoesNotContain("a", stdout);
+    }
+
+    [Fact]
+    public void Pipeline_SkipThenFirst()
+    {
+        // Doc example: ls | skip 2 | first 3
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | skip 2 | first 2");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("c", lines[0]);
+        Assert.Equal("d", lines[1]);
+    }
+
+    // Sort
+
+    [Fact]
+    public void Pipeline_Sort()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"c\\na\\nb\\n\" | sort");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("a", lines[0]);
+        Assert.Equal("b", lines[1]);
+        Assert.Equal("c", lines[2]);
+    }
+
+    [Fact]
+    public void Pipeline_SortReverse()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\n\" | sort -r");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("c", lines[0]);
+        Assert.Equal("b", lines[1]);
+        Assert.Equal("a", lines[2]);
+    }
+
+    // Distinct
+
+    [Fact]
+    public void Pipeline_Distinct()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\na\\nc\\nb\\n\" | distinct");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(3, lines.Length);
+    }
+
+    // Where (filter)
+
+    [Fact]
+    public void Pipeline_Where_NumericGreaterThan()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_where_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where v > 10 | .n");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("b", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_Where_NumericLessThan()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_wherelt_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where v < 10 | .n");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("a", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_Where_StringEquals()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_whereeq_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where n == b | .v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("15", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Select (columns)
+
+    [Fact]
+    public void Pipeline_Select()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_select_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "{\"name\":\"a\",\"val\":5}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | select name | as json");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("name", stdout);
+            Assert.DoesNotContain("val", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Dot property extraction
+
+    [Fact]
+    public void Pipeline_DotProperty()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_dot_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "{\"name\":\"hello\"}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | .name");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("hello", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Aggregate: sum, avg, min, max
+
+    [Fact]
+    public void Pipeline_Sum()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_sum_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | sum v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("60", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_Avg()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_avg_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | avg v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("20", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_Min()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_min_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | min v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("10", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_Max()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_max_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | max v");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("30", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Format: as json, as csv
+
+    [Fact]
+    public void Pipeline_AsJson()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_asjson_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "{\"a\":1}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | as json");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("\"a\"", stdout);
+            Assert.Contains("1", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_AsCsv()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_ascsv_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "{\"a\":1,\"b\":2}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | as csv");
+            Assert.Equal(0, exitCode);
+            // CSV should have header row with column names
+            Assert.Contains("a", stdout);
+            Assert.Contains("b", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Parse: from json, from csv
+
+    [Fact]
+    public void Pipeline_FromJson()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_fromjson_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "{\"x\":42}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | .x");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("42", stdout);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    [Fact]
+    public void Pipeline_FromCsv()
+    {
+        var tmpCsv = Path.Combine(Path.GetTempPath(), "rush_test_fromcsv_" + Guid.NewGuid().ToString("N")[..8] + ".csv");
+        try
+        {
+            File.WriteAllText(tmpCsv, "name,val\na,1\nb,2\n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpCsv}\" | from csv | .name");
+            Assert.Equal(0, exitCode);
+            Assert.Contains("a", stdout);
+            Assert.Contains("b", stdout);
+        }
+        finally { File.Delete(tmpCsv); }
+    }
+
+    // Tee
+
+    [Fact]
+    public void Pipeline_Tee()
+    {
+        var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_tee_" + Guid.NewGuid().ToString("N")[..8]);
+        try
+        {
+            var (stdout, _, exitCode) = TestHelper.RunRush($"printf \"hello\\nworld\\n\" | tee \"{tmpFile}\" | count");
+            Assert.Equal(0, exitCode);
+            Assert.Equal("2", stdout);
+            // tee should also write to file
+            Assert.True(File.Exists(tmpFile));
+            var content = File.ReadAllText(tmpFile);
+            Assert.Contains("hello", content);
+            Assert.Contains("world", content);
+        }
+        finally { if (File.Exists(tmpFile)) File.Delete(tmpFile); }
+    }
+
+    // Sort with property (on structured data)
+
+    [Fact]
+    public void Pipeline_SortByProperty()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_sortprop_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"n\":\"c\",\"v\":3},{\"n\":\"a\",\"v\":1},{\"n\":\"b\",\"v\":2}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | sort n | .n");
+            Assert.Equal(0, exitCode);
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal("a", lines[0]);
+            Assert.Equal("b", lines[1]);
+            Assert.Equal("c", lines[2]);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Distinct with property
+
+    [Fact]
+    public void Pipeline_DistinctByProperty()
+    {
+        var tmpJson = Path.Combine(Path.GetTempPath(), "rush_test_distinctprop_" + Guid.NewGuid().ToString("N")[..8] + ".json");
+        try
+        {
+            File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":1},{\"n\":\"b\",\"v\":2},{\"n\":\"a\",\"v\":3}]");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | distinct n | .n");
+            Assert.Equal(0, exitCode);
+            var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.Equal(2, lines.Length);
+        }
+        finally { File.Delete(tmpJson); }
+    }
+
+    // Regression: =~ operator should not trigger tilde expansion
+
+    [Fact]
+    public void Pipeline_RegexMatchOperator()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("x = \"hello world\"\nif x =~ \"hello\"\n  puts \"matched\"\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("matched", stdout);
+    }
 }
