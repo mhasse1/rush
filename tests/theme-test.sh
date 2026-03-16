@@ -33,6 +33,54 @@ BACKGROUNDS=(
     "Navy blue|#000055"
 )
 
+# ── Platform Detection ────────────────────────────────────────────
+
+detect_platform() {
+    # OS
+    case "$(uname -s)" in
+        Darwin)
+            PLATFORM_OS="macOS $(sw_vers -productVersion 2>/dev/null || echo 'unknown')"
+            ;;
+        Linux)
+            if [ -f /etc/os-release ]; then
+                PLATFORM_OS=$(. /etc/os-release && echo "$PRETTY_NAME")
+            else
+                PLATFORM_OS="Linux $(uname -r)"
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            PLATFORM_OS="Windows"
+            ;;
+        *)
+            PLATFORM_OS="$(uname -s) $(uname -r)"
+            ;;
+    esac
+
+    # Terminal emulator
+    if [ -n "${TERM_PROGRAM:-}" ]; then
+        PLATFORM_TERM="$TERM_PROGRAM${TERM_PROGRAM_VERSION:+ $TERM_PROGRAM_VERSION}"
+    elif [ -n "${WT_SESSION:-}" ]; then
+        PLATFORM_TERM="Windows Terminal"
+    elif [ -n "${KONSOLE_VERSION:-}" ]; then
+        PLATFORM_TERM="Konsole $KONSOLE_VERSION"
+    elif [ -n "${GNOME_TERMINAL_SCREEN:-}" ]; then
+        PLATFORM_TERM="GNOME Terminal"
+    elif [ -n "${LC_TERMINAL:-}" ]; then
+        PLATFORM_TERM="$LC_TERMINAL"
+    else
+        PLATFORM_TERM="${TERM:-unknown}"
+    fi
+
+    # Rush version
+    PLATFORM_RUSH="$("$RUSH" --version 2>/dev/null || echo 'unknown')"
+
+    # Color support
+    PLATFORM_COLOR="${COLORTERM:-${TERM:-unknown}}"
+
+    # Architecture
+    PLATFORM_ARCH="$(uname -m)"
+}
+
 # ── Helpers ───────────────────────────────────────────────────────
 
 # Save current background (if RUSH_BG is set)
@@ -226,9 +274,15 @@ print_summary() {
     echo "  RESULTS SUMMARY"
     echo "═══════════════════════════════════════════════════════════"
     echo ""
+    echo "  Platform: $PLATFORM_OS ($PLATFORM_ARCH)"
+    echo "  Terminal: $PLATFORM_TERM · Color: $PLATFORM_COLOR"
+    echo "  Rush:     $PLATFORM_RUSH"
+    echo ""
 
     local pass=0 fail=0 skip=0
     while IFS='|' read -r result name hex feedback; do
+        # Skip the platform header line
+        [ "$result" = "PLATFORM" ] && continue
         case "$result" in
             PASS) ((pass++)); printf "  ✓ %-28s %s\n" "$name" "$hex" ;;
             FAIL) ((fail++)); printf "  ✗ %-28s %s — %s\n" "$name" "$hex" "$feedback" ;;
@@ -259,6 +313,7 @@ file_github_issues() {
     fi
 
     while IFS='|' read -r result name hex feedback; do
+        [ "$result" = "PLATFORM" ] && continue
         if [ "$result" = "FAIL" ]; then
             echo "  Filing issue for: $name ($hex)..."
             gh issue create -R mhasse1/rush \
@@ -267,6 +322,10 @@ file_github_issues() {
                 --body "$(cat <<GHEOF
 ## Auto-theme visual test failure
 
+**Platform**: $PLATFORM_OS ($PLATFORM_ARCH)
+**Terminal**: $PLATFORM_TERM
+**Rush**: $PLATFORM_RUSH
+**Color support**: $PLATFORM_COLOR
 **Background**: $name (\`$hex\`)
 **Feedback**: $feedback
 
@@ -391,9 +450,16 @@ run_contrast_pass() {
 # ── Main ──────────────────────────────────────────────────────────
 
 main() {
+    # Detect platform before anything else
+    detect_platform
+
     echo ""
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║        Rush Auto-Theme Visual Test Suite                 ║"
+    echo "║                                                         ║"
+    printf "║  %-55s ║\n" "Platform: $PLATFORM_OS ($PLATFORM_ARCH)"
+    printf "║  %-55s ║\n" "Terminal: $PLATFORM_TERM · Color: $PLATFORM_COLOR"
+    printf "║  %-55s ║\n" "Rush:     $PLATFORM_RUSH"
     echo "║                                                         ║"
     echo "║  Phase 1: Standard contrast — ${#BACKGROUNDS[@]} backgrounds          ║"
     echo "║  Phase 2: High contrast modes (AA, AAA) — 5 backgrounds ║"
@@ -402,8 +468,8 @@ main() {
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
 
-    # Initialize
-    > "$RESULTS_FILE"
+    # Initialize — write platform header as first line of results
+    echo "PLATFORM|$PLATFORM_OS|$PLATFORM_TERM|$PLATFORM_RUSH|$PLATFORM_COLOR" > "$RESULTS_FILE"
     setup_test_dir
 
     echo -n "Press Enter to begin Phase 1 (standard contrast)... "
