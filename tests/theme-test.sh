@@ -240,7 +240,8 @@ file_github_issues() {
             gh issue create -R mhasse1/rush \
                 --title "Theme bug: $name ($hex) — $feedback" \
                 --label "bug" \
-                --body "## Auto-theme visual test failure
+                --body "$(cat <<GHEOF
+## Auto-theme visual test failure
 
 **Background**: $name (\`$hex\`)
 **Feedback**: $feedback
@@ -249,9 +250,10 @@ Discovered during interactive theme test suite (\`tests/theme-test.sh\`).
 
 ### Reproduction
 \`\`\`bash
-RUSH_BG=\"$hex\" rush
+RUSH_BG="$hex" rush
 \`\`\`
-" 2>&1 || echo "  Failed to create issue"
+GHEOF
+)" 2>&1 || echo "  Failed to create issue"
         fi
     done < "$RESULTS_FILE"
     echo ""
@@ -293,6 +295,75 @@ run_navigation_test() {
     echo ""
 }
 
+# ── Contrast mode helpers ─────────────────────────────────────────
+
+CONFIG_FILE="$HOME/.config/rush/config.json"
+
+set_contrast() {
+    local level="$1"
+    if [ -f "$CONFIG_FILE" ]; then
+        # Update or add contrast setting in config.json
+        if grep -q '"contrast"' "$CONFIG_FILE"; then
+            sed -i '' "s/\"contrast\": *\"[^\"]*\"/\"contrast\": \"$level\"/" "$CONFIG_FILE"
+        else
+            # Add before the closing brace
+            sed -i '' "s/}$/,\"contrast\": \"$level\"}/" "$CONFIG_FILE"
+        fi
+    fi
+}
+
+# Subset of backgrounds for contrast testing (the trickiest ones)
+CONTRAST_BACKGROUNDS=(
+    "Pure black|#000000"
+    "Teal|#008080"
+    "Mid gray|#808080"
+    "Pure white|#ffffff"
+    "Deep purple|#1e0033"
+)
+
+run_contrast_pass() {
+    local level="$1"
+    local label="$2"
+    local ratio="$3"
+
+    separator
+    echo "╔═══════════════════════════════════════════════════════════╗"
+    echo "║  CONTRAST PASS: $label ($ratio minimum ratio)"
+    echo "╚═══════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Save current contrast setting
+    local orig_contrast=""
+    if [ -f "$CONFIG_FILE" ]; then
+        orig_contrast=$(grep -o '"contrast": *"[^"]*"' "$CONFIG_FILE" | grep -o '"[^"]*"$' | tr -d '"')
+    fi
+
+    set_contrast "$level"
+
+    for entry in "${CONTRAST_BACKGROUNDS[@]}"; do
+        IFS='|' read -r name hex <<< "$entry"
+        separator
+
+        set_bg "$hex"
+        sleep 0.3
+
+        echo "═══════════════════════════════════════════════════════════"
+        echo "  [$label] Background: $name ($hex)"
+        echo "═══════════════════════════════════════════════════════════"
+        echo ""
+
+        run_demos "$name ($label)" "$hex"
+        collect_feedback "$name ($label)" "$hex"
+    done
+
+    # Restore original contrast
+    if [ -n "$orig_contrast" ]; then
+        set_contrast "$orig_contrast"
+    else
+        set_contrast "standard"
+    fi
+}
+
 # ── Main ──────────────────────────────────────────────────────────
 
 main() {
@@ -300,8 +371,8 @@ main() {
     echo "╔═══════════════════════════════════════════════════════════╗"
     echo "║        Rush Auto-Theme Visual Test Suite                 ║"
     echo "║                                                         ║"
-    echo "║  This test cycles through ${#BACKGROUNDS[@]} background colors.        ║"
-    echo "║  For each, you'll see demo output and rate it.          ║"
+    echo "║  Phase 1: Standard contrast — ${#BACKGROUNDS[@]} backgrounds          ║"
+    echo "║  Phase 2: High contrast modes (AA, AAA) — 5 backgrounds ║"
     echo "║                                                         ║"
     echo "║  Keys: p=pass  f=fail  s=skip                          ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
@@ -311,10 +382,10 @@ main() {
     > "$RESULTS_FILE"
     setup_test_dir
 
-    echo -n "Press Enter to begin... "
+    echo -n "Press Enter to begin Phase 1 (standard contrast)... "
     read -r _
 
-    # Run through each background
+    # Phase 1: Standard contrast — all backgrounds
     for entry in "${BACKGROUNDS[@]}"; do
         IFS='|' read -r name hex <<< "$entry"
         separator
@@ -326,6 +397,23 @@ main() {
         run_demos "$name" "$hex"
         collect_feedback "$name" "$hex"
     done
+
+    # Restore background between phases
+    restore_bg
+    sleep 0.3
+
+    # Phase 2: High contrast modes
+    echo ""
+    echo -n "Run high contrast tests? (y/n): "
+    read -r do_contrast
+    if [[ "$do_contrast" == "y" || "$do_contrast" == "Y" ]]; then
+        run_contrast_pass "aa" "WCAG AA" "4.5:1"
+
+        restore_bg
+        sleep 0.3
+
+        run_contrast_pass "aaa" "WCAG AAA" "7:1"
+    fi
 
     # Restore original background before summary
     restore_bg
