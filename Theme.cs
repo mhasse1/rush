@@ -620,8 +620,14 @@ public class Theme
     /// <summary>Saved original background for restore on exit. Null if not changed.</summary>
     private static string? _savedBgOsc;
 
+    /// <summary>Saved original foreground for restore on exit. Null if not changed.</summary>
+    private static string? _savedFgOsc;
+
     /// <summary>Current background OSC sequence. Used by ReemitBackground() after external commands.</summary>
     private static string? _currentBgOsc;
+
+    /// <summary>Current foreground OSC sequence. Emitted alongside background.</summary>
+    private static string? _currentFgOsc;
 
     /// <summary>
     /// If root/admin, set the terminal background via OSC 11.
@@ -654,11 +660,21 @@ public class Theme
         var osc = $"\x1b]11;rgb:{r:x4}/{g:x4}/{b:x4}\x07";
         _currentBgOsc = osc;
 
+        // Set foreground to complement background — black on light, white on dark.
+        // Without this, terminals with light default fg become illegible on light bg.
+        var newLumCheck = TerminalBackground.RelativeLuminance(r / 65535.0, g / 65535.0, b / 65535.0);
+        var fgOsc = newLumCheck < 0.5
+            ? "\x1b]10;rgb:dddd/dddd/dddd\x07"   // light gray fg for dark backgrounds
+            : "\x1b]10;rgb:1111/1111/1111\x07";   // near-black fg for light backgrounds
+        _currentFgOsc = fgOsc;
+
         // Only emit when interactive (not rush -c) and stdout is a terminal.
         if (emitOsc && !Console.IsOutputRedirected)
         {
             _savedBgOsc ??= "\x1b]111\x07";
+            _savedFgOsc ??= "\x1b]110\x07";
             Console.Write(osc);
+            Console.Write(fgOsc);
         }
 
         // Persist for reload — child processes inherit this env var
@@ -690,6 +706,13 @@ public class Theme
             _savedBgOsc = null;
             _currentBgOsc = null;
 
+            if (_savedFgOsc != null)
+            {
+                Console.Write(_savedFgOsc);
+                _savedFgOsc = null;
+                _currentFgOsc = null;
+            }
+
             // Clear RUSH_BG so detection falls through to COLORFGBG/macOS/fallback
             Environment.SetEnvironmentVariable("RUSH_BG", null);
 
@@ -711,6 +734,11 @@ public class Theme
             // Clear RUSH_BG so child processes don't inherit stale value
             Environment.SetEnvironmentVariable("RUSH_BG", null);
         }
+        if (_savedFgOsc != null)
+        {
+            Console.Write(_savedFgOsc);
+            _savedFgOsc = null;
+        }
     }
 
     /// <summary>
@@ -719,8 +747,13 @@ public class Theme
     /// </summary>
     public static void ReemitBackground()
     {
-        if (_currentBgOsc != null && !Console.IsOutputRedirected)
-            Console.Write(_currentBgOsc);
+        if (!Console.IsOutputRedirected)
+        {
+            if (_currentBgOsc != null)
+                Console.Write(_currentBgOsc);
+            if (_currentFgOsc != null)
+                Console.Write(_currentFgOsc);
+        }
     }
 
     /// <summary>
