@@ -599,6 +599,7 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
+                ClearGhostText();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -895,6 +896,7 @@ public class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Enter:
+                ClearGhostText();
                 Console.WriteLine();
                 return new string(_buffer.ToArray());
 
@@ -1696,6 +1698,19 @@ public class LineEditor
         if (_suggestion.Length <= _buffer.Count)
             return "";
         return _suggestion[_buffer.Count..];
+    }
+
+    /// <summary>
+    /// Erase ghost text from screen before Enter/newline so it doesn't linger.
+    /// </summary>
+    private void ClearGhostText()
+    {
+        var ghost = GetGhostText();
+        if (ghost.Length > 0)
+        {
+            _suggestion = null;
+            Redraw();
+        }
     }
 
     private void AcceptSuggestion()
