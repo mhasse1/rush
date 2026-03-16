@@ -42,8 +42,9 @@ restore_bg() {
     if [ -n "$ORIG_BG" ]; then
         set_bg "$ORIG_BG"
     else
-        # Reset to terminal default
+        # Reset to terminal defaults (bg and fg)
         printf '\e]111\a'
+        printf '\e]110\a'
         unset RUSH_BG 2>/dev/null || true
     fi
 }
@@ -59,6 +60,18 @@ set_bg() {
     local r="${raw:0:2}" g="${raw:2:2}" b="${raw:4:2}"
     printf "\e]11;rgb:%s%s/%s%s/%s%s\a" "$r" "$r" "$g" "$g" "$b" "$b"
 
+    # Also set foreground via OSC 10 to ensure text is readable.
+    # Simple luminance check: if R+G+B > 0x80*3, it's light → dark fg
+    local ri=$((16#$r)) gi=$((16#$g)) bi=$((16#$b))
+    local sum=$((ri + gi + bi))
+    if [ "$sum" -gt 384 ]; then
+        # Light background — dark foreground
+        printf "\e]10;rgb:1111/1111/1111\a"
+    else
+        # Dark background — light foreground
+        printf "\e]10;rgb:dddd/dddd/dddd\a"
+    fi
+
     export RUSH_BG="$hex"
 }
 
@@ -66,6 +79,14 @@ separator() {
     echo ""
     echo "─────────────────────────────────────────────────────────"
     echo ""
+}
+
+# Extract color env vars from Rush's theme engine for a given background.
+# Uses single-quoted export values to avoid semicolons in LS_COLORS
+# being misinterpreted by bash.
+setup_color_env() {
+    local hex="$1"
+    eval "$(RUSH_BG="$hex" "$RUSH" -c $'ls_colors = env.LS_COLORS\nlscolors = env.LSCOLORS\ngrep_colors = env.GREP_COLORS\nputs "export LS_COLORS=\'#{ls_colors}\'"\nputs "export LSCOLORS=\'#{lscolors}\'"\nputs "export GREP_COLORS=\'#{grep_colors}\'"\nputs "export CLICOLOR=1"\nputs "export CLICOLOR_FORCE=1"')"
 }
 
 # ── Create test fixture directory ─────────────────────────────────
@@ -115,20 +136,23 @@ run_demos() {
     echo "═══════════════════════════════════════════════════════════"
     echo ""
 
-    # 1. File listing with colors
+    # Extract color env vars from Rush's theme engine
+    setup_color_env "$hex"
+
+    # 1. File listing with colors (native ls, using Rush-computed LSCOLORS/LS_COLORS)
     echo "▸ ls (file type colors):"
-    RUSH_BG="$hex" "$RUSH" -c "ls $TEST_DIR"
+    ls --color=always "$TEST_DIR" 2>/dev/null || ls -G "$TEST_DIR"
     echo ""
 
     # 2. Detailed listing
     echo "▸ ls -la (permissions, sizes, metadata):"
-    RUSH_BG="$hex" ls -la "$TEST_DIR"
+    ls --color=always -la "$TEST_DIR" 2>/dev/null || ls -Gla "$TEST_DIR"
     echo ""
 
     # 3. Grep highlighting
     echo "▸ grep highlighting:"
-    echo "This is a test line with the word theme in it." | RUSH_BG="$hex" grep --color=always "theme" 2>/dev/null || true
-    echo "Another line mentioning auto-theme detection." | RUSH_BG="$hex" grep --color=always "auto" 2>/dev/null || true
+    echo "This is a test line with the word theme in it." | grep --color=always "theme" 2>/dev/null || true
+    echo "Another line mentioning auto-theme detection." | grep --color=always "auto" 2>/dev/null || true
     echo ""
 
     # 4. Rush syntax output (colored via transpiler)
