@@ -486,6 +486,13 @@ public class ScriptEngine
                     case RushTokenType.RBrace:
                         depth--;
                         break;
+                    // Bracket blocks: multi-line array literals [...]
+                    case RushTokenType.LBracket:
+                        depth++;
+                        break;
+                    case RushTokenType.RBracket:
+                        depth--;
+                        break;
                 }
             }
         }
