@@ -128,17 +128,23 @@ def run_demos(name, hex, dir)
   puts "═══════════════════════════════════════════════════════════"
   puts ""
 
-  # 1. File listing (Dir.list — no ANSI colors but shows names)
-  puts "▸ Files in test directory:"
-  files = Dir.list(dir)
-  for f in files
-    parts = f.Split("/")
-    fname = parts[parts.length - 1]
-    puts "  #{fname}"
-  end
+  # 1. File listing with colors (native ls)
+  puts "▸ ls (file type colors):"
+  ls --color=always /tmp/rush-theme-test
   puts ""
 
-  # 2. Rush syntax demo
+  # 2. Detailed listing
+  puts "▸ ls -la (permissions, sizes, metadata):"
+  ls --color=always -la /tmp/rush-theme-test
+  puts ""
+
+  # 3. Grep highlighting
+  puts "▸ grep highlighting:"
+  echo "This is a test line with the word theme in it." | grep --color=always "theme"
+  echo "Another line mentioning auto-theme detection." | grep --color=always "auto"
+  puts ""
+
+  # 4. Rush syntax demo
   puts "▸ Rush syntax demo:"
   demo_name = "Rush"
   version = 42
@@ -151,7 +157,7 @@ def run_demos(name, hex, dir)
   end
   puts ""
 
-  # 3. String methods
+  # 5. String methods
   puts "▸ String methods:"
   puts "hello world".upcase
   puts "HELLO WORLD".downcase
@@ -159,7 +165,7 @@ def run_demos(name, hex, dir)
   puts "hello".include?("ell")
   puts ""
 
-  # 4. Colored text
+  # 6. Colored text
   puts "▸ Colored text:"
   puts "This is red".red
   puts "This is green".green
@@ -169,7 +175,7 @@ def run_demos(name, hex, dir)
   puts "This is magenta".magenta
   puts ""
 
-  # 5. Error handling
+  # 7. Error handling
   puts "▸ Error handling:"
   begin
     x = 1 / 0
@@ -289,6 +295,8 @@ File.write(results_file, "PLATFORM|#{platform_os}|#{platform_term}|#{platform_ru
 
 puts "Setting up test directory: #{test_dir}"
 setup_test_dir(test_dir)
+chmod +x /tmp/rush-theme-test/run.sh
+ln -sf /tmp/rush-theme-test/readme.txt /tmp/rush-theme-test/link
 puts "Done."
 puts ""
 
