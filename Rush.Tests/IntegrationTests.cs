@@ -101,4 +101,62 @@ public class IntegrationTests
             File.Delete(tmpFile);
         }
     }
+
+    // ── Escape Sequences in Strings ────────────────────────────────────
+
+    [Fact]
+    public void RushC_Escape_Newline_InDoubleQuotes()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush(@"puts ""hello\nworld""");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("hello", lines[0]);
+        Assert.Equal("world", lines[1]);
+    }
+
+    [Fact]
+    public void RushC_Escape_Tab_InDoubleQuotes()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush(@"puts ""col1\tcol2""");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\t", stdout);
+        Assert.StartsWith("col1", stdout);
+    }
+
+    [Fact]
+    public void RushC_Escape_SingleQuotes_StayLiteral()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts 'hello\\nworld'");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("hello\\nworld", stdout);
+    }
+
+    [Fact]
+    public void RushC_Escape_DoubleBackslash()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush(@"puts ""path\\to\\file""");
+        Assert.Equal(0, exitCode);
+        Assert.Equal("path\\to\\file", stdout);
+    }
+
+    [Fact]
+    public void RushC_Escape_InInterpolatedString()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush(@"name = ""Rush""; puts ""hello #{name}\ngoodbye""");
+        Assert.Equal(0, exitCode);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Equal("hello Rush", lines[0]);
+        Assert.Equal("goodbye", lines[1]);
+    }
+
+    [Fact]
+    public void RushC_Escape_Esc_ProducesControlChar()
+    {
+        // \e should produce ESC (0x1B) — verify the raw byte is present
+        var (stdout, _, exitCode) = TestHelper.RunRush(@"print ""\e[31mred\e[0m""");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("\x1b[31m", stdout);
+    }
 }

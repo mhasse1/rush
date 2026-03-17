@@ -612,8 +612,77 @@ public class RushTranspiler
             RushTokenType.True => "$true",
             RushTokenType.False => "$false",
             RushTokenType.Nil => "$null",
-            _ => node.Value
+            _ => ConvertEscapes(node.Value)
         };
+    }
+
+    /// <summary>
+    /// Convert backslash escape sequences in double-quoted strings to PowerShell backtick escapes.
+    /// Single-quoted strings are left unchanged (literal, matching Ruby/PowerShell convention).
+    /// </summary>
+    private static string ConvertEscapes(string s)
+    {
+        if (s.Length < 2 || s[0] != '"') return s;
+        if (!s.Contains('\\')) return s; // fast path
+
+        var sb = new StringBuilder(s.Length);
+        sb.Append('"');
+        for (int i = 1; i < s.Length - 1; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length - 1)
+            {
+                switch (s[i + 1])
+                {
+                    case 'n': sb.Append("`n"); i++; break;
+                    case 't': sb.Append("`t"); i++; break;
+                    case 'r': sb.Append("`r"); i++; break;
+                    case 'e': sb.Append("`e"); i++; break;
+                    case 'a': sb.Append("`a"); i++; break;
+                    case '0': sb.Append("`0"); i++; break;
+                    case '\\': sb.Append("\\"); i++; break;
+                    default: sb.Append(s[i]); break;
+                }
+            }
+            else
+            {
+                sb.Append(s[i]);
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Convert backslash escapes in raw string content (no surrounding quotes).
+    /// Used for literal parts of interpolated strings.
+    /// </summary>
+    private static string ConvertEscapesRaw(string s)
+    {
+        if (!s.Contains('\\')) return s; // fast path
+
+        var sb = new StringBuilder(s.Length);
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] == '\\' && i + 1 < s.Length)
+            {
+                switch (s[i + 1])
+                {
+                    case 'n': sb.Append("`n"); i++; break;
+                    case 't': sb.Append("`t"); i++; break;
+                    case 'r': sb.Append("`r"); i++; break;
+                    case 'e': sb.Append("`e"); i++; break;
+                    case 'a': sb.Append("`a"); i++; break;
+                    case '0': sb.Append("`0"); i++; break;
+                    case '\\': sb.Append("\\"); i++; break;
+                    default: sb.Append(s[i]); break;
+                }
+            }
+            else
+            {
+                sb.Append(s[i]);
+            }
+        }
+        return sb.ToString();
     }
 
     private string TranspileBinary(BinaryOpNode node)
@@ -980,7 +1049,7 @@ public class RushTranspiler
             {
                 // Literal text — escape any $ signs that aren't ours
                 var text = ((LiteralNode)part).Value;
-                sb.Append(text);
+                sb.Append(ConvertEscapesRaw(text));
             }
         }
         sb.Append('"');
