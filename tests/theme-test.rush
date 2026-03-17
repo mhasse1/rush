@@ -1,0 +1,364 @@
+#!/usr/bin/env rush
+# ═══════════════════════════════════════════════════════════════════
+# Rush Auto-Theme Visual Test Suite (Rush version — dogfooding!)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Tests Rush's auto-theming by cycling through background colors,
+# running demo commands, and collecting visual feedback.
+#
+# Usage: rush tests/theme-test.rush
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Configuration ─────────────────────────────────────────────────
+
+test_dir = "/tmp/rush-theme-test"
+results_file = "/tmp/rush-theme-results.txt"
+
+# Background test matrix: "name|hex" (pipe-delimited — nested arrays not yet supported)
+backgrounds = [
+  "Pure black|#000000",
+  "Dark gray|#1a1a1a",
+  "Dark blue-gray (default)|#222733",
+  "Solarized dark|#002b36",
+  "Teal|#008080",
+  "Mid gray|#808080",
+  "Solarized light|#fdf6e3",
+  "Light gray|#e0e0e0",
+  "Pure white|#ffffff",
+  "Deep purple|#1e0033",
+  "Dark green|#003300",
+  "Navy blue|#000055"
+]
+
+contrast_backgrounds = [
+  "Pure black|#000000",
+  "Teal|#008080",
+  "Mid gray|#808080",
+  "Pure white|#ffffff",
+  "Deep purple|#1e0033"
+]
+
+# ── Platform Detection ────────────────────────────────────────────
+
+platform_os = $os
+if $os == "macos"
+  mac_ver = $(sw_vers -productVersion).Trim()
+  platform_os = "macOS #{mac_ver}"
+end
+
+platform_term = env.TERM_PROGRAM
+if platform_term.nil?
+  platform_term = env.TERM
+  if platform_term.nil?
+    platform_term = "unknown"
+  end
+end
+
+platform_rush = $rush_version
+if env.COLORTERM.nil?
+  platform_color = "unknown"
+else
+  platform_color = env.COLORTERM
+end
+platform_arch = $__rush_arch
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+def set_bg(hex)
+  raw = hex.sub("#", "")
+  r = raw.Substring(0, 2)
+  g = raw.Substring(2, 2)
+  b = raw.Substring(4, 2)
+  # OSC 11: set background color (16-bit format)
+  print "\e]11;rgb:#{r}#{r}/#{g}#{g}/#{b}#{b}\a"
+  # OSC 10: set foreground for readability
+  # Simple luminance: parse hex, check if light or dark
+  ri = "0x#{r}".to_i
+  gi = "0x#{g}".to_i
+  bi = "0x#{b}".to_i
+  total = ri + gi + bi
+  if total > 384
+    # Light background — dark foreground
+    print "\e]10;rgb:1111/1111/1111\a"
+  else
+    # Dark background — light foreground
+    print "\e]10;rgb:dddd/dddd/dddd\a"
+  end
+  # Note: RUSH_BG env var not set — export doesn't support variable values in scripts yet
+  # The OSC sequences above handle the actual terminal color change
+end
+
+def restore_bg()
+  # OSC 111: reset background to default
+  print "\e]111\a"
+  # OSC 110: reset foreground to default
+  print "\e]110\a"
+end
+
+def separator()
+  puts ""
+  puts "─────────────────────────────────────────────────────────"
+  puts ""
+end
+
+# ── Create test fixture directory ─────────────────────────────────
+
+def setup_test_dir(dir)
+  Dir.mkdir(dir)
+  Dir.mkdir("#{dir}/subdir")
+  Dir.mkdir("#{dir}/projects")
+
+  File.write("#{dir}/readme.txt", "Hello, world!")
+  File.write("#{dir}/data.csv", "name,age,city")
+  File.write("#{dir}/config.json", '{"theme": "auto", "contrast": "standard"}')
+  File.write("#{dir}/app.py", "print('hello')")
+  File.write("#{dir}/main.rs", 'fn main() { println!("hello"); }')
+  File.write("#{dir}/index.js", "console.log('hello');")
+  File.write("#{dir}/run.sh", "#!/bin/bash")
+  File.write("#{dir}/backup.tar.gz", "")
+  File.write("#{dir}/photo.jpg", "")
+  File.write("#{dir}/.rushbg", "#334455")
+end
+
+# ── Run demo commands for a given background ──────────────────────
+
+def run_demos(name, hex, dir)
+  puts "═══════════════════════════════════════════════════════════"
+  puts "  Background: #{name} (#{hex})"
+  puts "═══════════════════════════════════════════════════════════"
+  puts ""
+
+  # 1. File listing (Dir.list — no ANSI colors but shows names)
+  puts "▸ Files in test directory:"
+  files = Dir.list(dir)
+  for f in files
+    parts = f.Split("/")
+    fname = parts[parts.length - 1]
+    puts "  #{fname}"
+  end
+  puts ""
+
+  # 2. Rush syntax demo
+  puts "▸ Rush syntax demo:"
+  demo_name = "Rush"
+  version = 42
+  items = [1, 2, 3]
+  puts "Hello from #{demo_name} v#{version}"
+  puts "Array: #{items}"
+  puts "Math: #{2 + 2}"
+  for i in 1..3
+    puts "  item #{i}"
+  end
+  puts ""
+
+  # 3. String methods
+  puts "▸ String methods:"
+  puts "hello world".upcase
+  puts "HELLO WORLD".downcase
+  puts "  padded  ".strip
+  puts "hello".include?("ell")
+  puts ""
+
+  # 4. Colored text
+  puts "▸ Colored text:"
+  puts "This is red".red
+  puts "This is green".green
+  puts "This is blue".blue
+  puts "This is yellow".yellow
+  puts "This is cyan".cyan
+  puts "This is magenta".magenta
+  puts ""
+
+  # 5. Error handling
+  puts "▸ Error handling:"
+  begin
+    x = 1 / 0
+  rescue e
+    puts "Caught: #{e}"
+  end
+  puts ""
+end
+
+# ── Collect feedback ──────────────────────────────────────────────
+
+def collect_feedback(name, hex, results_file)
+  response = ask("  Rate #{name}: (p)ass / (f)ail / (s)kip: ")
+  if response == "f"
+    feedback = ask("  What's wrong? ")
+    File.append(results_file, "FAIL|#{name}|#{hex}|#{feedback}")
+  elsif response == "s"
+    File.append(results_file, "SKIP|#{name}|#{hex}|")
+  else
+    File.append(results_file, "PASS|#{name}|#{hex}|")
+  end
+end
+
+# ── Print summary ─────────────────────────────────────────────────
+
+def print_summary(results_file, platform_os, platform_arch, platform_term, platform_color, platform_rush)
+  puts ""
+  puts "═══════════════════════════════════════════════════════════"
+  puts "  RESULTS SUMMARY"
+  puts "═══════════════════════════════════════════════════════════"
+  puts ""
+  puts "  Platform: #{platform_os} (#{platform_arch})"
+  puts "  Terminal: #{platform_term} · Color: #{platform_color}"
+  puts "  Rush:     #{platform_rush}"
+  puts ""
+
+  content = File.read(results_file)
+  pass_count = 0
+  fail_count = 0
+  skip_count = 0
+
+  for line in content.lines
+    next if line.strip.empty?
+    parts = line.Split("|")
+    result = parts[0]
+    next if result == "PLATFORM"
+
+    if result == "PASS"
+      pass_count = pass_count + 1
+      puts "  ✓ #{parts[1]}  #{parts[2]}"
+    elsif result == "FAIL"
+      fail_count = fail_count + 1
+      puts "  ✗ #{parts[1]}  #{parts[2]} — #{parts[3]}"
+    elsif result == "SKIP"
+      skip_count = skip_count + 1
+      puts "  ○ #{parts[1]}  #{parts[2]} (skipped)"
+    end
+  end
+
+  puts ""
+  puts "  Total: #{pass_count} passed, #{fail_count} failed, #{skip_count} skipped"
+  puts ""
+end
+
+# ── Navigation test instructions ──────────────────────────────────
+
+def run_navigation_test(test_dir, results_file)
+  puts "═══════════════════════════════════════════════════════════"
+  puts "  NAVIGATION TEST"
+  puts "═══════════════════════════════════════════════════════════"
+  puts ""
+  puts "  A .rushbg file has been placed in #{test_dir}"
+  puts "  with color #334455 (dark blue-gray)."
+  puts ""
+  puts "  To test directory-specific backgrounds:"
+  puts ""
+  puts "    1. Open a new Rush REPL:  rush"
+  puts "    2. cd #{test_dir}       → bg should change to #334455"
+  puts "    3. ls                       → verify file colors"
+  puts "    4. cd subdir                → bg stays #334455"
+  puts "    5. cd /tmp                  → bg should restore to original"
+  puts "    6. cd #{test_dir}       → bg changes again"
+  puts "    7. cd ~                     → bg restores"
+  puts ""
+  puts "  Also test:"
+  puts "    - Tab completion in #{test_dir}"
+  puts "    - Autosuggestions (type partial commands)"
+  puts "    - Prompt colors at each step"
+  puts ""
+  ask("  Press Enter when done with navigation testing... ")
+  nav_feedback = ask("  Navigation feedback (or Enter to skip): ")
+  if nav_feedback.strip.length > 0
+    File.append(results_file, "NAV|Navigation|various|#{nav_feedback}")
+  end
+  puts ""
+end
+
+# ── Main ──────────────────────────────────────────────────────────
+
+puts ""
+puts "╔═══════════════════════════════════════════════════════════╗"
+puts "║        Rush Auto-Theme Visual Test Suite                 ║"
+puts "║                                                         ║"
+puts "║  Platform: #{platform_os} (#{platform_arch})"
+puts "║  Terminal: #{platform_term} · Color: #{platform_color}"
+puts "║  Rush:     #{platform_rush}"
+puts "║                                                         ║"
+puts "║  Phase 1: Standard contrast — 12 backgrounds            ║"
+puts "║  Phase 2: High contrast modes (AA, AAA) — 5 backgrounds ║"
+puts "║                                                         ║"
+puts "║  Keys: p=pass  f=fail  s=skip                          ║"
+puts "╚═══════════════════════════════════════════════════════════╝"
+puts ""
+
+# Initialize results file with platform header
+File.write(results_file, "PLATFORM|#{platform_os}|#{platform_term}|#{platform_rush}|#{platform_color}")
+
+puts "Setting up test directory: #{test_dir}"
+setup_test_dir(test_dir)
+puts "Done."
+puts ""
+
+ask("Press Enter to begin Phase 1 (standard contrast)... ")
+
+# Phase 1: Standard contrast — all backgrounds
+for entry in backgrounds
+  parts = entry.Split("|")
+  name = parts[0]
+  hex = parts[1]
+  separator()
+  set_bg(hex)
+  sleep 0.3
+  run_demos(name, hex, test_dir)
+  collect_feedback(name, hex, results_file)
+end
+
+restore_bg()
+sleep 0.3
+
+# Phase 2: High contrast modes
+do_contrast = ask("Run high contrast tests? (y/n): ")
+if do_contrast == "y"
+  # WCAG AA pass
+  separator()
+  puts "╔═══════════════════════════════════════════════════════════╗"
+  puts "║  CONTRAST PASS: WCAG AA (4.5:1 minimum ratio)           ║"
+  puts "╚═══════════════════════════════════════════════════════════╝"
+  puts ""
+
+  for entry in contrast_backgrounds
+    parts = entry.Split("|")
+    name = parts[0]
+    hex = parts[1]
+    separator()
+    set_bg(hex)
+    sleep 0.3
+    run_demos("#{name} (AA)", hex, test_dir)
+    collect_feedback("#{name} (AA)", hex, results_file)
+  end
+
+  restore_bg()
+  sleep 0.3
+
+  # WCAG AAA pass
+  separator()
+  puts "╔═══════════════════════════════════════════════════════════╗"
+  puts "║  CONTRAST PASS: WCAG AAA (7:1 minimum ratio)            ║"
+  puts "╚═══════════════════════════════════════════════════════════╝"
+  puts ""
+
+  for entry in contrast_backgrounds
+    parts = entry.Split("|")
+    name = parts[0]
+    hex = parts[1]
+    separator()
+    set_bg(hex)
+    sleep 0.3
+    run_demos("#{name} (AAA)", hex, test_dir)
+    collect_feedback("#{name} (AAA)", hex, results_file)
+  end
+end
+
+restore_bg()
+
+print_summary(results_file, platform_os, platform_arch, platform_term, platform_color, platform_rush)
+run_navigation_test(test_dir, results_file)
+
+puts "═══════════════════════════════════════════════════════════"
+puts "  Test complete. Results saved to: #{results_file}"
+puts "  Test directory preserved at: #{test_dir}"
+puts "═══════════════════════════════════════════════════════════"
+puts ""

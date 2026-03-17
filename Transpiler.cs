@@ -599,6 +599,9 @@ public class RushTranspiler
         // self → $this (inside class methods)
         if (node.Name == "self")
             return "$this";
+        // Builtin variables already have $ prefix (e.g., $os, $hostname)
+        if (node.Name.StartsWith('$'))
+            return node.Name;
         return $"${node.Name}";
     }
 
@@ -963,9 +966,13 @@ public class RushTranspiler
             if (isExpr)
             {
                 var expr = TranspileExpression(part);
-                // Simple variable ref: #{name} → $name
-                if (part is VariableRefNode)
-                    sb.Append(expr);
+                // Simple variable ref: #{name} → ${name} (braces protect against PS namespace parsing e.g. $name: )
+                if (part is VariableRefNode vrn)
+                {
+                    // expr is "$name" or "$os" — wrap the variable name in braces for safety
+                    var varName = vrn.Name.StartsWith('$') ? vrn.Name[1..] : vrn.Name;
+                    sb.Append($"${{{varName}}}");
+                }
                 else
                     sb.Append($"$({expr})");
             }

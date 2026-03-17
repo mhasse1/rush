@@ -219,7 +219,7 @@ public class Lexer
         if (char.IsLetter(ch) || ch == '_')
             return ReadIdentifierOrKeyword();
 
-        // Dollar sign — command substitution $() and exit status $?
+        // Dollar sign — command substitution $(), exit status $?, or builtin variable $name
         if (ch == '$')
         {
             if (_pos + 1 < _source.Length && _source[_pos + 1] == '(')
@@ -228,6 +228,14 @@ public class Lexer
             {
                 _pos += 2;
                 return new RushToken(RushTokenType.DollarQuestion, "$?", start);
+            }
+            // $identifier — builtin variable like $os, $hostname, $rush_version
+            if (_pos + 1 < _source.Length && (char.IsLetter(_source[_pos + 1]) || _source[_pos + 1] == '_'))
+            {
+                _pos++; // skip $
+                while (_pos < _source.Length && (char.IsLetterOrDigit(_source[_pos]) || _source[_pos] == '_'))
+                    _pos++;
+                return new RushToken(RushTokenType.Identifier, _source[start.._pos], start);
             }
         }
 

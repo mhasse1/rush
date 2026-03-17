@@ -100,6 +100,36 @@ public class UserManualDocTests
         Assert.False(string.IsNullOrEmpty(stdout));
     }
 
+    [Fact]
+    public void BuiltinVar_Os_InInterpolation()
+    {
+        // Bug fix: $os assigned to variable then used in string interpolation
+        var (stdout, _, exitCode) = TestHelper.RunRush("a = $os\nputs \"os is #{a}\"");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("os is", stdout);
+        Assert.True(stdout.Contains("macos") || stdout.Contains("linux") || stdout.Contains("windows"),
+            $"Expected OS name in interpolated string, got: {stdout}");
+    }
+
+    [Fact]
+    public void BuiltinVar_Os_DirectInterpolation()
+    {
+        // $os used directly in string interpolation
+        var (stdout, _, exitCode) = TestHelper.RunRush("puts \"os is #{$os}\"");
+        Assert.Equal(0, exitCode);
+        Assert.True(stdout.Contains("macos") || stdout.Contains("linux") || stdout.Contains("windows"),
+            $"Expected OS name in interpolated string, got: {stdout}");
+    }
+
+    [Fact]
+    public void Interpolation_VarBeforeColon()
+    {
+        // Bug fix: #{name}: caused PS namespace parsing error — now uses ${name} form
+        var (stdout, _, exitCode) = TestHelper.RunRush("name = \"Rush\"\nhex = \"#123\"\nputs \"#{name}: #{hex}\"");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Rush: #123", stdout);
+    }
+
     // ══════════════════════════════════════════════════════════════════
     // ── Section 5: Shell Features ────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════
