@@ -1951,9 +1951,11 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         // ── Translate & Execute (with timing) ────────────────────────
         var translated = state.Translator.Translate(cmdPart);
         var commandToRun = translated ?? cmdPart;
+        var cmdFirstWord = cmdPart.Split(' ', 2)[0];
+        bool isUserAlias = state.Translator.IsUserAlias(cmdFirstWord);
 
-        // Glob expansion: only for passthrough (native) commands
-        if (translated == null)
+        // Glob expansion: for passthrough (native) commands and user aliases
+        if (translated == null || isUserAlias)
             commandToRun = ExpandGlobs(commandToRun);
 
         // ── Background Job ─────────────────────────────────────────
@@ -1975,10 +1977,15 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         // with inherited stdio, giving them real TTY access. This handles
         // shells, TUI apps, REPLs, and any program — no allowlist needed.
         // PowerShell is only used when we need its pipeline/capture features.
-        bool needsPowerShell = translated != null
+        //
+        // User aliases (e.g., gp → git push) run natively so they get real
+        // TTY access (needed for editors like vim) and stderr is not captured
+        // as PowerShell error records (fixes git push "error:" prefix).
+        bool needsPowerShell = (translated != null && !isUserAlias)
             || redirect != null
             || stdinRedirect != null
-            || CommandTranslator.HasUnquotedPipe(cmdPart);
+            || CommandTranslator.HasUnquotedPipe(cmdPart)
+            || (isUserAlias && CommandTranslator.HasUnquotedPipe(commandToRun));
 
         // ── Pipe-to-AI interception ── cmd | ai "prompt" ──────────
         if (state.IsInteractive && CommandTranslator.HasUnquotedPipe(cmdPart))

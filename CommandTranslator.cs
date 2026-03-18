@@ -603,7 +603,15 @@ public class CommandTranslator
     /// </summary>
     public void RegisterAlias(string alias, string command)
     {
-        _commands[alias] = new CommandMapping(alias, command, new());
+        _commands[alias] = new CommandMapping(alias, command, new(), isUserAlias: true);
+    }
+
+    /// <summary>
+    /// Check if a command is a user-defined alias (should run natively, not through PowerShell).
+    /// </summary>
+    public bool IsUserAlias(string command)
+    {
+        return _commands.TryGetValue(command, out var mapping) && mapping.IsUserAlias;
     }
 
     /// <summary>
@@ -750,12 +758,14 @@ public class CommandMapping
     public string? Cmdlet { get; }
     public Dictionary<string, string> FlagMap { get; }
     public bool QuotePositionalArgs { get; }
+    public bool IsUserAlias { get; }
 
-    public CommandMapping(string alias, string? cmdlet, Dictionary<string, string> flagMap, bool quotePositionalArgs = false)
+    public CommandMapping(string alias, string? cmdlet, Dictionary<string, string> flagMap, bool quotePositionalArgs = false, bool isUserAlias = false)
     {
         Alias = alias;
         Cmdlet = cmdlet;
         FlagMap = flagMap;
+        IsUserAlias = isUserAlias;
         QuotePositionalArgs = quotePositionalArgs;
     }
 

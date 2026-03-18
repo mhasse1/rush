@@ -303,4 +303,42 @@ public class CommandTranslatorTests
         var result = _translator.Translate("data | distinct Name");
         Assert.Equal("data | Sort-Object -Property Name -Unique", result);
     }
+
+    // ── User Alias Tests ────────────────────────────────────────────
+
+    [Fact]
+    public void UserAlias_IsUserAlias_ReturnsTrue()
+    {
+        _translator.RegisterAlias("gp", "git push");
+        Assert.True(_translator.IsUserAlias("gp"));
+    }
+
+    [Fact]
+    public void UserAlias_IsUserAlias_ReturnsFalseForBuiltins()
+    {
+        // echo is a built-in command mapping, not a user alias
+        Assert.False(_translator.IsUserAlias("echo"));
+    }
+
+    [Fact]
+    public void UserAlias_IsUserAlias_ReturnsFalseForUnknown()
+    {
+        Assert.False(_translator.IsUserAlias("nonexistent"));
+    }
+
+    [Fact]
+    public void UserAlias_Translates()
+    {
+        _translator.RegisterAlias("gp", "git push");
+        var result = _translator.Translate("gp");
+        Assert.Equal("git push", result);
+    }
+
+    [Fact]
+    public void UserAlias_TranslatesWithArgs()
+    {
+        _translator.RegisterAlias("gc", "git commit");
+        var result = _translator.Translate("gc -m \"test\"");
+        Assert.Equal("git commit -m \"test\"", result);
+    }
 }
