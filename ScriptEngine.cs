@@ -694,7 +694,9 @@ public class ScriptEngine
                 // Handle $PATH / $VAR references → PowerShell $env:VAR
                 var psValue = System.Text.RegularExpressions.Regex.Replace(
                     value, @"\$(\w+)", m => "$env:" + m.Groups[1].Value);
-                var escaped = psValue.Replace("'", "''");
+                // Handle Rush interpolation #{var} → PowerShell $var
+                psValue = System.Text.RegularExpressions.Regex.Replace(
+                    psValue, @"#\{(\w+)\}", m => "$" + m.Groups[1].Value);
                 return $"$env:{varName} = \"{psValue}\"; [Environment]::SetEnvironmentVariable('{varName}', \"{psValue}\")";
             }
         }

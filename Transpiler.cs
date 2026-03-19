@@ -13,6 +13,8 @@ public class RushTranspiler
 
     // Class context for super call transpilation — set during TranspileClassDef
     private string? _currentClassParent;
+    // True when transpiling inside a class method body (puts → [Console]::WriteLine)
+    private bool _inClassMethod;
 
     // Registry of class definitions for named-arg resolution at .new() call sites
     private readonly Dictionary<string, ClassDefNode> _classDefinitions = new();
@@ -249,7 +251,9 @@ public class RushTranspiler
                 var allParams = ctor.Params.Select(p => $"[object]${CapitalizeProperty(p.Name)}").ToList();
                 sb.AppendLine();
                 sb.AppendLine($"  hidden _Init({string.Join(", ", allParams)}) {{");
+                _inClassMethod = true;
                 sb.Append(TranspileBody(bodyWithoutSuper, "    "));
+                _inClassMethod = false;
                 sb.AppendLine("  }");
 
                 // Generate constructor overloads
@@ -290,7 +294,9 @@ public class RushTranspiler
 
                 sb.AppendLine();
                 sb.AppendLine($"  {node.Name}({paramList}){baseClause} {{");
+                _inClassMethod = true;
                 sb.Append(TranspileBody(bodyWithoutSuper, "    "));
+                _inClassMethod = false;
                 sb.AppendLine("  }");
             }
         }
@@ -329,7 +335,10 @@ public class RushTranspiler
 
         sb.AppendLine();
         sb.AppendLine($"  {staticKeyword}{returnType} {CapitalizeProperty(method.Name)}({paramList}) {{");
+        var prevInClassMethod = _inClassMethod;
+        _inClassMethod = true;
         sb.Append(TranspileBody(method.Body, "    "));
+        _inClassMethod = prevInClassMethod;
         sb.AppendLine("  }");
     }
 
@@ -1076,6 +1085,29 @@ public class RushTranspiler
     /// </summary>
     private string TranspilePuts(List<RushNode> args)
     {
+        // Inside class methods, Write-Output is swallowed by PS — use [Console]::WriteLine
+        if (_inClassMethod)
+        {
+            if (args.Count == 0) return "[Console]::WriteLine()";
+            var arg0 = args[0];
+            // Color methods → Write-Host (works in class methods)
+            if (arg0 is PropertyAccessNode pa2 && AnsiColors.ContainsKey(pa2.Property)
+                && !(pa2.Receiver is VariableRefNode pvr2 && pvr2.Name.Length > 0 && char.IsUpper(pvr2.Name[0])))
+            {
+                var inner = TranspileExpression(pa2.Receiver);
+                var color = char.ToUpper(pa2.Property[0]) + pa2.Property[1..];
+                return $"Write-Host {inner} -ForegroundColor {color}";
+            }
+            if (arg0 is MethodCallNode mc2 && mc2.Args.Count == 0 && mc2.Block == null
+                && AnsiColors.ContainsKey(mc2.Method))
+            {
+                var inner = TranspileExpression(mc2.Receiver);
+                var color = char.ToUpper(mc2.Method[0]) + mc2.Method[1..];
+                return $"Write-Host {inner} -ForegroundColor {color}";
+            }
+            return $"[Console]::WriteLine({TranspileExpression(arg0)})";
+        }
+
         if (args.Count == 0) return "Write-Output ''";
 
         var arg = args[0];
@@ -1113,6 +1145,12 @@ public class RushTranspiler
 
     private string TranspilePrint(List<RushNode> args)
     {
+        // Inside class methods, use [Console]::Write (Write-Host also works but [Console] is consistent)
+        if (_inClassMethod)
+        {
+            if (args.Count == 0) return "[Console]::Write('')";
+            return $"[Console]::Write({TranspileExpression(args[0])})";
+        }
         if (args.Count == 0) return "Write-Host '' -NoNewline";
         return $"Write-Host {TranspileExpression(args[0])} -NoNewline";
     }
