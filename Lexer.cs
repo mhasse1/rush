@@ -219,6 +219,10 @@ public class Lexer
         if (char.IsLetter(ch) || ch == '_')
             return ReadIdentifierOrKeyword();
 
+        // Backtick command substitution `command` → same as $(command)
+        if (ch == '`')
+            return ReadBacktickSubstitution();
+
         // Dollar sign — command substitution $(), exit status $?, or builtin variable $name
         if (ch == '$')
         {
@@ -518,6 +522,23 @@ public class Lexer
             : pattern.ToString();
 
         return new RushToken(RushTokenType.Regex, value, start);
+    }
+
+    /// <summary>
+    /// Read a `command` backtick substitution — produces the same DollarParen token as $(command).
+    /// </summary>
+    private RushToken ReadBacktickSubstitution()
+    {
+        var start = _pos;
+        _pos++; // skip opening backtick
+        var sb = new System.Text.StringBuilder();
+        while (_pos < _source.Length && _source[_pos] != '`')
+        {
+            sb.Append(_source[_pos]);
+            _pos++;
+        }
+        if (_pos < _source.Length) _pos++; // skip closing backtick
+        return new RushToken(RushTokenType.DollarParen, sb.ToString().Trim(), start);
     }
 
     /// <summary>

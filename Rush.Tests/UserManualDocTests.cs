@@ -252,6 +252,22 @@ public class UserManualDocTests
     }
 
     [Fact]
+    public void Shell_BacktickSubstitution()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("ver = `echo hello`.Trim()\nputs ver");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("hello", stdout);
+    }
+
+    [Fact]
+    public void Shell_BacktickSubstitution_WithMethod()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("result = `uname -s`.strip\nputs result");
+        Assert.Equal(0, exitCode);
+        Assert.False(string.IsNullOrEmpty(stdout));
+    }
+
+    [Fact]
     public void Shell_ArithmeticExpansion_Add()
     {
         var (stdout, _, exitCode) = TestHelper.RunRush("echo $(( 2 + 3 ))");

@@ -740,4 +740,33 @@ puts c2.get_value()";
         Assert.Contains("42", stdout);
         Assert.Equal(0, exitCode);
     }
+
+    // ── Puts in class methods (#27) ─────────────────────────────────
+
+    [Fact]
+    public void ClassMethod_Puts_ProducesOutput()
+    {
+        var code = "class Dog\n  def speak\n    puts \"Woof\"\n  end\nend\nd = Dog.new()\nd.speak()";
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(code);
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Woof", stdout);
+    }
+
+    [Fact]
+    public void ClassMethod_Puts_UsesConsoleWriteLine()
+    {
+        // Verify transpiler generates [Console]::WriteLine inside class methods
+        var ps = Transpile("class Dog\n  def speak\n    puts \"Woof\"\n  end\nend");
+        Assert.Contains("[Console]::WriteLine", ps);
+        Assert.DoesNotContain("Write-Output", ps);
+    }
+
+    [Fact]
+    public void ClassMethod_Print_ProducesOutput()
+    {
+        var code = "class Cat\n  def speak\n    print \"Meow\"\n  end\nend\nc = Cat.new()\nc.speak()";
+        var (stdout, stderr, exitCode) = TestHelper.RunRush(code);
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Meow", stdout);
+    }
 }
