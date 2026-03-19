@@ -484,10 +484,17 @@ public class RushTranspiler
 
     private string TranspilePropertyAssignment(PropertyAssignmentNode node)
     {
+        // env.VAR = value → $env:VAR = value (preserve original name, no PascalCase)
+        if (node.Receiver is VariableRefNode envRef && envRef.Name == "env")
+        {
+            var value = TranspileExpression(node.Value);
+            return $"$env:{node.Property} = {value}";
+        }
+
         var receiver = TranspileExpression(node.Receiver);
         var prop = CapitalizeProperty(node.Property);
-        var value = TranspileExpression(node.Value);
-        return $"{receiver}.{prop} = {value}";
+        var value2 = TranspileExpression(node.Value);
+        return $"{receiver}.{prop} = {value2}";
     }
 
     private string TranspileReturn(ReturnNode node)
@@ -1338,8 +1345,13 @@ public class RushTranspiler
     private string TranspileSplit(string receiver, List<RushNode> args)
     {
         if (args.Count > 0)
-            return $"({receiver}) -split {TranspileExpression(args[0])}";
-        return $"({receiver}) -split '\\s+'";
+        {
+            // Use .Split() (string method) instead of -split (regex operator)
+            // to avoid regex metacharacter issues (e.g., "|" means alternation in regex)
+            var delimiter = TranspileExpression(args[0]);
+            return $"({receiver}).Split({delimiter})";
+        }
+        return $"({receiver}).Trim() -split '\\s+'";
     }
 
     private string TranspileSkip(string receiver, List<RushNode> args)

@@ -221,9 +221,11 @@ public class ScriptEngine
         if (!char.IsLetter(firstWord[0]) && firstWord[0] != '_') return false;
         if (firstWord.Any(c => c is '-' or '/' or '\\')) return false;
 
-        // Must NOT be a shell builtin (cd, export, set, etc. — these have
-        // special semantics where = could be meaningful)
-        if (IsShellBuiltin(firstWord)) return false;
+        // Must NOT be a shell builtin that uses = in its own syntax
+        // (export VAR=value, set option=value, alias name=cmd).
+        // Other builtins (bg, fg, dirs, etc.) are fine as variable names
+        // when followed by = (assignment).
+        if (IsBuiltinWithEquals(firstWord)) return false;
 
         // The = must come right after the first word (with optional spaces)
         var afterWord = input[firstWord.Length..].TrimStart();
@@ -403,6 +405,29 @@ public class ScriptEngine
             || word.Equals("die", StringComparison.OrdinalIgnoreCase)
             || word.Equals("print", StringComparison.OrdinalIgnoreCase)
             || word.Equals("ask", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Shell builtins that use = in their own syntax, so "word = value"
+    /// is ambiguous with builtin semantics. Other builtins (bg, fg, dirs, etc.)
+    /// can safely be used as variable names when followed by = assignment.
+    /// </summary>
+    private static bool IsBuiltinWithEquals(string word)
+    {
+        // Builtins where "word = value" is ambiguous with builtin syntax,
+        // or where using as variable names would be confusing/dangerous.
+        // Safe as variable names: bg, fg, dirs, jobs, kill, sync, pushd, popd,
+        // clear, help, history, exit, quit, reload, source, unalias, path, sql
+        return word.Equals("export", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("set", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("alias", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("cd", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("unset", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("wait", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("printf", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("read", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("exec", StringComparison.OrdinalIgnoreCase)
+            || word.Equals("trap", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsShellBuiltin(string word)
