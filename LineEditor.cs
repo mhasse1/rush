@@ -1702,14 +1702,28 @@ public class LineEditor
 
     /// <summary>
     /// Erase ghost text from screen before Enter/newline so it doesn't linger.
+    /// Writes spaces over the ghost region directly instead of calling Redraw(),
+    /// which would re-trigger UpdateSuggestion() and potentially redraw the ghost.
     /// </summary>
     private void ClearGhostText()
     {
         var ghost = GetGhostText();
         if (ghost.Length > 0)
         {
+            // Position cursor right after the typed text (where ghost starts)
+            try
+            {
+                int textEnd = _startLeft + _buffer.Count;
+                int row = _startTop + textEnd / Console.WindowWidth;
+                int col = textEnd % Console.WindowWidth;
+                Console.SetCursorPosition(col, row);
+                // Overwrite ghost text with spaces
+                Console.Write(new string(' ', ghost.Length));
+                // Move cursor back to end of typed text
+                Console.SetCursorPosition(col, row);
+            }
+            catch { }
             _suggestion = null;
-            Redraw();
         }
     }
 
