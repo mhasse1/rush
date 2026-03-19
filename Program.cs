@@ -2553,14 +2553,25 @@ static int RunInteractive(string command, CommandTranslator? translator = null,
 {
     try
     {
-        var firstSpace = command.IndexOf(' ');
-        var exe = firstSpace > 0 ? command[..firstSpace] : command;
-        var args = firstSpace > 0 ? command[(firstSpace + 1)..].Trim() : "";
+        var cmdParts = CommandTranslator.SplitCommandLine(command);
+        var exe = cmdParts[0];
 
-        var psi = new ProcessStartInfo(exe, args)
+        var psi = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
         };
+
+        // Add args individually, stripping surrounding quotes that were
+        // preserved for glob-expansion protection but shouldn't be passed
+        // literally to the process (ProcessStartInfo doesn't use a shell).
+        for (int i = 1; i < cmdParts.Length; i++)
+        {
+            var arg = cmdParts[i];
+            if ((arg.StartsWith('\'') && arg.EndsWith('\'') && arg.Length >= 2) ||
+                (arg.StartsWith('"') && arg.EndsWith('"') && arg.Length >= 2))
+                arg = arg[1..^1];
+            psi.ArgumentList.Add(arg);
+        }
 
         // Handle 2>/dev/null and 2>file stderr redirection for native commands
         FileStream? stderrFile = null;
