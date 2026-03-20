@@ -191,6 +191,16 @@ public class UnaryOpNode : RushNode
     public UnaryOpNode(string op, RushNode operand) { Op = op; Operand = operand; }
 }
 
+/// <summary>Ternary expression: condition ? then_expr : else_expr</summary>
+public class TernaryNode : RushNode
+{
+    public RushNode Condition { get; }
+    public RushNode ThenExpr { get; }
+    public RushNode ElseExpr { get; }
+    public TernaryNode(RushNode condition, RushNode thenExpr, RushNode elseExpr)
+    { Condition = condition; ThenExpr = thenExpr; ElseExpr = elseExpr; }
+}
+
 /// <summary>Method call on receiver: receiver.method(args) { block }</summary>
 public class MethodCallNode : RushNode
 {
@@ -251,12 +261,14 @@ public class InterpolatedStringNode : RushNode
     public List<(bool IsExpr, RushNode Node)> Parts { get; } = new();
 }
 
-/// <summary>A range expression: start..end</summary>
+/// <summary>A range expression: start..end (inclusive) or start...end (exclusive)</summary>
 public class RangeNode : RushNode
 {
     public RushNode Start { get; }
     public RushNode End { get; }
-    public RangeNode(RushNode start, RushNode end) { Start = start; End = end; }
+    public bool Exclusive { get; }
+    public RangeNode(RushNode start, RushNode end, bool exclusive = false)
+    { Start = start; End = end; Exclusive = exclusive; }
 }
 
 /// <summary>A symbol literal: :name</summary>
@@ -295,6 +307,16 @@ public class CommandSubNode : RushNode
     public CommandSubNode(string command) { Command = command; }
 }
 
+/// <summary>PowerShell static member access: [Type]::Member or [Type]::Method(args)</summary>
+public class StaticMemberNode : RushNode
+{
+    public string TypeName { get; }
+    public string Member { get; }
+    public List<RushNode>? Args { get; }
+    public StaticMemberNode(string typeName, string member, List<RushNode>? args = null)
+    { TypeName = typeName; Member = member; Args = args; }
+}
+
 /// <summary>A shell command passed through to the existing pipeline.</summary>
 public class ShellPassthroughNode : RushNode
 {
@@ -302,8 +324,8 @@ public class ShellPassthroughNode : RushNode
     public ShellPassthroughNode(string rawCommand) { RawCommand = rawCommand; }
 }
 
-/// <summary>Attribute definition with optional type annotation: attr name or attr name: String</summary>
-public record AttrDef(string Name, string? TypeName = null);
+/// <summary>Attribute definition with optional type annotation and default value: attr name, attr name: String, attr name = value</summary>
+public record AttrDef(string Name, string? TypeName = null, RushNode? DefaultValue = null);
 
 /// <summary>class Name ... end (with attr declarations, constructor, and methods)</summary>
 public class ClassDefNode : RushNode
@@ -857,10 +879,14 @@ public class Parser
                 {
                     var attrName = Expect(RushTokenType.Identifier).Value;
                     string? typeName = null;
+                    RushNode? defaultValue = null;
                     // Optional type annotation: attr name: String
                     if (Match(RushTokenType.Colon))
                         typeName = Expect(RushTokenType.Identifier).Value;
-                    attributes.Add(new AttrDef(attrName, typeName));
+                    // Optional default value: attr name = value
+                    if (Match(RushTokenType.Assign))
+                        defaultValue = ParseExpression();
+                    attributes.Add(new AttrDef(attrName, typeName, defaultValue));
                 } while (Match(RushTokenType.Comma));
             }
             else if (Current.Type == RushTokenType.Def)
@@ -1056,7 +1082,16 @@ public class Parser
     /// </summary>
     public RushNode ParseExpression()
     {
-        return ParsePipePipe();
+        var expr = ParsePipePipe();
+        if (Current.Type == RushTokenType.QuestionMark)
+        {
+            Advance(); // skip ?
+            var thenExpr = ParseExpression(); // allow nested ternaries
+            Expect(RushTokenType.Colon);
+            var elseExpr = ParseExpression();
+            return new TernaryNode(expr, thenExpr, elseExpr);
+        }
+        return expr;
     }
 
     private RushNode ParsePipePipe()
@@ -1142,6 +1177,12 @@ public class Parser
             Advance();
             var right = ParseAdditive();
             return new RangeNode(left, right);
+        }
+        if (Current.Type == RushTokenType.DotDotDot)
+        {
+            Advance();
+            var right = ParseAdditive();
+            return new RangeNode(left, right, exclusive: true);
         }
         return left;
     }
@@ -1415,7 +1456,45 @@ public class Parser
                 return expr;
 
             case RushTokenType.LBracket:
+            {
+                // Check if this is [Type]::Member (static member access)
+                int lookahead = 1;
+                while (Peek(lookahead).Type == RushTokenType.Identifier || Peek(lookahead).Type == RushTokenType.Dot)
+                    lookahead++;
+                if (Peek(lookahead).Type == RushTokenType.RBracket &&
+                    Peek(lookahead + 1).Type == RushTokenType.DoubleColon)
+                {
+                    Advance(); // skip [
+                    var typeParts = new List<string>();
+                    typeParts.Add(Expect(RushTokenType.Identifier).Value);
+                    while (Current.Type == RushTokenType.Dot)
+                    {
+                        Advance(); // skip .
+                        typeParts.Add(Expect(RushTokenType.Identifier).Value);
+                    }
+                    var typeName = string.Join(".", typeParts);
+                    Expect(RushTokenType.RBracket); // skip ]
+                    Advance(); // skip ::
+                    var member = Expect(RushTokenType.Identifier).Value;
+
+                    // Check for method call: [Type]::Method(args)
+                    List<RushNode>? args = null;
+                    if (Current.Type == RushTokenType.LParen)
+                    {
+                        Advance(); // skip (
+                        args = new List<RushNode>();
+                        if (Current.Type != RushTokenType.RParen)
+                        {
+                            args.Add(ParseExpression());
+                            while (Match(RushTokenType.Comma))
+                                args.Add(ParseExpression());
+                        }
+                        Expect(RushTokenType.RParen);
+                    }
+                    return new StaticMemberNode(typeName, member, args);
+                }
                 return ParseArrayLiteral();
+            }
 
             case RushTokenType.LBrace:
                 return ParseHashLiteral();

@@ -695,7 +695,7 @@ public class NewFeaturesIntegrationTests
     // ── Dir.list Symbol Flags ─────────────────────────────────────────────
 
     [Fact]
-    public void Dir_List_Default_Returns_RelativePaths()
+    public void Dir_List_Default_Returns_Basenames()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tmpDir);
@@ -705,8 +705,9 @@ public class NewFeaturesIntegrationTests
             var (stdout, _, exitCode) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\")");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
-            // Should not be absolute paths (starts with /)
-            Assert.False(stdout.TrimStart().StartsWith("/"), "Dir.list should return relative paths, not absolute");
+            // Should return just basenames, not full or relative paths
+            Assert.False(stdout.TrimStart().StartsWith("/"), "Dir.list should return basenames, not absolute paths");
+            Assert.DoesNotContain(tmpDir, stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
     }
@@ -803,11 +804,31 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(subDir, "deep.txt"), "");
             var (stdout, _, _) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\", :recurse, :files)");
-            // Relative path should include subdirectory
-            Assert.Contains("sub", stdout);
+            // Returns basenames even for recursive listings
             Assert.Contains("deep.txt", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
+    }
+
+    [Fact]
+    public void DirList_ReturnsBasenames()
+    {
+        var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_dirlist_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(tmpDir);
+        System.IO.File.WriteAllText(Path.Combine(tmpDir, "test.txt"), "hello");
+        System.IO.File.WriteAllText(Path.Combine(tmpDir, "readme.md"), "world");
+        try
+        {
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir.Replace("\\", "/")}\")\nputs files");
+            // Should contain just basenames, not full paths
+            Assert.Contains("test.txt", stdout);
+            Assert.Contains("readme.md", stdout);
+            Assert.DoesNotContain(tmpDir, stdout);
+        }
+        finally
+        {
+            Directory.Delete(tmpDir, true);
+        }
     }
 
     [Fact]

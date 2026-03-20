@@ -32,6 +32,7 @@ public enum RushTokenType
     NotMatch,       // !~
     Dot,            // .
     DotDot,         // .. (range)
+    DotDotDot,      // ... (exclusive range)
     Pipe,           // |
     Ampersand,      // &
     AmpAmp,         // &&
@@ -41,6 +42,8 @@ public enum RushTokenType
     StarAssign,     // *=
     SlashAssign,    // /=
     SafeNav,        // &.
+    DoubleColon,    // :: (static member access)
+    QuestionMark,   // ?
 
     // Delimiters
     LParen, RParen,
@@ -271,6 +274,11 @@ public class Lexer
                     _pos += 2;
                     return new RushToken(RushTokenType.PipePipe, "||", start);
                 case "..":
+                    if (_pos + 2 < _source.Length && _source[_pos + 2] == '.')
+                    {
+                        _pos += 3;
+                        return new RushToken(RushTokenType.DotDotDot, "...", start);
+                    }
                     _pos += 2;
                     return new RushToken(RushTokenType.DotDot, "..", start);
                 case "#{":
@@ -294,6 +302,9 @@ public class Lexer
                 case "&.":
                     _pos += 2;
                     return new RushToken(RushTokenType.SafeNav, "&.", start);
+                case "::":
+                    _pos += 2;
+                    return new RushToken(RushTokenType.DoubleColon, "::", start);
             }
         }
 
@@ -326,6 +337,7 @@ public class Lexer
             ',' => new RushToken(RushTokenType.Comma, ",", start),
             ':' => new RushToken(RushTokenType.Colon, ":", start),
             ';' => new RushToken(RushTokenType.Semicolon, ";", start),
+            '?' => new RushToken(RushTokenType.QuestionMark, "?", start),
             _ => new RushToken(RushTokenType.Identifier, ch.ToString(), start), // Unknown char → pass through
         };
     }

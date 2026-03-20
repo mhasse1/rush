@@ -723,7 +723,26 @@ public class UserManualDocTests
         Assert.Contains("greeting", stdout);
     }
 
-    // ControlFlow_TernaryOperator — SKIPPED: ternary operator (? :) not implemented in parser
+    [Fact]
+    public void ControlFlow_TernaryOperator()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("age = 20\nstatus = age >= 18 ? \"adult\" : \"minor\"\nputs status");
+        Assert.Equal("adult", stdout);
+    }
+
+    [Fact]
+    public void Ternary_FalseCondition()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("x = 3\nputs x > 5 ? \"big\" : \"small\"");
+        Assert.Equal("small", stdout);
+    }
+
+    [Fact]
+    public void Ternary_InExpression()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("x = 10\nresult = \"value is \" + (x > 5 ? \"high\" : \"low\")\nputs result");
+        Assert.Equal("value is high", stdout);
+    }
 
     // ── 7.8 Loops ──
 
@@ -737,7 +756,26 @@ public class UserManualDocTests
         Assert.Contains("3", stdout);
     }
 
-    // Loop_ForInExclusiveRange — SKIPPED: exclusive range (1...4) not implemented in parser
+    [Fact]
+    public void Loop_ForInExclusiveRange()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("for i in 1...4\n  puts i\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("1", stdout);
+        Assert.Contains("2", stdout);
+        Assert.Contains("3", stdout);
+        Assert.DoesNotContain("4", stdout);
+    }
+
+    [Fact]
+    public void ExclusiveRange_VariableEndpoints()
+    {
+        var (stdout, _, exitCode) = TestHelper.RunRush("a = 0\nb = 5\nfor i in a...b\n  puts i\nend");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("0", stdout);
+        Assert.Contains("4", stdout);
+        Assert.DoesNotContain("5", stdout);
+    }
 
     [Fact]
     public void Loop_While()
@@ -820,7 +858,30 @@ public class UserManualDocTests
     // Class_Basic — SKIPPED: class methods with puts don't produce visible output in rush -c.
     // Classes work (no errors) but method output is swallowed. Needs investigation.
 
-    // Class_WithDefaults — SKIPPED: attr with default value (attr count = 0) not implemented
+    [Fact]
+    public void Class_WithDefaults()
+    {
+        // Verify attr default value is applied when no constructor override
+        var (stdout, _, _) = TestHelper.RunRush(
+            "class Counter\n  attr total = 0\nend\nc = Counter.new()\nputs c.total");
+        Assert.Equal("0", stdout);
+    }
+
+    [Fact]
+    public void Class_AttrDefaultString()
+    {
+        var (stdout, _, _) = TestHelper.RunRush(
+            "class Greeter\n  attr greeting = \"hello\"\nend\ng = Greeter.new()\nputs g.greeting");
+        Assert.Equal("hello", stdout);
+    }
+
+    [Fact]
+    public void Class_AttrDefaultOverriddenByConstructor()
+    {
+        var (stdout, _, _) = TestHelper.RunRush(
+            "class Item\n  attr name = \"unknown\"\n  def initialize(n)\n    self.name = n\n  end\nend\ni = Item.new(\"widget\")\nputs i.name");
+        Assert.Equal("widget", stdout);
+    }
 
     // ── 7.11 Enums ──
 
@@ -1362,8 +1423,26 @@ public class UserManualDocTests
     // ── Section 18: Tips & Tricks ────────────────────────────────────
     // ══════════════════════════════════════════════════════════════════
 
-    // Tips_MathPI — SKIPPED: [Math]::PI is raw PowerShell syntax, Rush parser
-    // chokes on :: (Colon token). Works in REPL shell mode but not as Rush expression.
+    [Fact]
+    public void Tips_MathPI()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts [Math]::PI");
+        Assert.StartsWith("3.14159", stdout);
+    }
+
+    [Fact]
+    public void StaticMember_MethodCall()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("ext = [IO.Path]::GetExtension(\"file.txt\")\nputs ext");
+        Assert.Equal(".txt", stdout);
+    }
+
+    [Fact]
+    public void StaticMember_MathAbs()
+    {
+        var (stdout, _, _) = TestHelper.RunRush("puts [Math]::Abs(-42)");
+        Assert.Equal("42", stdout);
+    }
 
     [Fact]
     public void Tips_SizeLiteral_KB()

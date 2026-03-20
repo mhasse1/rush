@@ -166,6 +166,11 @@ public class ScriptEngine
         if (IsClassMemberAccess(trimmed))
             return true;
 
+        // Rule 12: PowerShell static member access — [Type]::Member or [Type]::Method(args)
+        // e.g., [Math]::PI, [IO.Path]::GetExtension("file.txt")
+        if (trimmed.StartsWith('[') && trimmed.Contains("]::", StringComparison.Ordinal))
+            return true;
+
         return false;
     }
 

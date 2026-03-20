@@ -222,7 +222,10 @@ public class RushTranspiler
         foreach (var attr in node.Attributes)
         {
             var psType = attr.TypeName != null ? MapRushType(attr.TypeName) : "object";
-            sb.AppendLine($"  [{psType}]${CapitalizeProperty(attr.Name)}");
+            if (attr.DefaultValue != null)
+                sb.AppendLine($"  [{psType}]${CapitalizeProperty(attr.Name)} = {TranspileExpression(attr.DefaultValue)}");
+            else
+                sb.AppendLine($"  [{psType}]${CapitalizeProperty(attr.Name)}");
         }
 
         // Emit constructor (initialize → ClassName constructor)
@@ -592,7 +595,9 @@ public class RushTranspiler
         PropertyAccessNode p => TranspilePropertyAccess(p),
         SafeNavNode sn => TranspileSafeNav(sn),
         InterpolatedStringNode s => TranspileInterpolatedString(s),
-        RangeNode r => $"{TranspileExpression(r.Start)}..{TranspileExpression(r.End)}",
+        RangeNode r => r.Exclusive
+            ? $"{TranspileExpression(r.Start)}..({TranspileExpression(r.End)} - 1)"
+            : $"{TranspileExpression(r.Start)}..{TranspileExpression(r.End)}",
         SymbolNode sym => $"'{sym.Name[1..]}'", // :name → 'name'
         ArrayLiteralNode a => TranspileArrayLiteral(a),
         HashLiteralNode h => TranspileHashLiteral(h),
@@ -603,7 +608,11 @@ public class RushTranspiler
         LoopControlNode lc => TranspileLoopControl(lc),
         RegexLiteralNode rx => TranspileRegex(rx),
         SuperCallNode sc => TranspileSuperCall(sc),
+        StaticMemberNode sm => sm.Args != null
+            ? $"[{sm.TypeName}]::{sm.Member}({string.Join(", ", sm.Args.Select(TranspileExpression))})"
+            : $"[{sm.TypeName}]::{sm.Member}",
         ShellPassthroughNode s => TranspileShellPassthrough(s),
+        TernaryNode t => $"$(if ({TranspileExpression(t.Condition)}) {{ {TranspileExpression(t.ThenExpr)} }} else {{ {TranspileExpression(t.ElseExpr)} }})",
         _ => $"<# unsupported: {node.GetType().Name} #>"
     };
 
@@ -1261,7 +1270,7 @@ public class RushTranspiler
         if (HasSymbol("ls"))
             return cmd;
 
-        return $"{cmd} | ForEach-Object {{ [IO.Path]::GetRelativePath($PWD.Path, $_.FullName) }}";
+        return $"{cmd} | ForEach-Object {{ $_.Name }}";
     }
 
     private string TranspileTimeMethod(MethodCallNode node)
