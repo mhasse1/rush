@@ -322,7 +322,10 @@ for _run in [1]
   # ── 17. Environment Variables ────────────────────────────────────────
 
   home_dir = env.HOME
-  assert_true(home_dir.length > 0, "env.HOME is set")
+  if home_dir == nil or home_dir == ""
+    home_dir = env.USERPROFILE
+  end
+  assert_true(home_dir.length > 0, "home dir env var is set")
 
   # ── 18. Each Iterator ─────────────────────────────────────────────────
 

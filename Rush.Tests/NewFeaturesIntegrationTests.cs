@@ -781,8 +781,11 @@ public class NewFeaturesIntegrationTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Dir_List_Symbol_Hidden()
     {
+        // Windows doesn't hide dot-prefix files — this test is Unix-specific
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tmpDir);
         try

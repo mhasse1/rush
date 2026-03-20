@@ -69,7 +69,9 @@ public class UserManualDocTests
     [Fact]
     public void BuiltinVar_EnvHome_DotAccess()
     {
-        var (stdout, _, exitCode) = TestHelper.RunRush("puts env.HOME");
+        // Windows uses USERPROFILE, not HOME
+        var envVar = OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME";
+        var (stdout, _, exitCode) = TestHelper.RunRush($"puts env.{envVar}");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout));
         // Should be a path — forward slash on Unix, backslash on Windows
