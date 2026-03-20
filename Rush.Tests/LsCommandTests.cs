@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Rush.Tests;
@@ -33,12 +34,14 @@ public class LsCommandTests
     // ── Basic ls ──────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_ListsFilesInDirectory()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)}");
             Assert.Equal(0, exitCode);
             // Should contain our test files (not hidden by default)
             Assert.Contains("alpha.txt", stdout);
@@ -52,12 +55,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_DashA_ShowsHiddenFiles()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"ls -a {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -a {TestHelper.RushPath(dir)}");
             Assert.Contains(".hidden", stdout);
             Assert.Contains("alpha.txt", stdout);
         }
@@ -65,12 +70,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_DashL_ShowsLongFormat()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"ls -l {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -l {TestHelper.RushPath(dir)}");
             // Long format should contain permission-like strings and file names
             Assert.Contains("alpha.txt", stdout);
             // Should have multiple columns — look for at least date-like content or size
@@ -83,12 +90,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_DashR_RecursiveListing()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"ls -R {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -R {TestHelper.RushPath(dir)}");
             // Should include files from subdirectory
             Assert.Contains("nested.txt", stdout);
             Assert.Contains("alpha.txt", stdout);
@@ -97,14 +106,16 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_OutputsOneEntryPerLine()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
             // rush -c uses Get-ChildItem (not FileListCommand), which
             // outputs one entry per line via OutputRenderer
-            var (stdout, _, _) = TestHelper.RunRush($"ls {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)}");
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             // 3 files + 1 dir = 4 entries (no hidden)
             Assert.Equal(4, lines.Length);
@@ -113,12 +124,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_CombinedFlags_DashLa()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"ls -la {dir}");
+            var (stdout, _, _) = TestHelper.RunRush($"ls -la {TestHelper.RushPath(dir)}");
             // Should show hidden files AND long format
             Assert.Contains(".hidden", stdout);
             // Long format lines should have permission-like patterns
@@ -132,12 +145,14 @@ public class LsCommandTests
     // ── ls Piping (uses Get-ChildItem) ────────────────────────────────────
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Grep_FiltersOutput()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | grep alpha");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | grep alpha");
             Assert.Equal(0, exitCode);
             Assert.Contains("alpha", stdout);
             Assert.DoesNotContain("bravo", stdout);
@@ -147,12 +162,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Sort_SortsOutput()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | sort");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | sort");
             Assert.Equal(0, exitCode);
             // Should contain all files
             Assert.Contains("alpha", stdout);
@@ -163,12 +180,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_SortReverse_ReversesSorting()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | sort -r");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | sort -r");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                 .Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
@@ -179,12 +198,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Count_ReturnsCount()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | count");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | count");
             Assert.Equal(0, exitCode);
             // 3 files + 1 dir = 4 (no hidden)
             Assert.Equal("4", stdout);
@@ -193,12 +214,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Head_LimitsOutput()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | head -2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | head -2");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
@@ -207,14 +230,16 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_WcL_CountsLines()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
             // wc -l maps to Measure-Object -Line which produces table output
             // Extract the numeric count from the formatted output
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | wc -l");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | wc -l");
             Assert.Equal(0, exitCode);
             // Parse the count from the table — look for first line that's purely numeric
             var countStr = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries)
@@ -227,12 +252,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_First_ReturnsFirstItem()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | first");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | first");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Single(lines);
@@ -241,12 +268,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Last_ReturnsLastItem()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | last");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | last");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Single(lines);
@@ -255,13 +284,15 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Uniq_RemovesDuplicates()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
             // ls | uniq shouldn't change count since filenames are already unique
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | uniq");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | uniq");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(4, lines.Length);
@@ -270,12 +301,14 @@ public class LsCommandTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Pipe_Skip_SkipsEntries()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir} | skip 2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | skip 2");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
@@ -286,13 +319,15 @@ public class LsCommandTests
     // ── ls with Redirects ─────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_Redirect_WritesToFile()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = CreateTestDir();
         var outFile = Path.GetTempFileName();
         try
         {
-            TestHelper.RunRush($"ls {dir} > {outFile}");
+            TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} > {TestHelper.RushPath(outFile)}");
             var content = File.ReadAllText(outFile);
             Assert.Contains("alpha.txt", content);
             Assert.Contains("bravo.txt", content);
@@ -307,20 +342,24 @@ public class LsCommandTests
     // ── Edge Cases ────────────────────────────────────────────────────────
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_NonexistentDir_ReturnsError()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (_, stderr, exitCode) = TestHelper.RunRush("ls /nonexistent_path_12345");
         Assert.NotEqual(0, exitCode);
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Ls_EmptyDir_ProducesNoFileOutput()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var dir = Path.Combine(Path.GetTempPath(), $"rush_ls_empty_{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         try
         {
-            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {dir}");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)}");
             // Empty directory should produce no file listing
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Empty(lines);

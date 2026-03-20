@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Rush.Tests;
@@ -15,24 +16,30 @@ public class BashToRushDocTests
     // Native commands
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_Ls()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("ls /tmp");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout));
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_LsLa()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("ls -la /tmp");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout));
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_Grep()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_grep_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
@@ -45,8 +52,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_Find()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_find_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tmpDir);
         try
@@ -62,8 +71,10 @@ public class BashToRushDocTests
     // Pipes
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_Pipe()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("echo \"hello world\" | tr a-z A-Z");
         Assert.Equal(0, exitCode);
         Assert.Equal("HELLO WORLD", stdout);
@@ -80,22 +91,28 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_OrOr()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, _) = TestHelper.RunRush("false || echo fallback");
         Assert.Equal("fallback", stdout);
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_MixedChain()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, _) = TestHelper.RunRush("true && echo ok || echo fail");
         Assert.Equal("ok", stdout);
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_AndAndShortCircuit()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // false && echo should NOT print
         var (stdout, _, _) = TestHelper.RunRush("false && echo nope");
         Assert.DoesNotContain("nope", stdout);
@@ -178,8 +195,10 @@ public class BashToRushDocTests
     // Dir stack (pushd/popd)
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void WhatStays_PushdPopd()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (_, _, exitCode) = TestHelper.RunRush("pushd /tmp && popd");
         Assert.Equal(0, exitCode);
     }
@@ -216,7 +235,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "data");
-            var (stdout, _, _) = TestHelper.RunRush($"if File.exist?(\"{tmpFile}\")\n  puts \"found\"\nend");
+            var (stdout, _, _) = TestHelper.RunRush($"if File.exist?(\"{TestHelper.RushPath(tmpFile)}\")\n  puts \"found\"\nend");
             Assert.Equal("found", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -240,7 +259,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
+            var (stdout, _, _) = TestHelper.RunRush($"for f in Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\n  puts f\nend");
             Assert.Contains("a.txt", stdout);
             Assert.Contains("b.txt", stdout);
         }
@@ -268,8 +287,10 @@ public class BashToRushDocTests
     // Count
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Count()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\n\" | count");
         Assert.Equal(0, exitCode);
         Assert.Equal("3", stdout);
@@ -278,8 +299,10 @@ public class BashToRushDocTests
     // First / Last / Skip
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_First()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | first 2");
         Assert.Equal(0, exitCode);
         Assert.Contains("a", stdout);
@@ -288,8 +311,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Last()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | last 2");
         Assert.Equal(0, exitCode);
         Assert.Contains("d", stdout);
@@ -298,8 +323,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Skip()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\n\" | skip 2");
         Assert.Equal(0, exitCode);
         Assert.Contains("c", stdout);
@@ -308,8 +335,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_SkipThenFirst()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Doc example: ls | skip 2 | first 3
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\nd\\ne\\n\" | skip 2 | first 2");
         Assert.Equal(0, exitCode);
@@ -322,8 +351,10 @@ public class BashToRushDocTests
     // Sort
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Sort()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"c\\na\\nb\\n\" | sort");
         Assert.Equal(0, exitCode);
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -333,8 +364,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_SortReverse()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\nc\\n\" | sort -r");
         Assert.Equal(0, exitCode);
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -346,8 +379,10 @@ public class BashToRushDocTests
     // Distinct
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Distinct()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("printf \"a\\nb\\na\\nc\\nb\\n\" | distinct");
         Assert.Equal(0, exitCode);
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -363,7 +398,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where v > 10 | .n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | where v > 10 | .n");
             Assert.Equal(0, exitCode);
             Assert.Equal("b", stdout);
         }
@@ -377,7 +412,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where v < 10 | .n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | where v < 10 | .n");
             Assert.Equal(0, exitCode);
             Assert.Equal("a", stdout);
         }
@@ -391,7 +426,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":5},{\"n\":\"b\",\"v\":15}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | where n == b | .v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | where n == b | .v");
             Assert.Equal(0, exitCode);
             Assert.Equal("15", stdout);
         }
@@ -407,7 +442,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "{\"name\":\"a\",\"val\":5}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | select name | as json");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | select name | as json");
             Assert.Equal(0, exitCode);
             Assert.Contains("name", stdout);
             Assert.DoesNotContain("val", stdout);
@@ -424,7 +459,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "{\"name\":\"hello\"}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | .name");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | .name");
             Assert.Equal(0, exitCode);
             Assert.Equal("hello", stdout);
         }
@@ -440,7 +475,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | sum v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | sum v");
             Assert.Equal(0, exitCode);
             Assert.Equal("60", stdout);
         }
@@ -454,7 +489,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | avg v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | avg v");
             Assert.Equal(0, exitCode);
             Assert.Equal("20", stdout);
         }
@@ -468,7 +503,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | min v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | min v");
             Assert.Equal(0, exitCode);
             Assert.Equal("10", stdout);
         }
@@ -482,7 +517,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | max v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | max v");
             Assert.Equal(0, exitCode);
             Assert.Equal("30", stdout);
         }
@@ -498,7 +533,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "{\"a\":1}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | as json");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | as json");
             Assert.Equal(0, exitCode);
             Assert.Contains("\"a\"", stdout);
             Assert.Contains("1", stdout);
@@ -513,7 +548,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "{\"a\":1,\"b\":2}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | as csv");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | as csv");
             Assert.Equal(0, exitCode);
             // CSV should have header row with column names
             Assert.Contains("a", stdout);
@@ -531,7 +566,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "{\"x\":42}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | .x");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | .x");
             Assert.Equal(0, exitCode);
             Assert.Equal("42", stdout);
         }
@@ -545,7 +580,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpCsv, "name,val\na,1\nb,2\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpCsv}\" | from csv | .name");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpCsv)}\" | from csv | .name");
             Assert.Equal(0, exitCode);
             Assert.Contains("a", stdout);
             Assert.Contains("b", stdout);
@@ -556,8 +591,10 @@ public class BashToRushDocTests
     // Tee
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Pipeline_Tee()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_tee_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
@@ -582,7 +619,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"n\":\"c\",\"v\":3},{\"n\":\"a\",\"v\":1},{\"n\":\"b\",\"v\":2}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | sort n | .n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | sort n | .n");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal("a", lines[0]);
@@ -601,7 +638,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpJson, "[{\"n\":\"a\",\"v\":1},{\"n\":\"b\",\"v\":2},{\"n\":\"a\",\"v\":3}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpJson}\" | from json | distinct n | .n");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpJson)}\" | from json | distinct n | .n");
             Assert.Equal(0, exitCode);
             var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.Equal(2, lines.Length);
@@ -624,8 +661,10 @@ public class BashToRushDocTests
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Objectify_PsEf_WhereSelect()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // ps -ef | objectify | where CMD =~ rush | select PID, CMD
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | select PID, CMD | first 2");
         Assert.Equal(0, exitCode);
@@ -634,8 +673,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Objectify_WhereRegex()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // objectify + where with =~ regex match
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | where CMD =~ launchd | first 1 | .CMD");
         Assert.Equal(0, exitCode);
@@ -643,8 +684,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Objectify_Count()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // objectify + count
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | objectify | count");
         Assert.Equal(0, exitCode);
@@ -655,8 +698,10 @@ public class BashToRushDocTests
     // ── Auto-objectify (ps is in ObjectifyConfig defaults) ──────────
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void AutoObjectify_Ps_Where()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // ps is a known command — auto-objectify injects objectify when piped
         // No explicit "| objectify |" needed
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | where CMD =~ launchd | first 1 | .CMD");
@@ -665,8 +710,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void AutoObjectify_Ps_SelectCount()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // ps with auto-objectify: select + count
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef | select PID, CMD | count");
         Assert.Equal(0, exitCode);
@@ -675,8 +722,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void AutoObjectify_Ps_StandaloneNoInject()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // ps alone (no pipe) should NOT inject objectify — just runs natively
         var (stdout, _, exitCode) = TestHelper.RunRush("ps -ef");
         Assert.Equal(0, exitCode);
@@ -757,7 +806,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "test data");
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.read(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.read(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Contains("test data", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -769,7 +818,7 @@ public class BashToRushDocTests
         var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_write_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            TestHelper.RunRush($"File.write(\"{tmpFile}\", \"hello\")");
+            TestHelper.RunRush($"File.write(\"{TestHelper.RushPath(tmpFile)}\", \"hello\")");
             Assert.True(File.Exists(tmpFile));
             Assert.Contains("hello", File.ReadAllText(tmpFile));
         }
@@ -783,7 +832,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "hello");
-            TestHelper.RunRush($"File.append(\"{tmpFile}\", \"world\")");
+            TestHelper.RunRush($"File.append(\"{TestHelper.RushPath(tmpFile)}\", \"world\")");
             var content = File.ReadAllText(tmpFile);
             Assert.Contains("hello", content);
             Assert.Contains("world", content);
@@ -798,7 +847,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "data");
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Equal("True", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -807,7 +856,8 @@ public class BashToRushDocTests
     [Fact]
     public void FileStdlib_ExistFalse()
     {
-        var (stdout, _, _) = TestHelper.RunRush("puts File.exist?(\"/tmp/rush_nonexistent_file_12345\")");
+        var nonexistent = TestHelper.RushPath(Path.Combine(Path.GetTempPath(), "rush_nonexistent_file_12345"));
+        var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{nonexistent}\")");
         Assert.Equal("False", stdout);
     }
 
@@ -818,7 +868,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "12345");
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Equal("5", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -831,7 +881,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "{\"key\":\"value\"}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.key");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{TestHelper.RushPath(tmpFile)}\")\nputs data.key");
             Assert.Equal(0, exitCode);
             Assert.Equal("value", stdout);
         }
@@ -847,7 +897,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\n  puts f\nend");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
             Assert.Contains("b.txt", stdout);
@@ -864,7 +914,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "sub", "b.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"puts Dir.list(\"{tmpDir}\", recursive: true)");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts Dir.list(\"{TestHelper.RushPath(tmpDir)}\", recursive: true)");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
             Assert.Contains("b.txt", stdout);
@@ -878,7 +928,7 @@ public class BashToRushDocTests
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_mkdir_" + Guid.NewGuid().ToString("N")[..8], "sub", "deep");
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{TestHelper.RushPath(tmpDir)}\")");
             Assert.Equal(0, exitCode);
             Assert.True(Directory.Exists(tmpDir));
         }
@@ -940,7 +990,7 @@ public class BashToRushDocTests
         {
             File.WriteAllText(Path.Combine(tmpDir, "x.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "y.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\n  puts f\nend");
             Assert.Equal(0, exitCode);
             Assert.Contains("x.txt", stdout);
             Assert.Contains("y.txt", stdout);
@@ -992,8 +1042,10 @@ public class BashToRushDocTests
     // Many overlap with earlier sections — the point is the doc examples work.
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void SideBySide_FilterProcesses()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Doc: ps aux | where COMMAND =~ chrome (auto-objectify)
         // We use a term we know exists: rush itself
         var (stdout, _, exitCode) = TestHelper.RunRush("ps aux | where COMMAND =~ rush | count");
@@ -1003,8 +1055,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void SideBySide_CountFiles()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Doc: ls | count
         var (stdout, _, exitCode) = TestHelper.RunRush("ls /tmp | count");
         Assert.Equal(0, exitCode);
@@ -1013,8 +1067,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void SideBySide_First5()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Doc: | first 5
         var (stdout, _, exitCode) = TestHelper.RunRush("printf 'a\\nb\\nc\\nd\\ne\\nf\\ng\\n' | first 5");
         Assert.Equal(0, exitCode);
@@ -1025,8 +1081,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void SideBySide_Distinct()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Doc: | distinct
         var (stdout, _, exitCode) = TestHelper.RunRush("printf 'a\\nb\\na\\nc\\nb\\n' | distinct");
         Assert.Equal(0, exitCode);
@@ -1042,7 +1100,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "{\"name\":\"alice\"}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.read_json(\"{tmpFile}\").name");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.read_json(\"{TestHelper.RushPath(tmpFile)}\").name");
             Assert.Equal(0, exitCode);
             Assert.Equal("alice", stdout);
         }
@@ -1057,7 +1115,7 @@ public class BashToRushDocTests
         File.WriteAllText(tmpFile, "");
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Equal("True", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -1099,7 +1157,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(Path.Combine(tmpDir, "m.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{tmpDir}\")\n  puts f\nend");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"for f in Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\n  puts f\nend");
             Assert.Equal(0, exitCode);
             Assert.Contains("m.txt", stdout);
         }
@@ -1114,7 +1172,7 @@ public class BashToRushDocTests
         try
         {
             File.WriteAllText(tmpFile, "[{\"v\":10},{\"v\":20},{\"v\":30}]");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmpFile}\" | from json | sum v");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmpFile)}\" | from json | sum v");
             Assert.Equal(0, exitCode);
             Assert.Equal("60", stdout);
         }
@@ -1142,8 +1200,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Config_PathShow_IsReplOnly()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // "path" is a REPL-only builtin — not available via rush -c
         var (_, stderr, exitCode) = TestHelper.RunRush("path");
         Assert.Equal(1, exitCode);
@@ -1151,8 +1211,10 @@ public class BashToRushDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Config_PathCheck_IsReplOnly()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // "path check" is a REPL-only builtin — not available via rush -c
         var (_, stderr, exitCode) = TestHelper.RunRush("path check");
         Assert.Equal(1, exitCode);

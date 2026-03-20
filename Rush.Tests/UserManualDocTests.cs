@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Rush.Tests;
@@ -71,7 +72,8 @@ public class UserManualDocTests
         var (stdout, _, exitCode) = TestHelper.RunRush("puts env.HOME");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout));
-        Assert.Contains("/", stdout); // Should be a path
+        // Should be a path — forward slash on Unix, backslash on Windows
+        Assert.True(stdout.Contains("/") || stdout.Contains("\\"), $"Expected a path, got: {stdout}");
     }
 
     [Fact]
@@ -135,8 +137,10 @@ public class UserManualDocTests
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Shell_Pipeline_GrepHead()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // ls /var/log | grep ".log" | head 5
         var (stdout, _, exitCode) = TestHelper.RunRush("ls /var/log | grep \".log\" | head -5");
         // May or may not find .log files, but pipeline should work
@@ -149,7 +153,7 @@ public class UserManualDocTests
         var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"echo hello > \"{tmp}\"");
+            var (_, _, exitCode) = TestHelper.RunRush($"echo hello > \"{TestHelper.RushPath(tmp)}\"");
             Assert.Equal(0, exitCode);
             Assert.True(File.Exists(tmp));
             Assert.Contains("hello", File.ReadAllText(tmp));
@@ -164,7 +168,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "line1\n");
-            var (_, _, exitCode) = TestHelper.RunRush($"echo line2 >> \"{tmp}\"");
+            var (_, _, exitCode) = TestHelper.RunRush($"echo line2 >> \"{TestHelper.RushPath(tmp)}\"");
             Assert.Equal(0, exitCode);
             var content = File.ReadAllText(tmp);
             Assert.Contains("line1", content);
@@ -174,8 +178,10 @@ public class UserManualDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Shell_Redirect_InputRedirect()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
@@ -215,8 +221,10 @@ public class UserManualDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Shell_Globbing_Star()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Use a simple path without spaces so glob works without quoting
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_glob_" + Guid.NewGuid().ToString("N")[..8]);
         try
@@ -260,8 +268,10 @@ public class UserManualDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Shell_BacktickSubstitution_WithMethod()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("result = `uname -s`.strip\nputs result");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout));
@@ -1096,7 +1106,7 @@ public class UserManualDocTests
         var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"File.write(\"{tmp}\", \"hello rush\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"File.write(\"{TestHelper.RushPath(tmp)}\", \"hello rush\")");
             Assert.Equal(0, exitCode);
             Assert.True(File.Exists(tmp));
             Assert.Contains("hello rush", File.ReadAllText(tmp));
@@ -1111,7 +1121,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "test content");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.read(\"{tmp}\")");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.read(\"{TestHelper.RushPath(tmp)}\")");
             Assert.Equal(0, exitCode);
             Assert.Contains("test content", stdout);
         }
@@ -1125,7 +1135,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "line1\nline2\nline3\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"lines = File.read_lines(\"{tmp}\")\nputs lines.count");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"lines = File.read_lines(\"{TestHelper.RushPath(tmp)}\")\nputs lines.count");
             Assert.Equal(0, exitCode);
             Assert.Contains("3", stdout);
         }
@@ -1139,7 +1149,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "x");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.exist?(\"{tmp}\")");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.exist?(\"{TestHelper.RushPath(tmp)}\")");
             Assert.Equal(0, exitCode);
             Assert.Contains("True", stdout);
         }
@@ -1149,7 +1159,8 @@ public class UserManualDocTests
     [Fact]
     public void Stdlib_FileExist_False()
     {
-        var (stdout, _, exitCode) = TestHelper.RunRush("puts File.exist?(\"/tmp/nonexistent_rush_test_file\")");
+        var nonexistent = TestHelper.RushPath(Path.Combine(Path.GetTempPath(), "nonexistent_rush_test_file"));
+        var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.exist?(\"{nonexistent}\")");
         Assert.Equal(0, exitCode);
         Assert.Contains("False", stdout);
     }
@@ -1161,7 +1172,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "first\n");
-            var (_, _, exitCode) = TestHelper.RunRush($"File.append(\"{tmp}\", \"second\\n\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"File.append(\"{TestHelper.RushPath(tmp)}\", \"second\\n\")");
             Assert.Equal(0, exitCode);
             var content = File.ReadAllText(tmp);
             Assert.Contains("first", content);
@@ -1175,7 +1186,7 @@ public class UserManualDocTests
     {
         var tmp = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         File.WriteAllText(tmp, "delete me");
-        var (_, _, exitCode) = TestHelper.RunRush($"File.delete(\"{tmp}\")");
+        var (_, _, exitCode) = TestHelper.RunRush($"File.delete(\"{TestHelper.RushPath(tmp)}\")");
         Assert.Equal(0, exitCode);
         Assert.False(File.Exists(tmp));
     }
@@ -1187,7 +1198,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "12345");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.size(\"{tmp}\")");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"puts File.size(\"{TestHelper.RushPath(tmp)}\")");
             Assert.Equal(0, exitCode);
             Assert.Contains("5", stdout);
         }
@@ -1197,7 +1208,8 @@ public class UserManualDocTests
     [Fact]
     public void Stdlib_DirExist()
     {
-        var (stdout, _, exitCode) = TestHelper.RunRush("puts Dir.exist?(\"/tmp\")");
+        var tempDir = TestHelper.RushPath(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar));
+        var (stdout, _, exitCode) = TestHelper.RunRush($"puts Dir.exist?(\"{tempDir}\")");
         Assert.Equal(0, exitCode);
         Assert.Contains("True", stdout);
     }
@@ -1208,7 +1220,7 @@ public class UserManualDocTests
         var tmp = Path.Combine(Path.GetTempPath(), "rush_test_dir_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{tmp}\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{TestHelper.RushPath(tmp)}\")");
             Assert.Equal(0, exitCode);
             Assert.True(Directory.Exists(tmp));
         }
@@ -1267,12 +1279,15 @@ public class UserManualDocTests
         var (stdout, _, exitCode) = TestHelper.RunRush("pwd");
         Assert.Equal(0, exitCode);
         Assert.False(string.IsNullOrEmpty(stdout.Trim()));
-        Assert.Contains("/", stdout);
+        // Path separator: forward slash on Unix, backslash (or drive letter) on Windows
+        Assert.True(stdout.Contains("/") || stdout.Contains("\\"), $"Expected a path, got: {stdout}");
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Builtin_Which()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         var (stdout, _, exitCode) = TestHelper.RunRush("which ls");
         Assert.Equal(0, exitCode);
         Assert.Contains("/", stdout); // Should be a path
@@ -1305,10 +1320,11 @@ public class UserManualDocTests
     [Fact]
     public void Builtin_CdDotDot()
     {
-        var (stdout, _, exitCode) = TestHelper.RunRush("cd /tmp\ncd ..\npwd");
+        var tempDir = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+        var (stdout, _, exitCode) = TestHelper.RunRush($"cd \"{tempDir}\"\ncd ..\npwd");
         Assert.Equal(0, exitCode);
-        // Should be one level up from /tmp
-        Assert.Contains("/", stdout);
+        // Should be one level up from temp dir
+        Assert.True(stdout.Contains("/") || stdout.Contains("\\"), $"Expected a path, got: {stdout}");
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -1322,7 +1338,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "hello from cat\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmp}\"");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmp)}\"");
             Assert.Equal(0, exitCode);
             Assert.Contains("hello from cat", stdout);
         }
@@ -1336,7 +1352,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "line1\nline2\nline3\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat -n \"{tmp}\"");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat -n \"{TestHelper.RushPath(tmp)}\"");
             Assert.Equal(0, exitCode);
             Assert.Contains("1", stdout);
             Assert.Contains("line1", stdout);
@@ -1353,7 +1369,7 @@ public class UserManualDocTests
         {
             File.WriteAllText(tmp1, "file one\n");
             File.WriteAllText(tmp2, "file two\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmp1}\" \"{tmp2}\"");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmp1)}\" \"{TestHelper.RushPath(tmp2)}\"");
             Assert.Equal(0, exitCode);
             Assert.Contains("file one", stdout);
             Assert.Contains("file two", stdout);
@@ -1377,7 +1393,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "apple\nbanana\napricot\ncherry\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat {tmp} | where /^a/");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat {TestHelper.RushPath(tmp)} | where /^a/");
             Assert.Equal(0, exitCode);
             Assert.Contains("apple", stdout);
             Assert.Contains("apricot", stdout);
@@ -1396,7 +1412,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "1\n2\n3\n4\n5\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmp}\" | head 2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmp)}\" | head 2");
             Assert.Equal(0, exitCode);
             Assert.Contains("1", stdout);
             Assert.Contains("2", stdout);
@@ -1411,7 +1427,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "1\n2\n3\n4\n5\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{tmp}\" | tail 2");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"cat \"{TestHelper.RushPath(tmp)}\" | tail 2");
             Assert.Equal(0, exitCode);
             Assert.Contains("4", stdout);
             Assert.Contains("5", stdout);
@@ -1462,8 +1478,10 @@ public class UserManualDocTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void Tips_CdDash()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // cd - goes to previous directory
         var (_, _, exitCode) = TestHelper.RunRush("cd /tmp\ncd /var\ncd -");
         Assert.Equal(0, exitCode);
@@ -1492,7 +1510,7 @@ public class UserManualDocTests
         try
         {
             var (stdout, _, exitCode) = TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\"");
+                $"sql sqlite://{TestHelper.RushPath(dbPath)} \"SELECT 1 as num, 'hello' as msg\"");
             Assert.Equal(0, exitCode);
             Assert.Contains("num", stdout);
             Assert.Contains("hello", stdout);
@@ -1507,7 +1525,7 @@ public class UserManualDocTests
         try
         {
             var (stdout, _, exitCode) = TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\" --json");
+                $"sql sqlite://{TestHelper.RushPath(dbPath)} \"SELECT 1 as num, 'hello' as msg\" --json");
             Assert.Equal(0, exitCode);
             Assert.Contains("\"num\"", stdout);
             Assert.Contains("\"hello\"", stdout);
@@ -1523,7 +1541,7 @@ public class UserManualDocTests
         try
         {
             var (stdout, _, exitCode) = TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"SELECT 1 as num, 'hello' as msg\" --csv");
+                $"sql sqlite://{TestHelper.RushPath(dbPath)} \"SELECT 1 as num, 'hello' as msg\" --csv");
             Assert.Equal(0, exitCode);
             Assert.Contains("num,msg", stdout);
             Assert.Contains("1,hello", stdout);
@@ -1537,16 +1555,17 @@ public class UserManualDocTests
         var dbPath = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8] + ".db");
         try
         {
+            var rushDbPath = TestHelper.RushPath(dbPath);
             // Create table and insert data
             TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"CREATE TABLE users(id INTEGER, name TEXT)\"");
+                $"sql sqlite://{rushDbPath} \"CREATE TABLE users(id INTEGER, name TEXT)\"");
             TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"INSERT INTO users VALUES(1, 'alice')\"");
+                $"sql sqlite://{rushDbPath} \"INSERT INTO users VALUES(1, 'alice')\"");
             TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"INSERT INTO users VALUES(2, 'bob')\"");
+                $"sql sqlite://{rushDbPath} \"INSERT INTO users VALUES(2, 'bob')\"");
             // Query
             var (stdout, _, exitCode) = TestHelper.RunRush(
-                $"sql sqlite://{dbPath} \"SELECT * FROM users ORDER BY id\"");
+                $"sql sqlite://{rushDbPath} \"SELECT * FROM users ORDER BY id\"");
             Assert.Equal(0, exitCode);
             Assert.Contains("alice", stdout);
             Assert.Contains("bob", stdout);
@@ -1629,7 +1648,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "{\"name\": \"rush\", \"version\": \"0.3\"}");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{tmp}\")\nputs data.name");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_json(\"{TestHelper.RushPath(tmp)}\")\nputs data.name");
             Assert.Equal(0, exitCode);
             Assert.Contains("rush", stdout);
         }
@@ -1643,7 +1662,7 @@ public class UserManualDocTests
         try
         {
             File.WriteAllText(tmp, "name,age\nalice,30\nbob,25\n");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_csv(\"{tmp}\")\nputs data.count");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"data = File.read_csv(\"{TestHelper.RushPath(tmp)}\")\nputs data.count");
             Assert.Equal(0, exitCode);
             Assert.Contains("2", stdout);
         }
@@ -1659,7 +1678,7 @@ public class UserManualDocTests
             Directory.CreateDirectory(tmpDir);
             File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\")\nputs files.count");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"files = Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\nputs files.count");
             Assert.Equal(0, exitCode);
             Assert.Contains("2", stdout);
         }

@@ -323,7 +323,6 @@ for _run in [1]
 
   home_dir = env.HOME
   assert_true(home_dir.length > 0, "env.HOME is set")
-  assert_true(home_dir.start_with?("/"), "env.HOME starts with /")
 
   # ── 18. Each Iterator ─────────────────────────────────────────────────
 

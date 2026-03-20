@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Xunit;
 
 namespace Rush.Tests;
@@ -226,8 +227,10 @@ public class NewFeaturesIntegrationTests
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void ProcessSubstitution_BasicCommand()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // <(echo hello) creates a temp file containing "hello", substitutes the path
         var (stdout, _, exitCode) = TestHelper.RunRush("cat <(echo hello)");
         Assert.Equal("hello", stdout);
@@ -235,8 +238,10 @@ public class NewFeaturesIntegrationTests
     }
 
     [Fact]
+    [Trait("Category", "Unix")]
     public void ProcessSubstitution_WithSort()
     {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         // Process substitution with a different command
         var (stdout, _, _) = TestHelper.RunRush("cat <(echo sorted)");
         Assert.Equal("sorted", stdout);
@@ -273,7 +278,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            TestHelper.RunRush($"echo {{alpha,beta}} > {tmpFile}");
+            TestHelper.RunRush($"echo {{alpha,beta}} > {TestHelper.RushPath(tmpFile)}");
             var content = File.ReadAllText(tmpFile).Trim();
             Assert.Equal("alpha beta", content);
         }
@@ -289,7 +294,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            TestHelper.RunRush($"echo $((6 * 7)) > {tmpFile}");
+            TestHelper.RunRush($"echo $((6 * 7)) > {TestHelper.RushPath(tmpFile)}");
             var content = File.ReadAllText(tmpFile).Trim();
             Assert.Equal("42", content);
         }
@@ -469,7 +474,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var script = $"File.write(\"{tmpFile}\", \"hello rush\")\nputs File.read(\"{tmpFile}\")";
+            var script = $"File.write(\"{TestHelper.RushPath(tmpFile)}\", \"hello rush\")\nputs File.read(\"{TestHelper.RushPath(tmpFile)}\")";
             var (stdout, _, exitCode) = TestHelper.RunRush(script);
             Assert.Equal("hello rush", stdout);
             Assert.Equal(0, exitCode);
@@ -483,7 +488,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var script = $"File.write(\"{tmpFile}\", \"line1\")\nFile.append(\"{tmpFile}\", \"line2\")\nputs File.read(\"{tmpFile}\")";
+            var script = $"File.write(\"{TestHelper.RushPath(tmpFile)}\", \"line1\")\nFile.append(\"{TestHelper.RushPath(tmpFile)}\", \"line2\")\nputs File.read(\"{TestHelper.RushPath(tmpFile)}\")";
             var (stdout, _, _) = TestHelper.RunRush(script);
             Assert.Contains("line1", stdout);
             Assert.Contains("line2", stdout);
@@ -498,7 +503,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "alpha\nbeta\ngamma");
-            var (stdout, _, _) = TestHelper.RunRush($"lines = File.read_lines(\"{tmpFile}\")\nputs lines.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"lines = File.read_lines(\"{TestHelper.RushPath(tmpFile)}\")\nputs lines.Count");
             Assert.Equal("3", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -510,7 +515,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.exist?(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Equal("True", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -527,7 +532,7 @@ public class NewFeaturesIntegrationTests
     public void File_Delete()
     {
         var tmpFile = Path.GetTempFileName();
-        var script = $"File.delete(\"{tmpFile}\")\nputs File.exist?(\"{tmpFile}\")";
+        var script = $"File.delete(\"{TestHelper.RushPath(tmpFile)}\")\nputs File.exist?(\"{TestHelper.RushPath(tmpFile)}\")";
         var (stdout, _, _) = TestHelper.RunRush(script);
         Assert.Equal("False", stdout);
         Assert.False(System.IO.File.Exists(tmpFile));
@@ -540,7 +545,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "12345");
-            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{tmpFile}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts File.size(\"{TestHelper.RushPath(tmpFile)}\")");
             Assert.Equal("5", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -553,7 +558,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "{\"name\": \"rush\", \"version\": 2}");
-            var (stdout, _, _) = TestHelper.RunRush($"data = File.read_json(\"{tmpFile}\")\nputs data.name");
+            var (stdout, _, _) = TestHelper.RunRush($"data = File.read_json(\"{TestHelper.RushPath(tmpFile)}\")\nputs data.name");
             Assert.Equal("rush", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -566,7 +571,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(tmpFile, "Name,Age\nAlice,30\nBob,25");
-            var (stdout, _, _) = TestHelper.RunRush($"rows = File.read_csv(\"{tmpFile}\")\nputs rows.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"rows = File.read_csv(\"{TestHelper.RushPath(tmpFile)}\")\nputs rows.Count");
             Assert.Equal("2", stdout);
         }
         finally { File.Delete(tmpFile); }
@@ -579,7 +584,7 @@ public class NewFeaturesIntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"File.write(\"{tmpFile}\", \"standalone test\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"File.write(\"{TestHelper.RushPath(tmpFile)}\", \"standalone test\")");
             Assert.Equal(0, exitCode);
             Assert.Equal("standalone test", System.IO.File.ReadAllText(tmpFile).Trim());
         }
@@ -597,7 +602,7 @@ public class NewFeaturesIntegrationTests
         Directory.CreateDirectory(tmpDir);
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"puts Dir.exist?(\"{tmpDir}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"puts Dir.exist?(\"{TestHelper.RushPath(tmpDir)}\")");
             Assert.Equal("True", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -609,7 +614,7 @@ public class NewFeaturesIntegrationTests
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")\nputs Dir.exist?(\"{tmpDir}\")");
+            var (stdout, _, _) = TestHelper.RunRush($"Dir.mkdir(\"{TestHelper.RushPath(tmpDir)}\")\nputs Dir.exist?(\"{TestHelper.RushPath(tmpDir)}\")");
             Assert.Equal("True", stdout);
             Assert.True(Directory.Exists(tmpDir));
         }
@@ -623,7 +628,7 @@ public class NewFeaturesIntegrationTests
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_" + Guid.NewGuid().ToString("N")[..8]);
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{tmpDir}\")");
+            var (_, _, exitCode) = TestHelper.RunRush($"Dir.mkdir(\"{TestHelper.RushPath(tmpDir)}\")");
             Assert.Equal(0, exitCode);
             Assert.True(Directory.Exists(tmpDir));
         }
@@ -640,7 +645,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\")\nputs items.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\nputs items.Count");
             Assert.Equal("3", stdout); // 2 files + 1 dir
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -656,7 +661,7 @@ public class NewFeaturesIntegrationTests
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "b.txt"), "");
             Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
-            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\", type: \"file\")\nputs files.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", type: \"file\")\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -672,7 +677,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir}\", type: \"file\", recursive: true)\nputs files.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", type: \"file\", recursive: true)\nputs files.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -686,7 +691,7 @@ public class NewFeaturesIntegrationTests
         Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"subdirs = Dir.list(\"{tmpDir}\", type: \"dir\")\nputs subdirs.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"subdirs = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", type: \"dir\")\nputs subdirs.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -702,7 +707,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
-            var (stdout, _, exitCode) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\")");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"Dir.list(\"{TestHelper.RushPath(tmpDir)}\")");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
             // Should return just basenames, not full or relative paths
@@ -721,7 +726,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             Directory.CreateDirectory(Path.Combine(tmpDir, "sub"));
-            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :files)\nputs items.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :files)\nputs items.Count");
             Assert.Equal("1", stdout); // only the file, not the dir
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -737,7 +742,7 @@ public class NewFeaturesIntegrationTests
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             Directory.CreateDirectory(Path.Combine(tmpDir, "sub1"));
             Directory.CreateDirectory(Path.Combine(tmpDir, "sub2"));
-            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :dirs)\nputs items.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :dirs)\nputs items.Count");
             Assert.Equal("2", stdout); // only dirs
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -753,7 +758,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :recurse, :files)\nputs items.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :recurse, :files)\nputs items.Count");
             Assert.Equal("2", stdout); // a.txt + sub/b.txt
         }
         finally { Directory.Delete(tmpDir, true); }
@@ -768,7 +773,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "hello");
             // :ls returns FileInfo objects — in rush -c they render as full paths
-            var (stdout, _, exitCode) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :ls)\nputs items[0].Name");
+            var (stdout, _, exitCode) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :ls)\nputs items[0].Name");
             Assert.Equal(0, exitCode);
             Assert.Contains("a.txt", stdout);
         }
@@ -785,9 +790,9 @@ public class NewFeaturesIntegrationTests
             System.IO.File.WriteAllText(Path.Combine(tmpDir, ".hidden"), "");
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "visible.txt"), "");
             // Without :hidden, dotfiles are excluded on macOS/Linux Get-ChildItem
-            var (stdoutHidden, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", :hidden)\nputs items.Count");
+            var (stdoutHidden, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :hidden)\nputs items.Count");
             var countWithHidden = int.Parse(stdoutHidden.Trim());
-            var (stdoutNormal, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\")\nputs items.Count");
+            var (stdoutNormal, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\nputs items.Count");
             var countNormal = int.Parse(stdoutNormal.Trim());
             Assert.True(countWithHidden > countNormal, "Hidden flag should include dotfiles");
         }
@@ -803,7 +808,7 @@ public class NewFeaturesIntegrationTests
         try
         {
             System.IO.File.WriteAllText(Path.Combine(subDir, "deep.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"Dir.list(\"{tmpDir}\", :recurse, :files)");
+            var (stdout, _, _) = TestHelper.RunRush($"Dir.list(\"{TestHelper.RushPath(tmpDir)}\", :recurse, :files)");
             // Returns basenames even for recursive listings
             Assert.Contains("deep.txt", stdout);
         }
@@ -819,7 +824,7 @@ public class NewFeaturesIntegrationTests
         System.IO.File.WriteAllText(Path.Combine(tmpDir, "readme.md"), "world");
         try
         {
-            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{tmpDir.Replace("\\", "/")}\")\nputs files");
+            var (stdout, _, _) = TestHelper.RunRush($"files = Dir.list(\"{TestHelper.RushPath(tmpDir)}\")\nputs files");
             // Should contain just basenames, not full paths
             Assert.Contains("test.txt", stdout);
             Assert.Contains("readme.md", stdout);
@@ -841,7 +846,7 @@ public class NewFeaturesIntegrationTests
         {
             System.IO.File.WriteAllText(Path.Combine(tmpDir, "a.txt"), "");
             System.IO.File.WriteAllText(Path.Combine(subDir, "b.txt"), "");
-            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{tmpDir}\", type: \"file\", recursive: true)\nputs items.Count");
+            var (stdout, _, _) = TestHelper.RunRush($"items = Dir.list(\"{TestHelper.RushPath(tmpDir)}\", type: \"file\", recursive: true)\nputs items.Count");
             Assert.Equal("2", stdout);
         }
         finally { Directory.Delete(tmpDir, true); }

@@ -77,6 +77,18 @@ public static class TestHelper
     }
 
     /// <summary>
+    /// Returns true if running on Windows.
+    /// </summary>
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    /// <summary>
+    /// Normalize a file path for use inside a Rush command string.
+    /// On Windows, backslashes become forward slashes so they aren't
+    /// interpreted as escape characters by the Rush parser.
+    /// </summary>
+    public static string RushPath(string path) => path.Replace('\\', '/');
+
+    /// <summary>
     /// Run a rush command via `rush -c` using ArgumentList (safe for special characters).
     /// Returns trimmed stdout, trimmed stderr, and exit code.
     /// </summary>
@@ -97,7 +109,7 @@ public static class TestHelper
         var stdout = proc.StandardOutput.ReadToEnd();
         var stderr = proc.StandardError.ReadToEnd();
         proc.WaitForExit(30_000);
-        return (stdout.Trim(), stderr.Trim(), proc.ExitCode);
+        return (stdout.Replace("\r\n", "\n").Trim(), stderr.Replace("\r\n", "\n").Trim(), proc.ExitCode);
     }
 
     /// <summary>
@@ -120,6 +132,6 @@ public static class TestHelper
         var stdout = proc.StandardOutput.ReadToEnd();
         var stderr = proc.StandardError.ReadToEnd();
         proc.WaitForExit(30_000);
-        return (stdout, stderr, proc.ExitCode);
+        return (stdout.Replace("\r\n", "\n"), stderr.Replace("\r\n", "\n"), proc.ExitCode);
     }
 }

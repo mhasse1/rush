@@ -72,7 +72,7 @@ public class IntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            var (_, _, exitCode) = TestHelper.RunRush($"echo redirect test > {tmpFile}");
+            var (_, _, exitCode) = TestHelper.RunRush($"echo redirect test > {TestHelper.RushPath(tmpFile)}");
             Assert.Equal(0, exitCode);
             var content = File.ReadAllText(tmpFile).Trim();
             Assert.Equal("redirect test", content);
@@ -89,8 +89,8 @@ public class IntegrationTests
         var tmpFile = Path.GetTempFileName();
         try
         {
-            TestHelper.RunRush($"echo line1 > {tmpFile}");
-            TestHelper.RunRush($"echo line2 >> {tmpFile}");
+            TestHelper.RunRush($"echo line1 > {TestHelper.RushPath(tmpFile)}");
+            TestHelper.RunRush($"echo line2 >> {TestHelper.RushPath(tmpFile)}");
             var lines = File.ReadAllLines(tmpFile).Select(l => l.Trim()).Where(l => l.Length > 0).ToArray();
             Assert.Equal(2, lines.Length);
             Assert.Equal("line1", lines[0]);
