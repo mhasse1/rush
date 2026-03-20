@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - rid: osx-arm64
+            os: macos-latest
+            artifact: rush
+          - rid: linux-x64
+            os: ubuntu-latest
+            artifact: rush
+          - rid: linux-arm64
+            os: ubuntu-latest
+            artifact: rush
+          - rid: win-x64
+            os: windows-latest
+            artifact: rush.exe
+          - rid: win-arm64
+            os: windows-latest
+            artifact: rush.exe
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.x
+
+      - name: Publish
+        run: dotnet publish -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          src="bin/Release/net8.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}"
+          if [[ "${{ matrix.artifact }}" == "rush.exe" ]]; then
+            cp "$src" "rush-${{ matrix.rid }}.exe"
+          else
+            cp "$src" "rush-${{ matrix.rid }}"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rush-${{ matrix.rid }}
+          path: rush-${{ matrix.rid }}*
+
+  create-release:
+    needs: build-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "Rush ${{ github.ref_name }}" \
+            --generate-notes \
+            artifacts/*

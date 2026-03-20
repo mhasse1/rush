@@ -131,4 +131,4 @@ Key components:
 
 ## License
 
-Proprietary. All rights reserved.
+Business Source License 1.1 (BSL). Free for non-commercial use. Commercial use requires a paid license. Each version converts to Apache 2.0 after four years. See [LICENSE](LICENSE) for details.

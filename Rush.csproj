@@ -16,7 +16,7 @@
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
-    <RushMajorMinor>1.2</RushMajorMinor>
+    <RushMajorMinor>0.9</RushMajorMinor>
     <!-- Prevent .NET from appending +commitsha to InformationalVersion -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
