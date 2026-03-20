@@ -1257,28 +1257,23 @@ public class LineEditor
             var query = new string(searchBuffer.ToArray());
             matchIndex = -1;
 
-            if (forward)
+            // Empty query — don't match anything
+            if (query.Length == 0)
             {
-                // Search from oldest to newest
-                for (int i = 0; i < _history.Count; i++)
-                {
-                    if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
-                    {
-                        matchIndex = i;
-                        break;
-                    }
-                }
+                _buffer.Clear();
+                _buffer.AddRange(savedBuffer);
+                _cursor = savedCursor;
+                return;
             }
-            else
+
+            // Both / and ? search newest→oldest (most recent match first)
+            // / and ? differ only in cycle direction (/ cycles forward, ? cycles backward)
+            for (int i = _history.Count - 1; i >= 0; i--)
             {
-                // Search from newest to oldest
-                for (int i = _history.Count - 1; i >= 0; i--)
+                if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
-                    {
-                        matchIndex = i;
-                        break;
-                    }
+                    matchIndex = i;
+                    break;
                 }
             }
 
@@ -1339,40 +1334,44 @@ public class LineEditor
                 return;
             }
 
-            // Cycle to next match with the same key that started the search
+            // Cycle to next match: / goes further back in history, ? goes forward
             if ((forward && key.KeyChar == '/') || (!forward && key.KeyChar == '?'))
             {
                 if (matchIndex >= 0)
                 {
                     var query = new string(searchBuffer.ToArray());
-                    if (forward)
+                    // Go to next older match
+                    for (int i = matchIndex - 1; i >= 0; i--)
                     {
-                        for (int i = matchIndex + 1; i < _history.Count; i++)
+                        if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
                         {
-                            if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
-                            {
-                                matchIndex = i;
-                                _buffer.Clear();
-                                _buffer.AddRange(_history[i]);
-                                _cursor = _buffer.Count;
-                                UpdateDisplay(_history[i]);
-                                break;
-                            }
+                            matchIndex = i;
+                            _buffer.Clear();
+                            _buffer.AddRange(_history[i]);
+                            _cursor = _buffer.Count;
+                            UpdateDisplay(_history[i]);
+                            break;
                         }
                     }
-                    else
+                }
+                continue;
+            }
+            // Reverse cycle: ? in / mode, / in ? mode — go to newer match
+            if ((forward && key.KeyChar == '?') || (!forward && key.KeyChar == '/'))
+            {
+                if (matchIndex >= 0 && matchIndex < _history.Count - 1)
+                {
+                    var query = new string(searchBuffer.ToArray());
+                    for (int i = matchIndex + 1; i < _history.Count; i++)
                     {
-                        for (int i = matchIndex - 1; i >= 0; i--)
+                        if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
                         {
-                            if (_history[i].Contains(query, StringComparison.OrdinalIgnoreCase))
-                            {
-                                matchIndex = i;
-                                _buffer.Clear();
-                                _buffer.AddRange(_history[i]);
-                                _cursor = _buffer.Count;
-                                UpdateDisplay(_history[i]);
-                                break;
-                            }
+                            matchIndex = i;
+                            _buffer.Clear();
+                            _buffer.AddRange(_history[i]);
+                            _cursor = _buffer.Count;
+                            UpdateDisplay(_history[i]);
+                            break;
                         }
                     }
                 }
