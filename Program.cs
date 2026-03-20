@@ -1291,6 +1291,8 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 else
                     Theme.ResetBackground();
                 // Check for .rushbg in current directory (overrides global config)
+                // Clear tracking so we re-read the file even if the path hasn't changed
+                Theme.ActiveRushBgFile = null;
                 ApplyDirBackground(Environment.CurrentDirectory);
                 Theme.Initialize(state.Config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
