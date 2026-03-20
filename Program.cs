@@ -1858,18 +1858,82 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
 
         // ── setbg: shorthand for `set bg` ────────────────────────
         // Supports: setbg "#hex", setbg --save "#hex", setbg reset
+        //           setbg --selector [--save|--local]
         if (segment.Equals("setbg", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("setbg ", StringComparison.OrdinalIgnoreCase))
         {
             var bgArgs = segment.Length > 5 ? segment[5..].Trim() : "";
             bool saveBg = false;
-            if (bgArgs.StartsWith("--save ", StringComparison.OrdinalIgnoreCase) ||
-                bgArgs.StartsWith("--save\t", StringComparison.OrdinalIgnoreCase))
+            bool localBg = false;
+            bool selectorMode = false;
+
+            // Parse flags in any order
+            var flagArgs = bgArgs;
+            while (true)
             {
-                saveBg = true;
-                bgArgs = bgArgs[6..].TrimStart();
+                if (flagArgs.StartsWith("--save", StringComparison.OrdinalIgnoreCase) &&
+                    (flagArgs.Length == 6 || flagArgs[6] == ' ' || flagArgs[6] == '\t'))
+                {
+                    saveBg = true;
+                    flagArgs = flagArgs.Length > 6 ? flagArgs[6..].TrimStart() : "";
+                }
+                else if (flagArgs.StartsWith("--local", StringComparison.OrdinalIgnoreCase) &&
+                    (flagArgs.Length == 7 || flagArgs[7] == ' ' || flagArgs[7] == '\t'))
+                {
+                    localBg = true;
+                    flagArgs = flagArgs.Length > 7 ? flagArgs[7..].TrimStart() : "";
+                }
+                else if (flagArgs.StartsWith("--selector", StringComparison.OrdinalIgnoreCase) &&
+                    (flagArgs.Length == 10 || flagArgs[10] == ' ' || flagArgs[10] == '\t'))
+                {
+                    selectorMode = true;
+                    flagArgs = flagArgs.Length > 10 ? flagArgs[10..].TrimStart() : "";
+                }
+                else break;
             }
-            var bgValue = string.IsNullOrEmpty(bgArgs) ? "reset" : bgArgs.Trim('"', '\'');
+
+            if (selectorMode)
+            {
+                var currentBg = Environment.GetEnvironmentVariable("RUSH_BG");
+                var selected = ColorPicker.Run(currentBg);
+                if (selected != null)
+                {
+                    if (localBg)
+                    {
+                        // Write to .rushbg in current directory
+                        var rushBgPath = Path.Combine(Environment.CurrentDirectory, ".rushbg");
+                        File.WriteAllText(rushBgPath, selected);
+                        Theme.ActiveRushBgFile = rushBgPath;
+                        Theme.SetBackground(selected);
+                        Console.ForegroundColor = Theme.Current.Muted;
+                        Console.WriteLine($"  bg = {selected} (saved to .rushbg)");
+                        Console.ResetColor();
+                    }
+                    else
+                    {
+                        state.Config.SetValue("bg", selected);
+                        ApplySettingToRuntime("bg", state);
+                        Theme.ActiveRushBgFile = null;
+                        if (saveBg)
+                        {
+                            state.Config.Save();
+                            Console.ForegroundColor = Theme.Current.Muted;
+                            Console.WriteLine($"  bg = {selected} (saved)");
+                            Console.ResetColor();
+                        }
+                    }
+                    lastSegmentFailed = false;
+                }
+                else
+                {
+                    // Cancelled — bg already restored by ColorPicker
+                    lastSegmentFailed = false;
+                }
+                lastExitCode = 0;
+                continue;
+            }
+
+            var bgValue = string.IsNullOrEmpty(flagArgs) ? "reset" : flagArgs.Trim('"', '\'');
             if (state.Config.SetValue("bg", bgValue))
             {
                 ApplySettingToRuntime("bg", state);

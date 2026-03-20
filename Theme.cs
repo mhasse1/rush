@@ -828,6 +828,36 @@ public class Theme
     }
 
     /// <summary>
+    /// Convert HSL to normalized RGB (0.0-1.0). Inverse of RgbToHsl.
+    /// Hue is 0-360°, Saturation and Lightness are 0.0-1.0.
+    /// </summary>
+    internal static (double r, double g, double b) HslToRgb(double h, double s, double l)
+    {
+        if (s == 0)
+            return (l, l, l); // achromatic
+
+        var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+        var p = 2 * l - q;
+        var hNorm = h / 360.0;
+
+        return (
+            HueToRgb(p, q, hNorm + 1.0 / 3),
+            HueToRgb(p, q, hNorm),
+            HueToRgb(p, q, hNorm - 1.0 / 3)
+        );
+    }
+
+    private static double HueToRgb(double p, double q, double t)
+    {
+        if (t < 0) t += 1;
+        if (t > 1) t -= 1;
+        if (t < 1.0 / 6) return p + (q - p) * 6 * t;
+        if (t < 1.0 / 2) return q;
+        if (t < 2.0 / 3) return p + (q - p) * (2.0 / 3 - t) * 6;
+        return p;
+    }
+
+    /// <summary>
     /// Circular hue distance (0-180°). Two hues within 30° are "similar".
     /// </summary>
     internal static double HueDistance(double h1, double h2)
