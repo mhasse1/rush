@@ -10,7 +10,7 @@ namespace Rush;
 public static class McpResources
 {
     public const string Instructions =
-        "Rush is a Unix-style shell with Ruby-like syntax built on .NET. " +
+        "Rush is a Unix-style shell with clean, intent-driven syntax built on .NET. " +
         "Supports variables (x = 42), string interpolation (\"hello #{name}\"), " +
         "arrays ([1,2,3]), hashes ({a: 1}), control flow (if/unless/while/for-in), " +
         "method chaining (\"hello\".upcase), and a File/Dir/Time stdlib. " +

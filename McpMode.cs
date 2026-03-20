@@ -141,7 +141,7 @@ public class McpMode
         {
             MakeTool(
                 "rush_execute",
-                "Execute a command in the persistent Rush shell session. Supports Rush syntax (Ruby-like), Unix shell commands, and PowerShell. Variables, cwd, and environment persist across calls.",
+                "Execute a command in the persistent Rush shell session. Supports Rush syntax, Unix shell commands, and PowerShell. Variables, cwd, and environment persist across calls.",
                 new JsonObject
                 {
                     ["type"] = "object",

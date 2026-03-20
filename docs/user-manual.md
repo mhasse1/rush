@@ -86,6 +86,22 @@ rush --version (-v)      Show version
 rush --help (-h)         Show help
 ```
 
+#### Multi-line `rush -c`
+
+`rush -c` supports multi-line scripts. All lines are checked for Rush syntax (not just the first line), and mixed Rush/shell lines work correctly — Rush lines are transpiled while shell lines pass through:
+
+```bash
+# Mixed Rush and shell in one invocation
+rush -c $'export FOO=bar\nputs env.FOO'
+
+# Multi-line Rush script
+rush -c $'name = "world"\nputs "hello #{name}"'
+```
+
+Use `$'...'` in your calling shell to interpret `\n` as newlines.
+
+**Escape sequences in strings:** Rush double-quoted strings support backslash escapes — `\n` (newline), `\t` (tab), `\e` (escape/ANSI), and `\a` (bell) are expanded at runtime.
+
 ---
 
 ## Configuration
@@ -330,6 +346,27 @@ This works for `if`, `unless`, `for`, `while`, `until`, `loop`, `def`, `begin`, 
 
 Rush highlights your input as you type: keywords, strings, numbers, operators, commands, and comments are each colored distinctly. The theme (`"auto"`, `"dark"`, `"light"` in config.json) controls the color palette.
 
+### Autosuggestions
+
+Rush provides fish-style autosuggestions based on your command history. As you type, a ghost-text suggestion appears in dim gray at the end of the current line. The suggestion auto-updates on every keystroke, showing the most recent matching history entry.
+
+Ghost text only appears when:
+- The cursor is at the end of the line
+- The input buffer is non-empty
+
+**Accepting suggestions:**
+
+| Key | Action |
+|-----|--------|
+| `Right Arrow` | Accept full suggestion |
+| `End` | Accept full suggestion |
+| `Ctrl+E` | Accept full suggestion |
+| `l` (vi normal, at EOL) | Accept full suggestion |
+| `$` (vi normal, at EOL) | Accept full suggestion |
+| `Alt+Right` | Accept next WORD (partial acceptance) |
+
+Partial acceptance with `Alt+Right` lets you incrementally accept a suggestion word by word, which is useful when the suggested command is close but not exactly what you need.
+
 ### Special Keys
 
 | Key | Action |
@@ -508,28 +545,42 @@ Property names in `where`, `select`, and `sort` are case-insensitive: `where PID
 
 ### Auto-Objectify
 
-Known commands auto-inject objectify when piped. You don't need to type `objectify` for commands Rush already knows about:
+Known commands automatically inject `objectify` when piped to pipeline operators (`where`, `select`, `sort`, `count`, `first`, `last`, `as json`, etc.). You don't need to type `objectify` for commands Rush already recognizes:
 
 ```rush
 # These just work — objectify is injected transparently
+ps aux | where CPU > 5 | sort CPU
+df -h | where Use% > "50%" | select Filesystem,Use%
 netstat | where State == "ESTABLISHED" | as json
 docker ps | where Status ~ "Up" | select Names
-lsof | where COMMAND == "nginx" | columns 1,2,9
+w | select USER,IDLE
+who | count
+last | where USER == "mark"
+kubectl get pods | where STATUS != "Running"
 
 # Standalone commands show raw text (no objectify injected)
 netstat
 docker ps
 ```
 
+Known commands include: `ps`, `df`, `w`, `who`, `last`, `netstat`, `ss`, `lsof`, `free`, `mount`, `docker ps`, `docker images`, `kubectl get`, and others.
+
+For commands Rush doesn't know about, use explicit `| objectify |` in the pipeline:
+
+```rush
+my-tool | objectify | where Status == "Active" | as json
+my-tool | objectify --fixed | select name,value
+```
+
 ### Config Hierarchy
 
 Auto-objectify hints come from three layers (later overrides earlier):
 
-1. **Built-in defaults** (ships with Rush): `netstat`, `ss`, `lsof`, `free`, `docker ps`, `docker images`, `kubectl get`, `mount`
+1. **Built-in defaults** (ships with Rush): `ps`, `df`, `w`, `who`, `last`, `netstat`, `ss`, `lsof`, `free`, `docker ps`, `docker images`, `kubectl get`, `mount`, etc.
 2. **System config**: `/etc/rush/objectify.rush`
 3. **User config**: `~/.config/rush/objectify.rush`
 
-Config file format (command and flags separated by 2+ spaces or tab):
+You can customize auto-objectify behavior for any command by editing `~/.config/rush/objectify.rush`. Config file format (command and flags separated by 2+ spaces or tab):
 
 ```
 # ~/.config/rush/objectify.rush
@@ -538,7 +589,7 @@ docker ps     --delim "\s{2,}"
 my-tool       --fixed 0,10,20
 ```
 
-Use `--save` to persist a custom hint:
+Use `--save` to persist a custom hint from the command line:
 
 ```rush
 my-tool | objectify --fixed --save
@@ -1369,13 +1420,39 @@ File.append("log.txt", "#{Time.now}: task complete\n")
 
 ### Dir
 
-```rush
-Dir.list(".")                          # All entries (files + dirs)
-Dir.list(".", type: "file")            # Files only
-Dir.list(".", type: "dir")             # Directories only
-Dir.list("src", recursive: true)       # All entries recursively
-Dir.list(".", type: "file", hidden: true) # Include hidden files
+`Dir.list` returns relative path strings by default (one per line). Use symbol flags to control output:
 
+```rush
+Dir.list(".")                    # relative paths, one per line
+Dir.list(".", :ls)               # verbose ls-style output (objects)
+Dir.list(".", :recurse, :files)  # recursive, files only
+Dir.list(".", :dirs)             # directories only
+Dir.list(".", :hidden)           # include dotfiles
+Dir.list(".", :recurse, :hidden, :files)  # combine flags
+```
+
+**Symbol flags:**
+
+| Flag | Description |
+|------|-------------|
+| `:recurse` | Recurse into subdirectories |
+| `:files` | Return only files |
+| `:dirs` | Return only directories |
+| `:hidden` | Include dotfiles/hidden entries |
+| `:ls` | Return objects with verbose ls-style display |
+
+The older named-argument syntax still works:
+
+```rush
+Dir.list(".", type: "file")            # same as :files
+Dir.list(".", type: "dir")             # same as :dirs
+Dir.list("src", recursive: true)       # same as :recurse
+Dir.list(".", type: "file", hidden: true) # same as :files, :hidden
+```
+
+Other Dir methods:
+
+```rush
 Dir.exist?("path")                     # Check if directory exists
 Dir.mkdir("path")                      # Create directory (+ parents)
 ```
@@ -1383,13 +1460,16 @@ Dir.mkdir("path")                      # Create directory (+ parents)
 **Examples:**
 
 ```rush
-# Find all log files
-logs = Dir.list("/var/log", type: "file", recursive: true)
-  .select { |f| f.Name =~ /\.log$/ }
+# Find all log files recursively
+logs = Dir.list("/var/log", :recurse, :files)
+  .select { |f| f =~ /\.log$/ }
 puts "Found #{logs.count} log files"
 
 # List project structure
-Dir.list(".", type: "dir").each { |d| puts d.Name }
+Dir.list(".", :dirs).each { |d| puts d }
+
+# Verbose listing with details
+Dir.list("src", :ls, :files)
 
 # Create output directory
 Dir.mkdir("output/reports") unless Dir.exist?("output/reports")

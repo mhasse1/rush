@@ -17,7 +17,7 @@ cd ~/projects                  $HOME, $PATH
 
 ## What's New
 
-### Ruby-Like Syntax
+### Clean, Intent-Driven Syntax
 
 | Bash | Rush |
 |------|------|

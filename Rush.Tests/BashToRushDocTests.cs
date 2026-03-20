@@ -185,32 +185,32 @@ public class BashToRushDocTests
     }
 
     // ══════════════════════════════════════════════════════════════════
-    // ── Section 2: Ruby-Like Syntax ──────────────────────────────────
+    // ── Section 2: Clean, Intent-Driven Syntax ───────────────────────
     // ══════════════════════════════════════════════════════════════════
 
     [Fact]
-    public void RubySyntax_VariableAssignment()
+    public void CleanSyntax_VariableAssignment()
     {
         var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs name");
         Assert.Equal("world", stdout);
     }
 
     [Fact]
-    public void RubySyntax_StringInterpolation()
+    public void CleanSyntax_StringInterpolation()
     {
         var (stdout, _, _) = TestHelper.RunRush("name = \"world\"\nputs \"Hello #{name}\"");
         Assert.Equal("Hello world", stdout);
     }
 
     [Fact]
-    public void RubySyntax_IfEnd()
+    public void CleanSyntax_IfEnd()
     {
         var (stdout, _, _) = TestHelper.RunRush("x = 10\nif x > 5\n  puts \"big\"\nend");
         Assert.Equal("big", stdout);
     }
 
     [Fact]
-    public void RubySyntax_IfFileExist()
+    public void CleanSyntax_IfFileExist()
     {
         var tmpFile = Path.Combine(Path.GetTempPath(), "rush_test_exist_" + Guid.NewGuid().ToString("N")[..8]);
         try
@@ -223,7 +223,7 @@ public class BashToRushDocTests
     }
 
     [Fact]
-    public void RubySyntax_ForInArray()
+    public void CleanSyntax_ForInArray()
     {
         var (stdout, _, _) = TestHelper.RunRush("for x in [\"a\", \"b\", \"c\"]\n  puts x\nend");
         Assert.Contains("a", stdout);
@@ -232,7 +232,7 @@ public class BashToRushDocTests
     }
 
     [Fact]
-    public void RubySyntax_ForInDirList()
+    public void CleanSyntax_ForInDirList()
     {
         var tmpDir = Path.Combine(Path.GetTempPath(), "rush_test_fordir_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tmpDir);
@@ -248,14 +248,14 @@ public class BashToRushDocTests
     }
 
     [Fact]
-    public void RubySyntax_ArrayIndex()
+    public void CleanSyntax_ArrayIndex()
     {
         var (stdout, _, _) = TestHelper.RunRush("arr = [1, 2, 3]\nputs arr[0]");
         Assert.Equal("1", stdout);
     }
 
     [Fact]
-    public void RubySyntax_Arithmetic()
+    public void CleanSyntax_Arithmetic()
     {
         var (stdout, _, _) = TestHelper.RunRush("puts 5 + 3");
         Assert.Equal("8", stdout);

@@ -417,12 +417,14 @@ loops:
         - rush: "break if count > 100"
           powershell: "if ($count -gt 100) { break }"
 
-  increment:
-    description: "No ++ or -- operators. Use += and -= exclusively."
+  compound_assignment:
+    description: "No ++ or -- operators. Use compound assignment operators: +=, -=, *=, /=."
     examples:
       - { rush: "count += 1", powershell: "$count += 1" }
       - { rush: "total += item.price", powershell: "$total += $item.Price" }
       - { rush: "retries -= 1", powershell: "$retries -= 1" }
+      - { rush: "price *= 1.1", powershell: "$price *= 1.1" }
+      - { rush: "total /= count", powershell: "$total /= $count" }
     note: "No pre/post increment ambiguity. Accessible to non-C developers."
 
   match:
@@ -654,6 +656,31 @@ pipelines:
 
     - rush: 'cat server.log | grep "ERROR" | wc -l'
       note: "Mixed — grep after pipe becomes Where-Object, wc becomes Measure-Object"
+
+  pipeline_operators:
+    where:
+      description: |
+        Filter pipeline objects. Supports three forms:
+        3-arg: `where property operator value` — compare a property with an operator.
+        1-arg regex: `where /pattern/` — match the regex against $_ (the whole line/object).
+        2-arg property regex: `where property /pattern/` — match the regex against a named property.
+      forms:
+        - syntax: "| where property operator value"
+          description: "3-arg — compare a property using an operator (==, !=, >, <, >=, <=, ~, =~, !~)"
+          examples:
+            - { rush: 'netstat | where State == "ESTABLISHED"', note: "Exact match on property" }
+            - { rush: 'ps | where CPU > 50', note: "Numeric comparison" }
+            - { rush: 'data | where CMD =~ rush', note: "Regex match on property value" }
+        - syntax: "| where /pattern/"
+          description: "1-arg regex — match pattern against $_ (the entire line/object)"
+          examples:
+            - { rush: 'cat log.txt | where /error/', note: "Lines matching 'error'" }
+            - { rush: 'history | where /git/', note: "History entries containing 'git'" }
+        - syntax: "| where property /pattern/"
+          description: "2-arg property regex — match pattern against a named property"
+          examples:
+            - { rush: 'ps | where Name /^test/', note: "Processes whose Name starts with 'test'" }
+            - { rush: 'docker ps | where Status /Up/', note: "Containers with 'Up' in Status" }
 
   pipe_transforms:
     description: |
