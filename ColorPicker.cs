@@ -12,57 +12,49 @@ public static class ColorPicker
 
     private static readonly PaletteEntry[] DarkPalette =
     {
-        // Nord
-        new("#2E3440", "Nord Polar Night"),
-        new("#3B4252", "Nord Storm"),
-        new("#434C5E", "Nord Bright"),
-        new("#4C566A", "Nord Light"),
-        // Dracula
-        new("#282A36", "Dracula"),
-        new("#1E1F29", "Dracula Darker"),
-        // Solarized
+        // Row 1: distinct hues at ~15% lightness
+        new("#1A1A2E", "Midnight Blue"),
+        new("#16213E", "Navy"),
+        new("#0F3460", "Deep Blue"),
         new("#002B36", "Solarized Dark"),
-        new("#073642", "Solarized Dark Alt"),
-        // Gruvbox
+        new("#1B4332", "Forest Green"),
+        new("#2D6A4F", "Emerald"),
+        new("#3A2E1F", "Espresso"),
+        new("#4A2020", "Dark Maroon"),
+        new("#6B2020", "Crimson"),
+        new("#2E1A47", "Deep Purple"),
+        new("#4A1942", "Plum"),
+        new("#3D1F4E", "Grape"),
+        // Row 2: popular themes + mid-dark hues
+        new("#2E3440", "Nord"),
+        new("#282A36", "Dracula"),
         new("#282828", "Gruvbox Dark"),
-        new("#3C3836", "Gruvbox Dark Soft"),
-        new("#1D2021", "Gruvbox Dark Hard"),
-        // One Dark
+        new("#1E1E2E", "Catppuccin"),
         new("#282C34", "One Dark"),
-        new("#21252B", "One Dark Deeper"),
-        // Tokyo Night
         new("#1A1B26", "Tokyo Night"),
-        new("#24283B", "Tokyo Night Storm"),
-        // Catppuccin
-        new("#1E1E2E", "Catppuccin Mocha"),
-        new("#181825", "Catppuccin Mantle"),
-        new("#303446", "Catppuccin Frappe"),
-        // Rosé Pine
-        new("#191724", "Rosé Pine"),
-        new("#1F1D2E", "Rosé Pine Moon"),
-        // Kanagawa
-        new("#1F1F28", "Kanagawa"),
-        // Everforest
-        new("#2D353B", "Everforest Dark"),
-        // Material
         new("#263238", "Material Ocean"),
-        new("#212121", "Material Dark"),
+        new("#2D353B", "Everforest"),
+        new("#1F3044", "Steel Blue"),
+        new("#2A3F54", "Petrol"),
+        new("#3B4F2A", "Olive"),
+        new("#4E3B31", "Chocolate"),
     };
 
     private static readonly PaletteEntry[] LightPalette =
     {
+        // Distinct tinted lights — each visually different
         new("#FDF6E3", "Solarized Light"),
-        new("#FAF4ED", "Rosé Pine Dawn"),
-        new("#EFF1F5", "Catppuccin Latte"),
-        new("#FAFAFA", "One Light"),
-        new("#FBF1C7", "Gruvbox Light"),
+        new("#FBF1C7", "Gruvbox Cream"),
+        new("#FFE8E8", "Rose Blush"),
+        new("#E8F0FF", "Ice Blue"),
+        new("#E8FFE8", "Mint"),
+        new("#FFF0E0", "Peach"),
+        new("#F0E0FF", "Lavender"),
+        new("#E0F0F0", "Seafoam"),
+        new("#FFF8E0", "Butter"),
+        new("#FFE0F0", "Pink"),
+        new("#E0FFE8", "Spring"),
         new("#F5F5F5", "Paper"),
-        new("#FFFBF0", "Warm White"),
-        new("#F0F0F0", "Cool Gray"),
-        new("#EFEAE8", "Parchment"),
-        new("#E8E8E8", "Silver"),
-        new("#F5F0EB", "Linen"),
-        new("#ECE7DF", "Ivory"),
     };
 
     private static readonly PaletteEntry[] GrayscalePalette =
@@ -374,33 +366,48 @@ public static class ColorPicker
 
         var results = new List<PaletteEntry>();
         var seen = new HashSet<string>();
+        var inputNorm = hexColor.Trim().ToUpperInvariant();
+        if (!inputNorm.StartsWith('#')) inputNorm = "#" + inputNorm;
 
-        // Hue offsets: ±10, ±20, ±30 degrees
-        double[] hueOffsets = { -30, -20, -10, 0, 10, 20, 30 };
-        // Lightness offsets
-        double[] lightnessOffsets = { -0.10, -0.05, 0.05, 0.10 };
-        // Saturation offsets
-        double[] satOffsets = { -0.15, 0, 0.15 };
+        // Generate variations that are visibly different:
+        // Wide hue spread (every 30°), with lightness and saturation shifts
+        double[] hueOffsets = { -60, -30, 0, 30, 60, 90, 120, 150, 180 };
+        // Keep lightness in same ballpark (dark stays dark, light stays light)
+        double[] lightnessOffsets = { -0.08, 0, 0.08 };
+        // Boost or reduce saturation noticeably
+        double[] satOffsets = { -0.2, 0, 0.25 };
 
         foreach (var dh in hueOffsets)
         {
+            if (dh == 0) continue; // skip same-hue, those look too similar
             foreach (var dl in lightnessOffsets)
             {
-                foreach (var ds in satOffsets)
+                var nh = (h + dh + 360) % 360;
+                var ns = Math.Clamp(s + satOffsets[results.Count % satOffsets.Length], 0.15, 1.0);
+                var nl = Math.Clamp(l + dl, 0.08, 0.92);
+
+                var (nr, ng, nb) = Theme.HslToRgb(nh, ns, nl);
+                var hex = $"#{(int)(nr * 255):X2}{(int)(ng * 255):X2}{(int)(nb * 255):X2}";
+
+                if (seen.Add(hex) && hex != inputNorm)
                 {
-                    var nh = (h + dh + 360) % 360;
-                    var ns = Math.Clamp(s + ds, 0.05, 1.0);
-                    var nl = Math.Clamp(l + dl, 0.05, 0.95);
-
-                    var (nr, ng, nb) = Theme.HslToRgb(nh, ns, nl);
-                    var hex = $"#{(int)(nr * 255):X2}{(int)(ng * 255):X2}{(int)(nb * 255):X2}";
-
-                    if (seen.Add(hex) && hex != hexColor.ToUpperInvariant())
-                        results.Add(new PaletteEntry(hex, $"H:{nh:F0}° S:{ns:P0} L:{nl:P0}"));
-
-                    if (results.Count >= count)
-                        return results.ToArray();
+                    var hName = nh switch
+                    {
+                        >= 0 and < 30 => "Red",
+                        >= 30 and < 60 => "Orange",
+                        >= 60 and < 90 => "Yellow",
+                        >= 90 and < 150 => "Green",
+                        >= 150 and < 210 => "Cyan",
+                        >= 210 and < 270 => "Blue",
+                        >= 270 and < 330 => "Purple",
+                        _ => "Red"
+                    };
+                    var lName = nl < 0.3 ? "Dark" : nl < 0.6 ? "Mid" : "Light";
+                    results.Add(new PaletteEntry(hex, $"{lName} {hName}"));
                 }
+
+                if (results.Count >= count)
+                    return results.ToArray();
             }
         }
 
