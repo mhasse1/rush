@@ -189,6 +189,8 @@ Theme.MinContrast = config.GetContrastRatio();
 // with correct colors — no visible glitch window.
 if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
     Theme.SetBackground(config.Bg);
+// Check for .rushbg in current directory (overrides global config)
+ApplyDirBackground(Environment.CurrentDirectory);
 Theme.Initialize(config.GetThemeOverride());
 bool rootBgApplied = false;
 if (Prompt.IsRoot())
@@ -1288,6 +1290,8 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                     Theme.SetBackground(state.Config.Bg);
                 else
                     Theme.ResetBackground();
+                // Check for .rushbg in current directory (overrides global config)
+                ApplyDirBackground(Environment.CurrentDirectory);
                 Theme.Initialize(state.Config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
                 Console.ForegroundColor = Theme.Current.Muted;
