@@ -305,9 +305,9 @@ public static class ColorPicker
             {
                 var (r8, g8, b8) = ParseHexTo8Bit(cells[i].Hex);
                 if (i == cursor)
-                    line += $"\x1b[48;2;{r8};{g8};{b8}m\x1b[97m▐\x1b[90m██\x1b[97m▌\x1b[0m";
+                    line += $"\x1b[48;2;{r8};{g8};{b8}m\x1b[97m▐██▌\x1b[0m ";
                 else
-                    line += $"\x1b[48;2;{r8};{g8};{b8}m    \x1b[0m";
+                    line += $"\x1b[48;2;{r8};{g8};{b8}m    \x1b[0m ";
             }
             lines.Add(line);
             cellIdx = rowEnd;
