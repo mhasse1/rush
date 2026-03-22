@@ -10,6 +10,7 @@ jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
@@ -27,4 +28,62 @@ jobs:
         run: dotnet build
 
       - name: Test
-        run: dotnet test Rush.Tests
+        run: dotnet test Rush.Tests --logger "trx;LogFileName=results.trx"
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: Rush.Tests/TestResults/*.trx
+
+  # Create a GitHub issue when CI fails on main
+  create-issue-on-failure:
+    needs: build-and-test
+    if: failure() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create issue for CI failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `CI failure on main (${context.sha.substring(0, 7)})`;
+
+            // Don't create duplicates — check for open issues with same title prefix
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'bug,ci-failure',
+              per_page: 10
+            });
+
+            const duplicate = existing.data.find(i => i.title.startsWith('CI failure on main'));
+            if (duplicate) {
+              // Add a comment to the existing issue instead
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: duplicate.number,
+                body: `Still failing at ${context.sha.substring(0, 7)}: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              });
+              return;
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              labels: ['bug', 'ci-failure'],
+              body: [
+                `## CI Failed on main`,
+                ``,
+                `**Commit:** [\`${context.sha.substring(0, 7)}\`](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/commit/${context.sha})`,
+                `**Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                `**Triggered by:** ${context.actor}`,
+                ``,
+                `Check the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details and test result artifacts.`,
+              ].join('\n')
+            });
