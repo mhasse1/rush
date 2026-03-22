@@ -5083,6 +5083,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
     Console.WriteLine("  init       — edit init.rush in $EDITOR, then reload");
     Console.WriteLine("  reload     — reload config");
     Console.WriteLine("  clear      — clear screen");
+    Console.WriteLine("  help <topic> — detailed help (file, dir, strings, arrays, classes, loops, pipelines, sql, ...)");
     Console.WriteLine();
 
     if (editor.Mode == EditMode.Vi)

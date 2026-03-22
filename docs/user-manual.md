@@ -1,6 +1,6 @@
 # Rush User Manual
 
-> **Version 0.3.0 (alpha)** — A modern shell with clean, readable syntax on PowerShell 7
+> **Version 0.9.x (beta)** — A modern shell with clean, readable syntax on PowerShell 7
 
 ---
 
@@ -1764,6 +1764,7 @@ trap 'cleanup' EXIT         # Run on shell exit
 |---------|-------------|
 | `clear` | Clear the screen |
 | `help` | Show built-in help |
+| `help <topic>` | Detailed reference for a topic (file, dir, time, strings, arrays, hashes, classes, enums, functions, loops, control-flow, pipelines, regex, errors, platforms, sql, pipeline-ops, llm-mode, objectify) |
 
 ---
 
