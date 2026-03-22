@@ -161,7 +161,7 @@ static class HelpCommand
         var types = new[] { "strings", "arrays", "hashes", "classes", "enums" };
         var flow = new[] { "functions", "loops", "control-flow", "errors" };
         var data = new[] { "pipelines", "pipeline-ops", "regex", "objectify", "sql" };
-        var other = new[] { "platforms", "llm-mode" };
+        var other = new[] { "platforms", "llm-mode", "xref" };
 
         void PrintGroup(string label, string[] items)
         {

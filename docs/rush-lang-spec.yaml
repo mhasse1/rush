@@ -277,7 +277,8 @@ help:
   no_args: "Lists available topics"
   topics: [file, dir, time, strings, arrays, hashes, classes, enums,
            functions, loops, control-flow, pipelines, regex, errors,
-           platforms, sql, pipeline-ops, llm-mode, objectify]
+           platforms, sql, pipeline-ops, llm-mode, objectify, xref]
+  key_topic: "xref — bash/Unix → Rush cross-reference. Use BEFORE writing shell commands."
   note: "Use help <topic> for detailed syntax, methods, examples, and rules."
 
 # ── EXAMPLE ──────────────────────────────────────────────────────

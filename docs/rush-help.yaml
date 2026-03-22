@@ -643,3 +643,63 @@ objectify:
     - rush: 'echo "NAME PID\nfoo 123" | objectify | as json'
     - rush: 'my-tool | objectify --fixed | where col1 > 5'
     - rush: 'my-tool | objectify --delim "," | select name,value'
+
+xref:
+  summary: "Bash/Unix → Rush cross-reference. Use Rush-native syntax instead of shell commands."
+
+  file_operations:
+    - { bash: 'cat file', rush: 'File.read("file")' }
+    - { bash: 'cat file | grep pattern', rush: 'File.read_lines("file") | where /pattern/' }
+    - { bash: 'cat file | wc -l', rush: 'File.read_lines("file").count' }
+    - { bash: 'cat file | head -20', rush: 'File.read_lines("file").first(20)' }
+    - { bash: 'test -f path / [ -f path ]', rush: 'File.exist?("path")' }
+    - { bash: 'rm file', rush: 'File.delete("file")' }
+    - { bash: 'echo text > file', rush: 'File.write("file", "text")' }
+    - { bash: 'echo text >> file', rush: 'File.append("file", "text")' }
+    - { bash: 'stat -f%z file / wc -c < file', rush: 'File.size("file")' }
+    - { bash: 'cat data.json | python -m json.tool', rush: 'File.read_json("data.json")' }
+
+  directory_operations:
+    - { bash: 'ls', rush: 'Dir.list(".")' }
+    - { bash: 'ls -la', rush: 'Dir.list(".", :hidden)' }
+    - { bash: 'find . -type f', rush: 'Dir.list(".", :recurse, :files)' }
+    - { bash: 'find . -type d', rush: 'Dir.list(".", :recurse, :dirs)' }
+    - { bash: 'find . -name "*.log"', rush: 'Dir.list(".", :recurse) | where /\.log$/' }
+    - { bash: 'find . -iname "*.log"', rush: 'Dir.list(".", :recurse) | where /\.log$/i' }
+    - { bash: 'test -d path / [ -d path ]', rush: 'Dir.exist?("path")' }
+    - { bash: 'mkdir -p path', rush: 'Dir.mkdir("path")' }
+
+  pipeline_equivalents:
+    - { bash: 'head -N', rush: '| first N' }
+    - { bash: 'tail -N', rush: '| last N' }
+    - { bash: 'sort | uniq', rush: '| distinct' }
+    - { bash: 'wc -l', rush: '| count' }
+    - { bash: 'grep pattern', rush: '| where /pattern/' }
+    - { bash: 'grep -i pattern', rush: '| where /pattern/i' }
+    - { bash: 'grep -c pattern', rush: '| where /pattern/ | count' }
+    - { bash: 'grep -v pattern', rush: '| where !~ /pattern/' }
+    - { bash: "awk '{print $2}'", rush: '| columns 2' }
+    - { bash: "awk -F, '{print $1,$3}'", rush: '| objectify --delim "," | select col1,col3' }
+    - { bash: 'sort -n', rush: '| sort' }
+    - { bash: 'sort -rn', rush: '| sort --desc' }
+    - { bash: 'tee file', rush: '| tee file' }
+    - { bash: 'command | json_pp', rush: 'command | as json' }
+
+  variables_and_env:
+    - { bash: 'echo $VAR', rush: 'puts env.VAR' }
+    - { bash: 'export FOO=bar', rush: 'export FOO=bar  (+ --save to persist)' }
+    - { bash: '[ -z "$VAR" ]', rush: 'env.VAR.nil? or env.VAR.empty?' }
+    - { bash: 'VAR=$(command)', rush: 'name = $(command)' }
+    - { bash: 'date', rush: 'Time.now' }
+    - { bash: "date -d '24 hours ago'", rush: 'Time.now - 24.hours' }
+
+  conditionals_and_loops:
+    - { bash: 'if [ condition ]; then ... fi', rush: 'if condition ... end' }
+    - { bash: 'for f in *.txt; do ... done', rush: 'for f in Dir.list(".", :files) ... end' }
+    - { bash: 'while read line; do ... done < file', rush: 'for line in File.read_lines("file") ... end' }
+
+  rules:
+    - "Prefer Rush stdlib (File/Dir/Time) over shell commands for structured data"
+    - "Shell commands still work — use them for tools Rush doesn't wrap (git, docker, curl)"
+    - "Pipeline operators (where, select, count) work on both Rush objects and shell output"
+    - "Dir.list returns basenames, not full paths — different from find"
