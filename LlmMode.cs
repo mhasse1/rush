@@ -391,6 +391,14 @@ public class LlmMode
         if (firstWord == "timeout")
             return HandleTimeout(input, cwd, sw);
 
+        // help — topic-based reference
+        if (firstWord == "help")
+        {
+            var helpArg = input.Trim().Length > 5 ? input.Trim()[5..].Trim() : null;
+            var helpOutput = HelpCommand.Execute(helpArg);
+            return new LlmResult { Status = "success", ExitCode = 0, Stdout = helpOutput, Cwd = cwd, DurationMs = sw.ElapsedMilliseconds };
+        }
+
         // sql — native database queries with structured JSON output
         if (firstWord == "sql")
             return SqlCommand.ExecuteForLlm(input.Trim(), cwd, sw);

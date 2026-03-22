@@ -579,12 +579,17 @@ public class LineEditor
                 HandleViSearch(forward: false);
                 return null;
             case 'n':
-                if (!string.IsNullOrEmpty(_lastSearchQuery))
-                    RepeatViSearch(_lastSearchForward);
-                return null;
-            case 'N':
+                // n repeats search in same direction: / searches older, ? searches newer
+                // _lastSearchForward=true (from /) means "toward newer" in array,
+                // but / in shell means "search backward through history" (older),
+                // so n after / should go older (false), n after ? should go newer (true)
                 if (!string.IsNullOrEmpty(_lastSearchQuery))
                     RepeatViSearch(!_lastSearchForward);
+                return null;
+            case 'N':
+                // N reverses: opposite of n
+                if (!string.IsNullOrEmpty(_lastSearchQuery))
+                    RepeatViSearch(_lastSearchForward);
                 return null;
 
             // -- Edit in $EDITOR --
@@ -1458,6 +1463,11 @@ public class LineEditor
     {
         UpdateSuggestion();
         Console.SetCursorPosition(_startLeft, _startTop);
+
+        // Erase from cursor to end of display — clears all old content including
+        // wrapped lines and stale ghost text from previous renders
+        Console.Write("\x1b[J");
+
         var text = new string(_buffer.ToArray());
 
         if (Highlighter != null)
@@ -1472,21 +1482,28 @@ public class LineEditor
 
         // Ghost text (autosuggestion from history)
         string ghost = GetGhostText();
-        int ghostLen = ghost.Length;
-        if (ghostLen > 0)
+        if (ghost.Length > 0)
         {
             Console.Write("\x1b[90m"); // dim gray
             Console.Write(ghost);
             Console.Write("\x1b[0m");  // reset
         }
 
-        // Clear trailing chars
+        // Adjust _startTop if terminal scrolled (cursor pushed past bottom of window)
         try
         {
-            int totalWritten = (_startLeft + _buffer.Count + ghostLen) % Console.WindowWidth;
-            int clearCount = Console.WindowWidth - totalWritten;
-            if (clearCount > 0 && clearCount <= Console.WindowWidth)
-                Console.Write(new string(' ', clearCount));
+            int width = Console.WindowWidth;
+            int totalLen = _startLeft + _buffer.Count + ghost.Length;
+            int rowsNeeded = (totalLen / width); // rows below the start row
+            int cursorTopAfterWrite = Console.CursorTop;
+            int expectedEndRow = _startTop + rowsNeeded;
+
+            if (expectedEndRow > cursorTopAfterWrite)
+            {
+                // Terminal scrolled — _startTop has shifted up
+                _startTop -= (expectedEndRow - cursorTopAfterWrite);
+                if (_startTop < 0) _startTop = 0;
+            }
         }
         catch { }
 

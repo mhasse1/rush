@@ -8,13 +8,17 @@ Parameters
 Licensor:             Mark Hasse
 Licensed Works:       Rush Shell. The Licensed Work is
                       (c) 2026 Mark Hasse
-Additional Use Grant: You may make use of the Licensed Work for
-                      non-commercial and non-production purposes.
-                      Commercial use, including use within a business,
-                      organization, or for any revenue-generating activity,
-                      requires a paid license. Individual developers and
-                      hobbyists may use the Licensed Work freely for
-                      personal, non-commercial projects.
+Additional Use Grant: You may use the Licensed Work for any purpose,
+                      including commercial and production use, provided that
+                      you do not use it to offer a commercial product or
+                      service in which the Licensed Work is a core component.
+                      Examples of restricted use include, but are not limited
+                      to: bundling Rush as the default shell in a commercial
+                      platform, embedding Rush as the execution environment
+                      in a managed or hosted service, or redistributing Rush
+                      as part of a product sold to third parties. Individual
+                      use, internal business use, and use as a personal
+                      development tool are always permitted.
 Change Date:          Four years from the date the Licensed Work is published
 Change License:       Apache License 2.0
 

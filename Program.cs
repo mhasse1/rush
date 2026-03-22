@@ -945,10 +945,21 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             break;
         }
 
-        if (segment.Equals("help", StringComparison.OrdinalIgnoreCase))
+        if (segment.Equals("help", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("help ", StringComparison.OrdinalIgnoreCase))
         {
-            if (state.LineEditor != null)
-                ShowHelp(state.LineEditor, state.Translator);
+            var helpArg = segment.Length > 5 ? segment[5..].Trim() : null;
+            if (string.IsNullOrEmpty(helpArg))
+            {
+                // No topic — show interactive shell help
+                if (state.LineEditor != null)
+                    ShowHelp(state.LineEditor, state.Translator);
+            }
+            else
+            {
+                // Topic-based help from embedded rush-help.yaml
+                Console.WriteLine(HelpCommand.Execute(helpArg));
+            }
             lastSegmentFailed = false;
             continue;
         }

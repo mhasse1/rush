@@ -1,1823 +1,303 @@
-# ============================================================================
-# Rush Language Specification — Machine-Readable Reference
-# ============================================================================
-# This file is the source of truth for Rush's scripting language.
-# It is designed to be consumed by LLMs in a single read to enable
-# correct Rush code generation. Human docs are derived from this.
-#
-# Architecture: Rush code transpiles to PowerShell 7, which executes
-# on the embedded PS engine. This means every .NET type, cmdlet, and
-# module is available automatically.
-#
-# Design philosophy: Bash's pipeline/process model + clean, readable syntax.
-# Blocks use `end`, variables need no sigils, and interpolation uses #{expr}.
-# ============================================================================
+# Rush Language Spec — One-Shot LLM Reference
+# Architecture: Rush code → Lexer → Parser → AST → Transpiler → PowerShell 7
+# Shell commands pass through verbatim. Rush syntax transpiles to PS.
+# No $ prefix, blocks use end, interpolation is #{expr}, braces for lambdas only.
 
 meta:
-  version: "0.3.0"
-  status: "alpha"  # design → alpha → beta → stable
   engine: "PowerShell 7 via Microsoft.PowerShell.SDK"
   runtime: ".NET 8"
-  file_extension: ".rush"
-  config_file: "~/.config/rush/init.rush"
 
-# ============================================================================
-# MENTAL MODEL — read this first
-# ============================================================================
-mental_model:
-  one_line: "Bash's process model + clean readable syntax, transpiling to PowerShell 7"
-  rules:
-    - "Shell commands pass through verbatim — `ls -la` just works"
-    - "No sigils — `name = x` not `$name = x`"
-    - "Interpolation is #{expr} not ${expr}"
-    - "Blocks use `end`, not braces — braces are for lambdas only"
-    - "Every .NET type and PowerShell cmdlet is available automatically"
-    - "When in doubt, prefer the most readable form — pipelines work on objects"
+# ── COMMON MISTAKES ──────────────────────────────────────────────
+mistakes:
+  - { wrong: '$name = "x"',       right: 'name = "x"' }
+  - { wrong: 'foreach ($x in $l) { }', right: 'for x in l ... end' }
+  - { wrong: 'Get-ChildItem ...',  right: 'Dir.list(".")' }
+  - { wrong: '[IO.File]::ReadAllText(p)', right: 'File.read(p)' }
+  - { wrong: 'puts("hello")',      right: 'puts "hello"' }
+  - { wrong: 'if (x > 5) { }',    right: 'if x > 5 ... end' }
+  - { wrong: '@name = value',      right: 'self.name = value' }
+  - { wrong: 'Dog.new(name: "x")', right: 'Dog.new("x")', note: "positional args only at .new()" }
+  - { wrong: 'static def foo()',   right: 'def self.foo()' }
 
-# ============================================================================
-# COMMON MISTAKES (for LLM code generation accuracy)
-# ============================================================================
-# LLMs: avoid these patterns. Rush is NOT PowerShell, NOT Bash, NOT any other language.
-# It borrows ideas from all three but has its own syntax rules.
-
-common_mistakes:
-  - wrong: '$name = "Mark"'
-    right: 'name = "Mark"'  # no $ prefix in Rush
-
-  - wrong: 'foreach ($x in $list) { ... }'
-    right: 'for x in list ... end'  # Rush for/in/end
-
-  - wrong: 'Get-ChildItem | Where-Object { $_.Length -gt 1MB }'
-    right: 'Dir.list(".", type: "file").select { |f| f.Length > 1mb }'  # use Rush stdlib
-
-  - wrong: '[System.IO.File]::ReadAllText("path")'
-    right: 'File.read("path")'  # use Rush stdlib
-
-  - wrong: 'puts("hello")'
-    right: 'puts "hello"'  # puts/warn/print are keywords, no parens
-
-  - wrong: 'if (x > 5) { puts x }'
-    right: 'if x > 5; puts x; end'  # if/end blocks, not braces
-
-  - wrong: 'data = JSON.parse(File.read("data.json"))'
-    right: 'data = File.read_json("data.json")'  # one-step JSON loading
-
-  - wrong: 'require "json"'
-    right: "# No require/import needed — stdlib is always available"
-
-  - wrong: '@name = value'
-    right: 'self.name = value'  # self.prop, not @prop
-
-  - wrong: 'Dog.new(name: "Rex")'
-    right: 'Dog.new("Rex")'
-    reason: "Named args at .new() call site not yet supported — use positional args"
-
-  - wrong: 'static def add(a, b)'
-    right: 'def self.add(a, b)'  # def self.name() for static methods
-
-  - wrong: 'enum Color { red, green, blue }'
-    right: "enum Color\\n  red\\n  green\\n  blue\\nend"
-    reason: "Enums use block syntax with end, one member per line — not braces or commas"
-
-# ============================================================================
-# UNIX → RUSH TRANSLATION GUIDE (for LLMs)
-# ============================================================================
-# Common Unix shell idioms and their Rush equivalents.
-# Use these patterns when translating user intent into Rush code.
-
-unix_translations:
-  - unix: 'cat config.json | jq ".name"'
-    rush: 'data = File.read_json("config.json"); puts data.name'
-    note: "JSON parsing is built into File stdlib"
-
-  - unix: 'find . -name "*.log" -delete'
-    rush: 'Dir.list(".", type: "file", recursive: true).select { |f| f.Name =~ /\.log$/ }.each { |f| File.delete(f.FullName) }'
-    note: "Method chaining replaces find + xargs"
-
-  - unix: 'wc -l file.txt'
-    rush: 'puts File.read_lines("file.txt").count'
-    note: "read_lines returns array, .count gives line count"
-
-  - unix: 'cat data.csv | head -5'
-    rush: 'File.read_lines("data.csv").first(5).each { |l| puts l }'
-    note: "Method chaining replaces head"
-
-  - unix: 'du -sh * | sort -rh | head -5'
-    rush: 'Dir.list(".", type: "file").sort_by { |f| f.Length }.reverse.first(5).each { |f| puts "#{f.Name} #{f.Length.to_filesize}" }'
-    note: "Object pipeline — no string parsing needed"
-
-  - unix: 'grep -r "TODO" src/'
-    rush: 'grep -r "TODO" src/'
-    note: "Shell commands just work — no translation needed"
-
-  - unix: 'test -f config.json && echo "exists"'
-    rush: 'puts "exists" if File.exist?("config.json")'
-    note: "Postfix if + predicate method = readable"
-
-  - unix: 'mkdir -p /tmp/myapp/logs'
-    rush: 'Dir.mkdir("/tmp/myapp/logs")'
-    note: "Dir.mkdir creates parent dirs automatically (-Force)"
-
-# ============================================================================
-# SHELL INTEGRATION
-# ============================================================================
-shell_integration:
-  description: |
-    Rush is a shell first, scripting language second. Shell commands
-    are always available and take precedence unless the line matches
-    a Rush construct (if/def/for/class/begin/etc.).
-
-  line_triage:
-    description: |
-      ScriptEngine decides if a line is Rush syntax or a shell command:
-      1. Starts with Rush keyword (if, def, for, while, class, enum, begin) → Rush
-      2. Contains `=` after first token → Rush assignment
-      3. Method call with known Rush method name (foo.each, foo.select) → Rush
-      4. Method call on variable: identifier.method() pattern → Rush
-      5. Stdlib receiver (File.xxx, Dir.xxx, Time.xxx) → Rush
-      6. PascalCase receiver: ClassName.method() or EnumName.prop → Rush
-      7. Everything else → shell command (native on *nix, CommandTranslator for pipeline operators)
-    note: "ALL_CAPS names (ARGV, PATH) are not treated as class receivers"
-
-  command_substitution:
-    syntax: "name = $(whoami)"
-    transpiles_to: "$name = (whoami)"
-    note: "Capture shell command output into variable"
-
-  exit_codes:
-    syntax: |
-      ls /nonexistent
-      if $?.failed?
-        puts "command failed with code #{$?.code}"
-      end
-    note: "$? gives access to the last command's exit status. Predicate methods: .ok?, .failed?"
-
-  native_command_colors:
-    description: |
-      Rush auto-configures color environment variables at startup based on
-      detected terminal background (dark/light). Native commands like ls
-      and grep inherit these for readable colored output.
-    variables:
-      - { name: "LS_COLORS", target: "GNU ls (Linux, Homebrew coreutils)", dark: "Bold colors (1;34, 1;36, etc.)", light: "Non-bold (34, 35, etc.)" }
-      - { name: "LSCOLORS", target: "BSD ls (macOS)", dark: "ExGxFxdxCxegedabagacad", light: "exfxcxdxbxegedabagacad" }
-      - { name: "GREP_COLORS", target: "GNU grep", dark: "Bold red matches (01;31)", light: "Plain red matches (31)" }
-      - { name: "CLICOLOR", target: "BSD ls enable (macOS only)", dark: "1", light: "1" }
-    behavior:
-      - "Respects user-set values — if already in environment, Rush won't overwrite"
-      - "Respects NO_COLOR convention — if set, no color vars are injected"
-      - "Updates on theme change (set theme dark/light) or reload"
-    implementation: "Theme.SetNativeColorEnvVars() in Theme.cs"
-
-# ============================================================================
-# VARIABLES & ASSIGNMENT
-# ============================================================================
+# ── VARIABLES ────────────────────────────────────────────────────
 variables:
-  description: |
-    Assignment uses `name = value`. No `let`, `var`, `set`, or `$` prefix.
-    The transpiler distinguishes assignment from command execution by context:
-    if the first token is followed by `=`, it's an assignment.
+  assignment: "name = expr  →  $name = expr"
+  multiple: "a, b, c = 1, 2, 3  →  $a = 1; $b = 2; $c = 3"
+  capture: "name = $(whoami)  →  $name = (whoami)"
+  compound: ["+=", "-=", "*=", "/="]
+  note: "No $ prefix, no let/var. First token + = → assignment."
 
-  syntax:
-    assignment: "name = expr"
-    multiple: "a, b, c = 1, 2, 3"
-
-  transpiles_to:
-    assignment: "$name = expr"
-    multiple: "$a = 1; $b = 2; $c = 3"
-
-  examples:
-    - rush: 'name = "world"'
-      powershell: '$name = "world"'
-
-    - rush: 'count = 42'
-      powershell: '$count = 42'
-
-    - rush: 'files = ls /tmp'
-      powershell: '$files = (ls /tmp)'
-      note: "Command output captured into variable — ls runs natively on *nix"
-
-    - rush: 'a, b, c = 1, 2, 3'
-      powershell: '$a = 1; $b = 2; $c = 3'
-      note: "Multiple assignment — each name gets the corresponding value"
-
-    - rush: 'today = Time.now'
-      powershell: '$today = [DateTime]::Now'
-      note: ".NET types accessible via clean syntax"
-
-  rules:
-    - "No $ prefix — Rush adds it during transpilation"
-    - "First token + `=` → assignment; first token without `=` → command"
-    - "Variable names: letters, digits, underscores; must start with letter/underscore"
-    - "Variables are dynamically typed (PowerShell semantics)"
-
-# ============================================================================
-# STRINGS
-# ============================================================================
+# ── STRINGS ──────────────────────────────────────────────────────
 strings:
-  description: |
-    Double-quoted strings support interpolation. Single-quoted strings are literal.
-    Heredocs for multi-line strings.
+  double: '"hello #{expr}"  →  "hello $($expr)"'
+  single: "'literal — no interpolation'"
+  heredoc: "<<END ... END  →  @\" ... \"@"
+  escapes: ['\\n newline', '\\t tab', '\\e ESC (0x1B)', '\\\\ backslash']
 
-  interpolation:
-    syntax: '"hello #{expr}"'
-    transpiles_to: '"hello $($expr)"'
+# ── OPERATORS ────────────────────────────────────────────────────
+operators:
+  comparison: { "==": "-eq", "!=": "-ne", ">": "-gt", "<": "-lt", ">=": "-ge", "<=": "-le" }
+  logical: { "&&": "-and", "||": "-or", "!": "-not", "not": "-not" }
+  regex: { "=~": "-match", "!~": "-notmatch" }
+  ternary: "condition ? then_expr : else_expr  →  $(if (cond) { then } else { else })"
+  safe_nav: "obj&.method  →  if ($null -ne $obj) { $obj.Method }"
 
-  examples:
-    - rush: '"hello #{name}"'
-      powershell: '"hello $($name)"'
-
-    - rush: '"there are #{items.count} items"'
-      powershell: '"there are $($items.Count) items"'
-
-    - rush: "'no #{interpolation} here'"
-      powershell: "'no #{interpolation} here'"
-      note: "Single quotes are literal"
-
-  heredoc:
-    syntax: |
-      text = <<END
-        multi-line content
-        with #{interpolation}
-      END
-    transpiles_to: |
-      $text = @"
-        multi-line content
-        with $($interpolation)
-      "@
-
-# ============================================================================
-# CONTROL FLOW
-# ============================================================================
+# ── CONTROL FLOW ─────────────────────────────────────────────────
 control_flow:
-  description: |
-    Block keywords: if/elsif/else/end, unless/end.
-    No braces for control flow — braces are reserved for lambdas.
+  if: "if cond ... elsif cond ... else ... end"
+  unless: "unless cond ... end  (no elsif/else)"
+  inline: "puts x if verbose  |  next unless valid"
+  case: "case expr; when val ... else ... end"
+  match: "match expr; when val ... else ... end  (alias for case)"
 
-  if:
-    syntax: |
-      if condition
-        body
-      elsif condition
-        body
-      else
-        body
-      end
-    transpiles_to: |
-      if (condition) {
-        body
-      } elseif (condition) {
-        body
-      } else {
-        body
-      }
-    examples:
-      - rush: |
-          if count > 10
-            puts "many"
-          elsif count > 0
-            puts "some"
-          else
-            puts "none"
-          end
-        powershell: |
-          if ($count -gt 10) {
-            Write-Output "many"
-          } elseif ($count -gt 0) {
-            Write-Output "some"
-          } else {
-            Write-Output "none"
-          }
-
-  unless:
-    syntax: |
-      unless condition
-        body
-      end
-    transpiles_to: |
-      if (-not (condition)) {
-        body
-      }
-    note: "Sugar for negated if. No elsif/else allowed with unless."
-
-  inline:
-    syntax: "puts 'hello' if verbose"
-    transpiles_to: "if ($verbose) { Write-Output 'hello' }"
-    note: "Trailing if/unless for one-liners"
-
-  operators:
-    description: "Comparison operators use words, not symbols (like PowerShell)"
-    mappings:
-      - { rush: "==",  powershell: "-eq" }
-      - { rush: "!=",  powershell: "-ne" }
-      - { rush: ">",   powershell: "-gt" }
-      - { rush: "<",   powershell: "-lt" }
-      - { rush: ">=",  powershell: "-ge" }
-      - { rush: "<=",  powershell: "-le" }
-      - { rush: "&&",  powershell: "-and" }
-      - { rush: "||",  powershell: "-or" }
-      - { rush: "!",   powershell: "-not" }
-    note: "Regex operators =~ and !~ documented in the regex section below"
-
-  safe_navigation:
-    syntax: "obj&.method"
-    transpiles_to: "if ($null -ne $obj) { $obj.Method }"
-    description: |
-      Safe navigation operator. If obj is nil, returns nil
-      instead of throwing. Very useful in shell scripts where values
-      may not exist.
-    examples:
-      - { rush: "ip&.IPAddress", note: "Returns nil if ip is nil, instead of crashing" }
-      - { rush: "user&.name&.upcase", note: "Chains safely — any nil short-circuits" }
-
-# ============================================================================
-# LOOPS
-# ============================================================================
+# ── LOOPS ────────────────────────────────────────────────────────
 loops:
-  for_in:
-    syntax: |
-      for item in collection
-        body
-      end
-    transpiles_to: |
-      foreach ($item in $collection) {
-        body
-      }
-    examples:
-      - rush: |
-          for f in ls /tmp
-            puts f.name
-          end
-        powershell: |
-          foreach ($f in (ls /tmp)) {
-            Write-Output $f.Name
-          }
+  for: "for item in collection ... end  →  foreach ($item in $collection) { }"
+  while: "while cond ... end"
+  until: "until cond ... end  →  while (-not cond) { }"
+  loop: "loop ... break if cond ... end  →  while ($true) { }"
+  times: "5.times { |i| puts i }  →  0..4 | ForEach-Object { }"
+  control: { next: "continue (preferred)", break: "break" }
 
-  while:
-    syntax: |
-      while condition
-        body
-      end
-    transpiles_to: |
-      while (condition) {
-        body
-      }
+# ── RANGES ───────────────────────────────────────────────────────
+ranges:
+  inclusive: "1..5  →  1..5  (yields 1,2,3,4,5)"
+  exclusive: "1...5  →  1..4  (yields 1,2,3,4)"
 
-  until:
-    syntax: |
-      until condition
-        body
-      end
-    transpiles_to: |
-      while (-not (condition)) {
-        body
-      }
-
-  loop:
-    syntax: |
-      loop
-        body
-        break if condition
-      end
-    transpiles_to: |
-      while ($true) {
-        body
-        if (condition) { break }
-      }
-    note: "Infinite loop with explicit break"
-
-  times:
-    syntax: |
-      5.times { |i|
-        puts i
-      }
-    transpiles_to: |
-      0..4 | ForEach-Object {
-        Write-Output $_
-      }
-    note: "Numeric iteration — reads naturally as English"
-
-  loop_control:
-    - name: "next"
-      description: "Skip to next iteration (preferred)"
-      transpiles_to: "continue"
-      examples:
-        - rush: "next if line.empty?"
-          powershell: "if ($line -eq '') { continue }"
-        - rush: "next unless item.valid?"
-          powershell: "if (-not $item.IsValid) { continue }"
-      note: "Reads naturally: 'next if blank'. Preferred over continue."
-    - name: "continue"
-      description: "Alias for next — supported for familiarity"
-      transpiles_to: "continue"
-      note: "Some developers expect C-style continue. Both work, next is preferred in style guide."
-    - name: "break"
-      description: "Exit loop immediately"
-      transpiles_to: "break"
-      examples:
-        - rush: "break if count > 100"
-          powershell: "if ($count -gt 100) { break }"
-
-  compound_assignment:
-    description: "No ++ or -- operators. Use compound assignment operators: +=, -=, *=, /=."
-    examples:
-      - { rush: "count += 1", powershell: "$count += 1" }
-      - { rush: "total += item.price", powershell: "$total += $item.Price" }
-      - { rush: "retries -= 1", powershell: "$retries -= 1" }
-      - { rush: "price *= 1.1", powershell: "$price *= 1.1" }
-      - { rush: "total /= count", powershell: "$total /= $count" }
-    note: "No pre/post increment ambiguity. Accessible to non-C developers."
-
-  match:
-    description: "Pattern matching — modern alias for case/when/end"
-    syntax: |
-      match expr
-      when value1
-        body
-      when value2
-        body
-      else
-        body
-      end
-    transpiles_to: |
-      switch (expr) {
-        value1 { body }
-        value2 { body }
-        default { body }
-      }
-    note: "'match' avoids bash case/esac baggage. 'case' also works as alias."
-
-  platform_blocks:
-    description: |
-      OS-conditional blocks that execute only on the matching platform.
-      Optional property conditions for architecture and version checks.
-      macos/linux/win64 blocks contain normal Rush code.
-      win32 blocks contain raw PowerShell 5.1 and execute in 32-bit mode.
-    keywords: [macos, win64, win32, linux]
-    properties:
-      - { name: ".arch", values: ["x64", "arm64", "x86"], source: "RuntimeInformation.OSArchitecture" }
-      - { name: ".version", values: ["25.3.0 (Darwin)", "6.8.0 (Linux)", "10.0.22631 (Windows)"], source: "Environment.OSVersion.Version" }
-    notes:
-      - "win64 maps to $os -eq 'windows' — PS 7 is 64-bit only, so win64 is the standard Windows block"
-      - "win32 shells out to C:\\Windows\\SysWOW64\\WindowsPowerShell\\v1.0\\powershell.exe (32-bit PS 5.1)"
-      - "win32 body is raw PowerShell, not Rush syntax — needed for 32-bit OLEDB/ODBC drivers"
-      - "Rush variables are auto-injected into win32 blocks as $var = 'value' preamble"
-      - "Non-matching platform blocks are silently skipped"
-    examples:
-      - rush: |
-          macos
-            puts "running on macOS"
-          end
-        transpiles_to: |
-          if ($os -eq 'macos') { Write-Output "running on macOS" }
-        note: "Basic platform block — body is normal Rush code"
-      - rush: |
-          linux
-            export LD_LIBRARY_PATH="/usr/local/lib"
-            puts "Linux configured"
-          end
-        transpiles_to: |
-          if ($os -eq 'linux') { $env:LD_LIBRARY_PATH = '/usr/local/lib'; Write-Output "Linux configured" }
-        note: "Linux block with environment setup"
-      - rush: |
-          win64
-            sql @sqlserver "SELECT * FROM orders"
-            puts "Queried on Windows"
-          end
-        transpiles_to: |
-          if ($os -eq 'windows') { ... }
-        note: "win64 runs normal Rush code on 64-bit Windows (PS 7)"
-      - rush: |
-          win64.version >= "10.0.22000"
-            puts "Windows 11 or later"
-          end
-        transpiles_to: |
-          if ($os -eq 'windows' -and [version]$__rush_os_version -ge [version]'10.0.22000') { ... }
-        note: "win64 with version condition — Windows 11 detection"
-      - rush: |
-          win64.arch == "arm64"
-            puts "Windows on ARM"
-          end
-        transpiles_to: |
-          if ($os -eq 'windows' -and $__rush_arch -eq 'arm64') { ... }
-        note: "win64 with architecture condition — Surface Pro X, Snapdragon laptops"
-      - rush: |
-          linux.arch == "x64"
-            puts "64-bit Linux"
-          end
-        transpiles_to: |
-          if ($os -eq 'linux' -and $__rush_arch -eq 'x64') { Write-Output "64-bit Linux" }
-        note: "Linux with architecture condition"
-      - rush: |
-          macos.version >= "25.0"
-            puts "Darwin 25+"
-          end
-        transpiles_to: |
-          if ($os -eq 'macos' -and [version]$__rush_os_version -ge [version]'25.0') { ... }
-        note: "Version comparison uses [version] cast for correct numeric ordering"
-      - rush: |
-          win32
-            $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\data.accdb")
-            $conn.Open()
-            $cmd = $conn.CreateCommand()
-            $cmd.CommandText = "SELECT * FROM Customers"
-            $reader = $cmd.ExecuteReader()
-            while ($reader.Read()) { Write-Output "$($reader[0]) | $($reader[1])" }
-            $conn.Close()
-          end
-        note: "win32 body is raw PowerShell 5.1 — shells out to 32-bit powershell.exe for ACE OLEDB"
-      - rush: |
-          win32
-            # BC ODBC 32-bit DSN query
-            $conn = New-Object System.Data.Odbc.OdbcConnection("DSN=BC_Production;UID=user;PWD=pass")
-            $conn.Open()
-            $cmd = $conn.CreateCommand()
-            $cmd.CommandText = "SELECT No_, Name FROM [Customer]"
-            $reader = $cmd.ExecuteReader()
-            while ($reader.Read()) { Write-Output "$($reader['No_'])`t$($reader['Name'])" }
-            $conn.Close()
-          end
-        note: "win32 with Business Central ODBC DSN — requires 32-bit driver"
-
-# ============================================================================
-# FUNCTIONS
-# ============================================================================
+# ── FUNCTIONS ────────────────────────────────────────────────────
 functions:
-  description: |
-    Defined with `def name(params) ... end`. Parameters are positional
-    by default, with optional type annotations and defaults.
-
   syntax: |
     def greet(name, greeting = "hello")
       puts "#{greeting}, #{name}!"
     end
-  transpiles_to: |
-    function greet {
-      param(
-        [Parameter(Position=0)] $name,
-        [Parameter(Position=1)] $greeting = "hello"
-      )
-      Write-Output "$($greeting), $($name)!"
-    }
+  return: "Last expression is implicit return. Explicit return also works."
+  named_args: 'greet("World", greeting: "Hi")'
 
-  examples:
-    - rush: |
-        def deploy(env, dry_run = false)
-          if dry_run
-            puts "would deploy to #{env}"
-          else
-            puts "deploying to #{env}..."
-            # shell commands work inside functions
-            rsync -avz ./dist/ "#{env}.example.com:/var/www/"
-          end
-        end
-
-        deploy("staging")
-        deploy("production", dry_run: true)
-
-  return:
-    description: |
-      Last expression is the implicit return value.
-      Explicit `return expr` also works.
-    example:
-      rush: |
-        def double(n)
-          n * 2
-        end
-        result = double(21)  # result is 42
-
-  named_args:
-    syntax: 'deploy("staging", dry_run: true)'
-    note: "Named arguments use colon syntax: name: value. Space after colon is optional: dry_run:true also works."
-
-# ============================================================================
-# BLOCKS & LAMBDAS
-# ============================================================================
+# ── BLOCKS & LAMBDAS ────────────────────────────────────────────
 blocks:
-  description: |
-    Blocks use curly braces with optional parameters in pipes: { |x| body }
-    Used with iteration methods (.each, .map, .select, .reject).
-
   syntax: "collection.method { |item| body }"
+  methods:
+    each: "iterate (no return value)"
+    map: "transform each element → new array"
+    select: "filter where block returns true"
+    reject: "filter where block returns false"
+    sort_by: "sort by block return value"
+    any?: "true if any element matches"
+    all?: "true if all elements match"
+    find: "first element matching block"
+  chaining: |
+    ls /var/log
+      .select { |f| f.name =~ /\.log$/ }
+      .sort_by { |f| f.length }
+      .reverse
+      .first(10)
+      .each { |f| puts f.name }
 
-  examples:
-    - rush: |
-        files.each { |f|
-          puts f.name
-        }
-      powershell: |
-        $files | ForEach-Object {
-          Write-Output $_.Name
-        }
+# ── ARRAYS ───────────────────────────────────────────────────────
+arrays:
+  literal: "[1, 2, 3]"
+  methods: [".count", ".first", ".last", ".reverse", ".sort", ".uniq",
+            ".include?(x)", ".push(x)", ".skip(n)", ".flatten", ".join(sep)"]
 
-    - rush: 'names = users.map { |u| u.name }'
-      powershell: '$names = $users | ForEach-Object { $_.Name }'
+# ── HASHES ───────────────────────────────────────────────────────
+hashes:
+  literal: '{ name: "DNS", port: 53 }  →  @{ name = "DNS"; port = 53 }'
+  access: 'h["key"]'
+  iteration: 'h.each { |k, v| puts "#{k}=#{v}" }'
 
-    - rush: 'big = files.select { |f| f.length > 1mb }'
-      powershell: '$big = $files | Where-Object { $_.Length -gt 1mb }'
-
-    - rush: 'small = files.reject { |f| f.length > 1mb }'
-      powershell: '$small = $files | Where-Object { -not ($_.Length -gt 1mb) }'
-
-  method_chaining:
-    description: "Methods can be chained for pipeline-style data processing"
-    example:
-      rush: |
-        ls /var/log
-          .select { |f| f.name =~ /\.log$/ }
-          .sort_by { |f| f.length }
-          .reverse
-          .first(10)
-          .each { |f| puts "#{f.name}: #{f.length}" }
-
-  chained_output:
-    description: ".print and .puts can be chained on any expression to output it"
-    examples:
-      - { rush: 'Dir.list(".", recursive: true).print', note: "List all files" }
-      - { rush: '[1, 2, 3].map { |x| x * 2 }.puts', note: "Output: 2, 4, 6" }
-      - { rush: 'File.read("config.json").puts', note: "Print file contents" }
-
-# ============================================================================
-# PIPELINES
-# ============================================================================
-pipelines:
-  description: |
-    The | operator works for both shell commands and Rush object methods.
-    Shell commands run natively on *nix (ls, grep, find, etc.).
-    Rush pipeline operators (where, select, count, first, etc.) translate to PowerShell.
-    After-pipe special cases (grep→Where-Object, head→Select-Object, etc.) enable
-    structured filtering in pipelines.
-
-  examples:
-    - rush: "ps aux | grep nginx | grep -v grep"
-      note: "Native shell pipeline — runs directly via OS"
-
-    - rush: "ls /tmp | sort_by { |f| f.size } | first(5)"
-      note: "Rush object pipeline — transpiles to PS pipeline"
-
-    - rush: 'cat server.log | grep "ERROR" | wc -l'
-      note: "Mixed — grep after pipe becomes Where-Object, wc becomes Measure-Object"
-
-  pipeline_operators:
-    where:
-      description: |
-        Filter pipeline objects. Supports three forms:
-        3-arg: `where property operator value` — compare a property with an operator.
-        1-arg regex: `where /pattern/` — match the regex against $_ (the whole line/object).
-        2-arg property regex: `where property /pattern/` — match the regex against a named property.
-      forms:
-        - syntax: "| where property operator value"
-          description: "3-arg — compare a property using an operator (==, !=, >, <, >=, <=, ~, =~, !~)"
-          examples:
-            - { rush: 'netstat | where State == "ESTABLISHED"', note: "Exact match on property" }
-            - { rush: 'ps | where CPU > 50', note: "Numeric comparison" }
-            - { rush: 'data | where CMD =~ rush', note: "Regex match on property value" }
-        - syntax: "| where /pattern/"
-          description: "1-arg regex — match pattern against $_ (the entire line/object)"
-          examples:
-            - { rush: 'cat log.txt | where /error/', note: "Lines matching 'error'" }
-            - { rush: 'history | where /git/', note: "History entries containing 'git'" }
-        - syntax: "| where property /pattern/"
-          description: "2-arg property regex — match pattern against a named property"
-          examples:
-            - { rush: 'ps | where Name /^test/', note: "Processes whose Name starts with 'test'" }
-            - { rush: 'docker ps | where Status /Up/', note: "Containers with 'Up' in Status" }
-
-  pipe_transforms:
-    description: |
-      Rush provides pipe transforms that convert text output to PowerShell objects
-      and select columns by index. These compose with existing transforms like
-      where, select, sort, and as json.
-
-    objectify:
-      description: |
-        Converts text table output (from native commands) into PowerShell objects.
-        Parses a header line and data rows, emitting [PSCustomObject] per row.
-        Numbers are auto-parsed as [long]. Composes with all downstream transforms.
-      flags:
-        - { name: "--delim REGEX", description: "Field delimiter regex (default: \\s+)" }
-        - { name: "--no-header", description: "First line is data — auto-generate col1, col2, ..." }
-        - { name: "--cols name,pid,status", description: "Manual column names (implies --no-header)" }
-        - { name: "--fixed", description: "Fixed-width parsing — detect column boundaries from header positions" }
-        - { name: "--fixed 6,13,20", description: "Fixed-width with explicit column boundary positions" }
-        - { name: "--skip N", description: "Skip first N lines before header" }
-        - { name: "--save", description: "Persist flags to ~/.config/rush/objectify.rush for auto-objectify" }
-      examples:
-        - rush: 'echo "NAME PID\nfoo 123\nbar 456" | objectify | as json'
-          note: "Explicit objectify — text to objects to JSON"
-        - rush: 'my-tool | objectify --fixed | where col1 > 5'
-          note: "Fixed-width parsing for commands with aligned columns"
-        - rush: 'my-tool | objectify --delim "," | select name,value'
-          note: "CSV-like delimiter"
-        - rush: 'my-tool | objectify --fixed --save'
-          note: "Save parse hint to ~/.config/rush/objectify.rush for future auto-objectify"
-
-    auto_objectify:
-      description: |
-        Known commands auto-inject objectify when piped — no explicit objectify needed.
-        Config hierarchy: built-in defaults < /etc/rush/objectify.rush < ~/.config/rush/objectify.rush.
-        Only triggers when the command has downstream pipes; standalone commands show raw text.
-      built_in_commands:
-        - { command: "netstat", flags: "--fixed" }
-        - { command: "ss", flags: "" }
-        - { command: "lsof", flags: "--fixed" }
-        - { command: "free", flags: "--skip 1" }
-        - { command: "docker ps", flags: '--delim "\\s{2,}"' }
-        - { command: "docker images", flags: '--delim "\\s{2,}"' }
-        - { command: "kubectl get", flags: "" }
-        - { command: "mount", flags: "" }
-      config_format: |
-        # ~/.config/rush/objectify.rush
-        # command     flags
-        netstat       --fixed
-        docker ps     --delim "\s{2,}"
-        my-tool       --fixed 0,10,20
-      examples:
-        - rush: 'netstat | where State == "ESTABLISHED" | as json'
-          note: "Auto-objectify — netstat is a known command with --fixed hint"
-        - rush: 'docker ps | where Status ~ "Up" | select Names'
-          note: "Auto-objectify — 2-word command match (docker ps)"
-        - rush: 'netstat'
-          note: "No pipes — shows raw text output, no objectify injected"
-
-    columns:
-      description: |
-        Index-based column selection (1-based, like awk). Complements select (which uses names).
-      examples:
-        - rush: 'echo "a b c d e" | objectify | columns 1,3,5'
-          note: "Select columns 1, 3, 5 by index"
-        - rush: 'netstat | columns 1 4 6'
-          note: "Space-separated indices also work (with auto-objectify)"
-
-# ============================================================================
-# REGULAR EXPRESSIONS
-# ============================================================================
-regex:
-  description: |
-    Clean, unambiguous regex support. /pattern/ literals, =~ for match,
-    string methods for substitution. No obscure operators to memorize.
-
-  literals:
-    syntax: "/pattern/flags"
-    flags: ["i (case-insensitive)", "m (multiline)", "x (extended/verbose)"]
-    transpiles_to: "[regex]'pattern'"
-    examples:
-      - { rush: '/^test/', powershell: "[regex]'^test'" }
-      - { rush: '/error|warn/i', powershell: "[regex]'(?i)error|warn'" }
-
-  match:
-    operators:
-      - { rush: "=~",  powershell: "-match",    description: "Returns true if pattern matches" }
-      - { rush: "!~",  powershell: "-notmatch", description: "Returns true if pattern does NOT match" }
-    examples:
-      - { rush: 'name =~ /^test/', powershell: '$name -match "^test"' }
-      - { rush: 'name !~ /admin/', powershell: '$name -notmatch "admin"' }
-
-  string_methods:
-    description: "Substitution via methods — no sed s/// syntax"
-    methods:
-      - name: ".sub(pattern, replacement)"
-        description: "Replace first match"
-        example: { rush: 'line.sub(/^#\s*/, "")', powershell: '$line -replace "^#\s*", "" | Select-Object -First 1' }
-      - name: ".gsub(pattern, replacement)"
-        description: "Replace all matches"
-        example: { rush: 'text.gsub(/\t/, "  ")', powershell: '$text -replace "\t", "  "' }
-      - name: ".scan(pattern)"
-        description: "Return all matches as array"
-        example: { rush: 'path.scan(/[^\/]+/)', powershell: '[regex]::Matches($path, "[^/]+").Value' }
-      - name: ".match(pattern)"
-        description: "Return match object with captures"
-        example: { rush: 'line.match(/^(\w+)=(.*)$/)', note: "Access groups: m[1], m[2]" }
-
-  design_principles:
-    - "/pattern/ for literals — universally understood"
-    - "=~ for match, !~ for not match — unambiguous, widely recognized"
-    - ".sub / .gsub / .scan for substitution — method syntax, not s/// syntax"
-    - "No obscure operators to memorize"
-
-# ============================================================================
-# STRING METHODS (color + formatting)
-# ============================================================================
+# ── STRINGS (methods) ───────────────────────────────────────────
 string_methods:
-  color:
-    description: |
-      Colored output via string methods. Colors are SO common in shell scripts
-      they should be ergonomic. Transpiles to Write-Host with -ForegroundColor.
-    methods: ["red", "green", "blue", "cyan", "yellow", "magenta", "white", "gray"]
-    syntax: '"text".color_name'
-    examples:
-      - { rush: 'puts "OK".green', transpiles_to: 'Write-Host "OK" -ForegroundColor Green' }
-      - { rush: 'puts "FAIL".red', transpiles_to: 'Write-Host "FAIL" -ForegroundColor Red' }
-      - { rush: 'puts "#{count} errors".red', note: "Interpolation + color" }
-    note: "Also works in chaining: price.round(2).to_currency.green"
+  transform: [".upcase", ".downcase", ".strip", ".lstrip", ".rstrip", ".reverse"]
+  query: [".length", ".empty?", ".include?(s)", ".start_with?(s)", ".end_with?(s)"]
+  modify: [".replace(old, new)", ".split(sep)", ".split_whitespace", ".lines",
+           ".ljust(n)", ".rjust(n)", ".trim_end(chars)", ".sub(pat, rep)", ".gsub(pat, rep)"]
+  convert: [".to_i", ".to_f", ".to_s"]
+  color: [".red", ".green", ".blue", ".cyan", ".yellow", ".magenta", ".white", ".gray"]
+  output: [".print", ".puts"]
 
-  formatting:
-    methods:
-      - { name: ".upcase", description: "Uppercase" }
-      - { name: ".downcase", description: "Lowercase" }
-      - { name: ".strip", description: "Remove leading/trailing whitespace" }
-      - { name: ".lstrip / .rstrip", description: "Remove leading/trailing only" }
-      - { name: ".trim_end(chars)", description: "Remove trailing specific chars (e.g. trim_end('%'))" }
-      - { name: ".ljust(n) / .rjust(n)", description: "Pad to n characters" }
-      - { name: ".split(sep)", description: "Split into array by separator (string or regex)" }
-      - { name: ".split_whitespace", description: "Split by any whitespace (like awk default)" }
-      - { name: ".lines", description: "Split by newline into array" }
-      - { name: ".skip(n)", description: "Skip first n elements (works on arrays and line collections)" }
-      - { name: ".to_i / .to_f", description: "Convert to integer/float" }
-      - { name: ".to_s", description: "Convert to string" }
+# ── NUMERIC METHODS ──────────────────────────────────────────────
+numeric_methods: [".abs", ".round(n)", ".to_i", ".to_f", ".to_s",
+                  ".to_currency", ".to_filesize", ".to_percent",
+                  ".times { |i| }"]
 
-# ============================================================================
-# NUMERIC METHODS
-# ============================================================================
-numeric_methods:
-  description: |
-    Method chaining on numbers for formatting. Extends the "text".green
-    philosophy: ergonomic methods on everything, daisy-chainable.
+# ── REGEX ────────────────────────────────────────────────────────
+regex:
+  literal: "/pattern/flags  (flags: i, m, x)"
+  match: "str =~ /pat/  |  str !~ /pat/"
+  methods: [".sub(pat, rep) — first match", ".gsub(pat, rep) — all matches",
+            ".scan(pat) — all matches as array", ".match(pat) — match object"]
 
-  methods:
-    - name: ".round(n)"
-      description: "Round to n decimal places"
-      examples:
-        - { rush: "3.1415.round(2)", result: "3.14" }
-        - { rush: "elapsed.round(1)", result: "e.g. 3.2" }
-    - name: ".to_i / .to_f"
-      description: "Convert between integer and float"
-    - name: ".abs"
-      description: "Absolute value"
-    - name: ".to_currency(pad: 0)"
-      description: "Format as currency string"
-      examples:
-        - { rush: "14.25.to_currency", result: '"$14.25"' }
-        - { rush: "4.25.to_currency(pad: 10)", result: '"     $4.25"', note: "Right-aligned in field" }
-      note: "Returns a string — chainable with .green etc."
-    - name: ".to_filesize"
-      description: "Human-readable file size"
-      examples:
-        - { rush: "1048576.to_filesize", result: '"1.0 MB"' }
-        - { rush: "(bytes / 1kb).to_filesize", result: '"e.g. 4.2 GB"' }
-    - name: ".to_percent(decimals: 1)"
-      description: "Format as percentage"
-      examples:
-        - { rush: "0.8734.to_percent", result: '"87.3%"' }
-    - name: ".times { |i| }"
-      description: "Iterate N times (0-indexed)"
-      transpiles_to: "0..(N-1) | ForEach-Object { }"
-
-  chaining:
-    description: "Numeric and string methods chain freely"
-    examples:
-      - { rush: 'price.round(2).to_currency.green', note: '"$14.25" printed in green' }
-      - { rush: 'elapsed.round(1).to_s + " seconds"', note: '"3.2 seconds"' }
-      - { rush: '(bytes / 1mb).round(1).to_s.rjust(8) + " MB"', note: '"    14.2 MB"' }
-
-# ============================================================================
-# HASH LITERALS
-# ============================================================================
-hash_literals:
-  description: |
-    Hash (dictionary) literals use { key: value } syntax.
-    Transpile to PowerShell hashtables @{ Key = Value }.
-  syntax: "{ key1: value1, key2: value2 }"
-  transpiles_to: "@{ key1 = value1; key2 = value2 }"
-  examples:
-    - rush: '{ name: "DNS", port: 53 }'
-      powershell: '@{ name = "DNS"; port = 53 }'
-    - rush: |
-        ports = [
-          { port: 53,  name: "DNS" },
-          { port: 88,  name: "Kerberos" },
-        ]
-      note: "Array of hashes — very common pattern"
-  iteration:
-    syntax: 'hash.each { |k, v| puts "#{k}=#{v}" }'
-    transpiles_to: '$hash.GetEnumerator() | ForEach-Object { ... }'
-    note: "Block receives key and value parameters"
-
-# ============================================================================
-# CLASSES
-# ============================================================================
+# ── CLASSES ──────────────────────────────────────────────────────
 classes:
-  status: "implemented"
-  description: |
-    Class definitions that transpile to PowerShell classes.
-    Supports attributes (attr), constructors (initialize), instance methods,
-    static methods, inheritance, and self for property access.
-    Instantiation uses ClassName.new().
-
   syntax: |
-    class ClassName
-      attr prop1, prop2
+    class Dog < Animal
+      attr name, breed
+      attr age: Int = 0
 
-      def initialize(param1, param2: default)
-        self.prop1 = param1
-        self.prop2 = param2
+      def initialize(name, breed)
+        super(name)
+        self.breed = breed
       end
 
-      def method_name(args)
-        return self.prop1 + self.prop2
+      def speak
+        return self.name + " says Woof!"
+      end
+
+      def self.species
+        return "Canis lupus"
       end
     end
 
-  transpiles_to: |
-    class ClassName {
-      [object]$Prop1
-      [object]$Prop2
-
-      ClassName([object]$Param1, [object]$Param2) {
-        $this.Prop1 = $Param1
-        $this.Prop2 = $Param2
-      }
-
-      [object] MethodName([object]$Args) {
-        return $this.Prop1 + $this.Prop2
-      }
-    }
-
-  keywords:
-    - { keyword: "class", description: "Begins a class definition, closed by 'end'" }
-    - { keyword: "attr", description: "Declare instance attributes (comma-separated, with optional type: attr name: String)" }
-    - { keyword: "self", description: "Reference the current instance (transpiles to $this)" }
-    - { keyword: "super", description: "Call parent class constructor or method" }
-
-  typed_attributes:
-    status: "implemented"
-    description: |
-      Attributes can have optional type annotations. The type maps to a
-      PowerShell type accelerator (string, int, bool, double) or passes
-      through as a custom class name.
-    syntax: "attr name: String, age: Int, active: Bool"
-    transpiles_to: "[string]$Name\n[int]$Age\n[bool]$Active"
-    note: "Untyped attrs remain [object]. Type names are case-insensitive."
-
-  instantiation:
-    syntax: "ClassName.new(args)"
-    named_args: "ClassName.new(breed: \"Lab\", name: \"Rex\")"
-    transpiles_to: "[ClassName]::new(args)"
-    named_args_transpiles_to: "[ClassName]::new(\"Rex\", \"Lab\")  # reordered to match constructor params"
-    note: "Named args at .new() are matched to constructor parameter names and reordered to positional."
-
-  constructor:
-    description: |
-      A method named 'initialize' becomes the constructor.
-      Supports default parameters (named args with : syntax).
-      Default parameters generate constructor overloads in PowerShell
-      since PS constructors don't support default values natively.
-    syntax: |
-      def initialize(name, age: 0)
-        self.name = name
-        self.age = age
-      end
-    transpiles_to: |
-      # With defaults: generates hidden _Init + overloads
-      hidden _Init([object]$Name, [object]$Age) {
-        $this.Name = $Name
-        $this.Age = $Age
-      }
-      ClassName([object]$Name) {       # 1-arg overload
-        $this._Init($Name, 0)
-      }
-      ClassName([object]$Name, [object]$Age) {  # 2-arg overload
-        $this._Init($Name, $Age)
-      }
-
-  methods:
-    description: |
-      Instance methods defined with def/end. Methods with a return statement
-      get [object] return type; methods without return get [void].
-      Method names are PascalCased in transpiled output.
-    syntax: |
-      def greet
-        return "Hello, " + self.name
-      end
-    transpiles_to: |
-      [object] Greet() {
-        return "Hello, " + $this.Name
-      }
-
-  property_access:
-    description: |
-      Property access uses explicit self.prop syntax. Bare variable names
-      are NOT auto-resolved to properties — keeps transpilation stateless.
-    examples:
-      - { rush: "self.name", transpiles_to: "$this.Name" }
-      - { rush: "self.name = value", transpiles_to: "$this.Name = $value" }
-
-  examples:
-    - description: "Data class with constructor and methods"
-      rush: |
-        class Greeter
-          attr name
-
-          def initialize(name)
-            self.name = name
-          end
-
-          def greet
-            return "Hello, " + self.name
-          end
-        end
-
-        g = Greeter.new("World")
-        puts g.greet()
-      output: "Hello, World"
-
-    - description: "Class with default constructor parameters"
-      rush: |
-        class Counter
-          attr value
-
-          def initialize(start: 0)
-            self.value = start
-          end
-
-          def increment
-            self.value = self.value + 1
-          end
-
-          def get_value
-            return self.value
-          end
-        end
-
-        c = Counter.new(10)
-        c.increment()
-        c.increment()
-        puts c.get_value()
-      output: "12"
-
-  inheritance:
-    status: "implemented"
-    description: |
-      Single inheritance using < syntax. Child classes inherit all attributes
-      and methods from the parent. Use super() in constructors and super.method()
-      to call parent implementations.
-    syntax: |
-      class Animal
-        attr name
-        def initialize(name)
-          self.name = name
-        end
-        def speak
-          return "..."
-        end
-      end
-
-      class Dog < Animal
-        attr breed
-        def initialize(name, breed)
-          super(name)
-          self.breed = breed
-        end
-        def speak
-          return self.name + " says Woof!"
-        end
-      end
-    transpiles_to: |
-      class Animal {
-        [object]$Name
-        Animal([object]$Name) { $this.Name = $Name }
-        [object] Speak() { return "..." }
-      }
-      class Dog : Animal {
-        [object]$Breed
-        Dog([object]$Name, [object]$Breed) : base($Name) {
-          $this.Breed = $Breed
-        }
-        [object] Speak() { return $this.Name + " says Woof!" }
-      }
-    super_calls:
-      - form: "super(args)"
-        description: "Call parent constructor — extracted to : base(args) in PS"
-        note: "Must be in a child class constructor (def initialize)"
-      - form: "super.method(args)"
-        description: "Call parent method — transpiles to ([Parent]$this).Method(args)"
-        note: "Used to extend parent behavior in method overrides"
-    rules:
-      - "Base class must be defined before derived class in the same script"
-      - "super(args) in constructor → : base(args) in PowerShell"
-      - "super.method() in methods → ([ParentClass]$this).Method()"
-      - "When parent has a parameterized constructor, child must define its own with super()"
-
-  static_methods:
-    status: "implemented"
-    description: |
-      Static methods belong to the class, not instances. Defined with
-      def self.method_name() inside a class body. Called via ClassName.method().
-    syntax: |
-      class MathHelper
-        def self.add(a, b)
-          return a + b
-        end
-      end
-
-      result = MathHelper.add(2, 3)
-    transpiles_to: |
-      class MathHelper {
-        static [object] Add([object]$A, [object]$B) {
-          return ($A + $B)
-        }
-      }
-      $result = [MathHelper]::Add(2, 3)
-    rules:
-      - "def self.name() defines a static method — the self. prefix is required"
-      - "ClassName.method(args) calls a static method → [ClassName]::Method(args)"
-      - "ClassName.property accesses a static property → [ClassName]::Property"
-      - "Instance and static methods can coexist in the same class"
-      - "PascalCase receiver (not ALL_CAPS) triggers class method dispatch"
-
+    d = Dog.new("Rex", "Lab")
+    puts d.speak()
+    puts Dog.species()
   rules:
-    - "self.prop is required — no bare name resolution to $this.Prop"
-    - "attr is untyped — maps to [object]$Name in PowerShell"
-    - ".new() is the only instantiation syntax — detected by uppercase first char"
-    - "Methods without return get [void]; methods with return get [object]"
-    - "Constructor defaults generate PS constructor overloads (PS doesn't support constructor defaults)"
-    - "Inheritance uses < syntax, not : or extends"
-    - "Static methods use def self.method_name()"
+    - "self.prop for instance access (not bare name)"
+    - ".new() for instantiation"
+    - "def self.method() for static methods"
+    - "attr with optional type and default: attr name: String = \"unnamed\""
+    - "Inheritance uses < syntax"
+    - "super(args) in constructor, super.method() in methods"
 
-  deferred: []  # All planned class features are now implemented
-
-# ============================================================================
-# ENUMS
-# ============================================================================
+# ── ENUMS ────────────────────────────────────────────────────────
 enums:
-  status: "implemented"
-  description: |
-    Enum definitions using enum/end blocks. Members are listed one per line
-    with optional explicit integer values. Access via EnumName.member syntax.
-    Transpiles to PowerShell 7 native enums.
+  syntax: "enum Color; red; green; blue; end"
+  access: "Color.red  →  [Color]::Red"
+  values: "enum Status; pending = 0; active = 1; end"
 
-  syntax: |
-    enum Color
-      red
-      green
-      blue
-    end
+# ── ERROR HANDLING ───────────────────────────────────────────────
+errors:
+  syntax: "begin ... rescue ExType => e ... ensure ... end  →  try/catch/finally"
+  shorthand: "try ... rescue e ... end"
+  raise: "die \"message\"  →  throw"
 
-    enum Status
-      pending = 0
-      active = 1
-      inactive = 2
-    end
+# ── PLATFORM BLOCKS ──────────────────────────────────────────────
+platforms:
+  keywords: [macos, linux, win64, win32]
+  syntax: "macos; puts \"macOS\"; end  →  if ($os -eq 'macos') { }"
+  properties: [".arch (x64, arm64)", ".version (OS version comparison)"]
+  win32_note: "win32 body is raw PowerShell 5.1 (for 32-bit OLEDB/ODBC)"
 
-  transpiles_to: |
-    enum Color {
-      Red
-      Green
-      Blue
-    }
+# ── STDLIB: File ─────────────────────────────────────────────────
+file_stdlib:
+  - "File.read(path) — entire file as string"
+  - "File.read_lines(path) — array of lines"
+  - "File.read_json(path) — parse JSON → object"
+  - "File.read_csv(path) — parse CSV → array of objects"
+  - "File.write(path, content) — write/overwrite"
+  - "File.append(path, content) — append"
+  - "File.exist?(path) — boolean"
+  - "File.delete(path) — remove file"
+  - "File.size(path) — bytes"
 
-    enum Status {
-      Pending = 0
-      Active = 1
-      Inactive = 2
-    }
+# ── STDLIB: Dir ──────────────────────────────────────────────────
+dir_stdlib:
+  - "Dir.list(path, type:nil, recursive:false, hidden:false) — list entries"
+  - "Dir.list(path, :files) — shorthand for type:'file'"
+  - "Dir.list(path, :dirs) — shorthand for type:'dir'"
+  - "Dir.list(path, :recurse) — shorthand for recursive:true"
+  - "Dir.list(path, :hidden) — shorthand for hidden:true"
+  - "Dir.exist?(path) — boolean"
+  - "Dir.mkdir(path) — create with parents"
 
-  access:
-    syntax: "Color.red"
-    transpiles_to: "[Color]::Red"
-    note: "Uses same uppercase receiver generalization as static methods"
+# ── STDLIB: Time ─────────────────────────────────────────────────
+time_stdlib:
+  - "Time.now — current datetime"
+  - "24.hours / 30.minutes / 7.days — TimeSpan durations"
+  - "Time.now - 24.hours — datetime arithmetic"
 
+# ── PIPELINE OPERATORS ───────────────────────────────────────────
+pipeline_ops:
+  - "| where prop op value — filter (==, !=, >, <, =~, !~)"
+  - "| where /regex/ — match against full line"
+  - "| where prop /regex/ — match against property"
+  - "| select prop1, prop2 — pick columns"
+  - "| sort — sort ascending"
+  - "| sort --desc — sort descending"
+  - "| first N — take first N"
+  - "| last N — take last N"
+  - "| skip N — skip first N"
+  - "| count — count items"
+  - "| distinct — unique values"
+  - "| sum / avg / min / max — aggregates"
+  - "| as json — format as JSON"
+  - "| as csv — format as CSV"
+  - "| tee file — write to file and pass through"
+  - "| objectify — convert text table to objects"
+  - "| columns 1,3,5 — select columns by index (1-based)"
+
+# ── STATIC MEMBER ACCESS ────────────────────────────────────────
+static_access:
+  syntax: "[Type]::Member or [Type]::Method(args)"
   examples:
-    - description: "Define and use an enum"
-      rush: |
-        enum Color
-          red
-          green
-          blue
-        end
+    - "[Math]::PI  →  3.14159..."
+    - "[Math]::Abs(-42)  →  42"
+    - "[IO.Path]::GetExtension(f)"
 
-        favorite = Color.blue
-        puts favorite
-      output: "Blue"
+# ── PREDICATE METHODS ────────────────────────────────────────────
+predicates:
+  - ".empty? — string/array is empty"
+  - ".nil? — value is null"
+  - ".include?(x) — collection contains x"
+  - ".start_with?(s) / .end_with?(s)"
+  - ".exist? — File/Dir existence"
+  - "$?.ok? / $?.failed? / $?.code — last exit status"
 
-    - description: "Enum comparison"
-      rush: |
-        enum Status
-          pending = 0
-          active = 1
-          inactive = 2
-        end
+# ── BUILT-IN FUNCTIONS ───────────────────────────────────────────
+builtins:
+  - "puts expr — print with newline (Write-Output)"
+  - "print expr — print without newline (Write-Host -NoNewline)"
+  - "warn expr — print to stderr (Write-Warning)"
+  - "die msg — raise fatal error (throw)"
+  - "exit N — exit with code"
+  - "sleep N — sleep N seconds"
+  - "ask prompt — interactive input (Read-Host)"
 
-        s = Status.active
-        if s == Status.active
-          puts "is active"
-        end
-      output: "is active"
+# ── BUILT-IN VARIABLES ──────────────────────────────────────────
+builtin_vars:
+  - "$? — last exit status (.ok?, .failed?, .code)"
+  - "ARGV — script arguments array"
+  - "env.NAME or env[\"NAME\"] — environment variables"
+  - "env[/REGEX/] — filter env vars by pattern"
+  - "__FILE__ / __DIR__ — current script path/directory"
 
-  rules:
-    - "Enum name must start with uppercase (PascalCase)"
-    - "Members are lowercase in Rush, PascalCased in transpiled output"
-    - "Optional = N for explicit integer values"
-    - "Access via EnumName.member — same as static property access"
-    - "Enum must be defined before use in the same script"
-
-# ============================================================================
-# ERROR HANDLING
-# ============================================================================
-error_handling:
-  description: |
-    Structured begin/rescue/ensure/end for exception handling.
-
-  syntax: |
-    begin
-      risky_operation()
-    rescue IOError => e
-      puts "IO failed: #{e.message}"
-    rescue => e
-      puts "something failed: #{e.message}"
-    ensure
-      cleanup()
-    end
-  transpiles_to: |
-    try {
-      risky_operation
-    } catch [System.IO.IOException] {
-      $e = $_
-      Write-Output "IO failed: $($e.Message)"
-    } catch {
-      $e = $_
-      Write-Output "something failed: $($e.Message)"
-    } finally {
-      cleanup
-    }
-
-# ============================================================================
-# STANDARD LIBRARY OBJECTS
-# ============================================================================
-stdlib:
-  File:
-    description: "File operations — clean OO interface over .NET System.IO"
-    status: "implemented"
-    methods:
-      - { name: "File.read(path)", description: "Read entire file as string", transpiles_to: "Get-Content path -Raw" }
-      - { name: "File.read_lines(path)", description: "Read file as array of lines", transpiles_to: "@(Get-Content path)" }
-      - { name: "File.read_json(path)", description: "Read and parse JSON file → object/hash", transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)" }
-      - { name: "File.read_csv(path)", description: "Read and parse CSV file → array of objects", transpiles_to: "@(Import-Csv path)" }
-      - { name: "File.write(path, content)", description: "Write string to file (overwrites)", transpiles_to: "Set-Content -Path path -Value content" }
-      - { name: "File.append(path, content)", description: "Append string to file", transpiles_to: "Add-Content -Path path -Value content" }
-      - { name: "File.exist?(path)", description: "Check if file exists", transpiles_to: "(Test-Path path)" }
-      - { name: "File.delete(path)", description: "Delete a file", transpiles_to: "Remove-Item path" }
-      - { name: "File.size(path)", description: "File size in bytes", transpiles_to: "(Get-Item path).Length" }
-    examples:
-      - rush: 'content = File.read("config.txt")'
-        note: "Read file to string"
-      - rush: 'data = File.read_json("config.json"); puts data.name'
-        note: "Parse JSON and access properties directly"
-      - rush: 'rows = File.read_csv("data.csv"); puts rows.count'
-        note: "Parse CSV — each row is an object with column-name properties"
-      - rush: 'File.write("output.txt", result)'
-        note: "Standalone write — no assignment needed"
-
-  Dir:
-    description: "Directory operations"
-    status: "implemented"
-    methods:
-      - name: "Dir.list(path, type: nil, recursive: false, hidden: false)"
-        description: "List directory contents with optional filters"
-        examples:
-          - { rush: 'Dir.list(".")', note: "All entries (files + dirs)" }
-          - { rush: 'Dir.list(".", type: "file")', note: "Files only" }
-          - { rush: 'Dir.list(".", type: "dir")', note: "Directories only" }
-          - { rush: 'Dir.list("src", recursive: true)', note: "All entries recursively" }
-          - { rush: 'Dir.list(".", type: "file", hidden: true)', note: "Include hidden files" }
-        note: "One method with named arg filters. Shell `find` still works for complex cases"
-      - { name: "Dir.exist?(path)", description: "Check if directory exists" }
-      - { name: "Dir.mkdir(path)", description: "Create directory (and parents)" }
-
-  predicate_methods:
-    description: |
-      Methods ending in `?` return boolean — self-documenting, clearly
-      boolean, reads like English.
-    examples:
-      - { method: ".empty?", description: "True if string/array is empty" }
-      - { method: ".include?(x)", description: "True if collection contains x" }
-      - { method: ".start_with?(s)", description: "True if string starts with s" }
-      - { method: ".end_with?(s)", description: "True if string ends with s" }
-      - { method: ".nil?", description: "True if value is nil/null" }
-      - { method: ".exist?", description: "True if file/dir exists (File/Dir)" }
-      - { method: ".ok?", description: "True if exit status was 0 ($?)" }
-      - { method: ".failed?", description: "True if exit status was non-zero ($?)" }
-    transpilation: |
-      `.empty?` → `.Length -eq 0` or `-eq ''`
-      `.include?(x)` → `-contains x` or `.Contains(x)`
-      `.start_with?(s)` → `.StartsWith(s)`
-      `.ok?` → `$LASTEXITCODE -eq 0`
-    note: "Transpiler strips the `?` and maps to .NET/PS equivalents"
-
-# ============================================================================
-# BUILT-IN VARIABLES
-# ============================================================================
-builtin_variables:
-  - { name: "$?", description: "Last command exit status (has .ok?, .failed?, .code)" }
-  - { name: "ARGV", description: "Script arguments array" }
-  - name: "env"
-    description: "Environment variables — dot access, bracket access, or regex filter"
-    examples:
-      - { rush: "env.HOME", powershell: "$env:HOME", note: "Dot access for clean names (99% of cases)" }
-      - { rush: "env.PATH", powershell: "$env:PATH" }
-      - { rush: 'env["LD_LIBRARY_PATH"]', powershell: '$env:LD_LIBRARY_PATH', note: "Bracket access for any name" }
-      - { rush: 'env["MY-VAR"]', powershell: '${env:MY-VAR}', note: "Bracket required for names with hyphens/special chars" }
-      - rush: 'env[/PATH/]'
-        powershell: 'Get-ChildItem env: | Where-Object { $_.Name -match "PATH" }'
-        note: "Regex filter — returns hash of all matching env vars"
-      - rush: 'env[/^RUSH_/]'
-        note: "All env vars starting with RUSH_"
-      - rush: 'env[/PATH/].each { |k, v| puts "#{k}=#{v}" }'
-        note: "Iterate over filtered env vars"
-    note: "Lowercase `env` — clean and readable. Transpiles to PowerShell $env: provider"
-  - { name: "__FILE__", description: "Current script path" }
-  - { name: "__DIR__", description: "Current script directory" }
-  - { name: "needs_reload", description: "True if binary updated since startup (available in rush_prompt)" }
-  - { name: "__rush_arch", description: "CPU architecture: x64, arm64, x86" }
-  - { name: "__rush_os_version", description: "OS version string (Darwin/kernel/Windows version)" }
-
-# ============================================================================
-# BUILT-IN FUNCTIONS
-# ============================================================================
-builtin_functions:
-  - { name: "puts", transpiles_to: "Write-Output", description: "Print with newline" }
-  - { name: "print", transpiles_to: "Write-Host -NoNewline", description: "Print without newline" }
-  - { name: "warn", transpiles_to: "Write-Warning", description: "Print to stderr" }
-  - { name: "die", transpiles_to: "throw", description: "Raise fatal error" }
-  - { name: "exit", transpiles_to: "exit", description: "Exit with code" }
-  - { name: "sleep", transpiles_to: "Start-Sleep -Seconds", description: "Sleep N seconds" }
-  - { name: "cd", transpiles_to: "Set-Location", description: "Change directory" }
-  - { name: "pwd", transpiles_to: "Get-Location", description: "Current directory" }
-  - { name: "which", transpiles_to: "Get-Command", description: "Find command" }
-  - { name: "type", transpiles_to: "Get-Content", description: "Read file contents" }
-  - name: "ask"
-    description: "Interactive prompt — returns user input"
-    examples:
-      - { rush: 'name = ask "What is your name? "', note: "Returns string input" }
-      - { rush: 'ans = ask "Continue? (y/n) ", char: true', note: "Single character, no Enter needed" }
-    transpiles_to: "Read-Host (with char: true → [Console]::ReadKey())"
-  - name: "ai"
-    description: "AI assistant — query an LLM with shell context. Streams response in real-time. Markdown code fences are stripped automatically. Piped commands include stderr."
-    syntax:
-      basic: 'ai "your prompt here"'
-      with_flags: 'ai --provider ollama --model llama3.2 "your prompt"'
-      pipe_context: 'cat file.txt | ai "summarize this"'
-      stdin_redirect: 'ai "explain this" < config.yaml'
-      capture_output: 'ai "generate a Makefile" > Makefile'
-      exec_last: 'ai --exec'
-    semantics:
-      invocation: |
-        ai is a REPL builtin, not a Rush expression. It is handled directly
-        in the command loop before transpilation. It cannot appear on the
-        right side of an assignment — `result = ai "prompt"` is NOT valid.
-      output: |
-        Tokens stream to stdout in real-time as they arrive from the API.
-        The complete response is stored internally for ai --exec.
-        To capture output, use shell redirection: ai "prompt" > file.txt
-      turns: "Single-turn by default. Each ai call sends one system message + one user message. No conversation state is preserved. Use ai --agent for multi-turn autonomous execution."
-      pipe_to_ai: |
-        When the last segment of a pipeline is `ai`, Rush intercepts it:
-        runs everything before `| ai` through PowerShell, captures stdout,
-        and passes it to the AI as context. The user message becomes:
-          [Input]
-          <captured output from pipe>
-
-          [Question]
-          <the prompt>
-      stdin_redirect_behavior: |
-        `ai "prompt" < file` reads the file content and passes it as
-        piped input (same format as pipe-to-ai). Parsed by RedirectionParser.
-      context_injection: |
-        The system prompt automatically includes: Rush version, detailed OS
-        (e.g. "macOS 15.2 (arm64)"), current working directory, last 10
-        commands from history, and the full rush-lang-spec.yaml embedded
-        as a .NET resource. No manual context injection is needed.
-    flags:
-      - { flag: "--provider <name>", description: "Override AI provider for this call" }
-      - { flag: "--model <name>", description: "Override model for this call" }
-      - { flag: "--system <text>", description: "Override the system prompt entirely" }
-      - { flag: "--exec", description: "Execute last AI response as a shell command (separate call, no prompt)" }
-      - { flag: "--agent", description: "Autonomous agent mode — multi-turn task execution with tool_use" }
-    agent_mode:
-      description: |
-        ai --agent "task description" runs the AI as an autonomous agent.
-        The agent executes commands via LlmMode's execution engine (same
-        process, shared runspace) and iterates until the task is complete.
-      behavior: |
-        1. Sends task to LLM API with tool/function calling (run_command tool)
-        2. Streams thinking text to terminal (dim gray)
-        3. Executes tool calls via LlmMode.ExecuteCommand()
-        4. Feeds structured JSON results back to the LLM
-        5. Repeats until LLM sends end_turn or max 25 turns reached
-      tool:
-        name: "run_command"
-        input: '{ "command": "ls -la", "timeout_seconds": 30 }'
-        returns: "LlmResult JSON envelope (status, stdout, stderr, exit_code, cwd)"
-      terminal_output: |
-        Thinking text: dim gray. Commands: cyan with ▸ prefix.
-        Results: ✓ green (success) or ✗ red (error) with one-line summary.
-        Summary line: "Done. N commands, M turns, Xs"
-      supported_providers: "Anthropic (tool_use) and Gemini (function calling). OpenAI support planned."
-    flag_notes: |
-      Flags and prompt can appear in any order. The prompt is whatever tokens
-      remain after flag extraction. Quoted strings are preserved as single tokens.
-      Example: ai --model gpt-4o --provider openai "explain this code"
-      Example: ai --agent "find all TODO comments in the codebase"
-    providers:
-      builtin:
-        - { name: "anthropic", default_model: "claude-sonnet-4-20250514", api_key_env: "ANTHROPIC_API_KEY", note: "Default provider" }
-        - { name: "openai", default_model: "gpt-4o", api_key_env: "OPENAI_API_KEY" }
-        - { name: "gemini", default_model: "gemini-2.0-flash", api_key_env: "GEMINI_API_KEY" }
-        - { name: "ollama", default_model: "llama3.2", api_key_env: "", note: "Local — no API key needed" }
-      custom: |
-        Drop a JSON file in ~/.config/rush/ai-providers/:
-        { "name": "together", "endpoint": "https://api.together.xyz/v1/chat/completions",
-          "format": "openai", "apiKeyEnvVar": "TOGETHER_API_KEY",
-          "defaultModel": "meta-llama/Llama-3-70b-chat-hf" }
-        format field selects the API wire format: openai, anthropic, gemini, or ollama.
-        Custom providers override builtins if names collide.
-      model_override: |
-        --model works per-call and overrides both config and provider default.
-        You can use any model the provider supports:
-          ai --model claude-sonnet-4-20250514 "prompt"   # specific Anthropic model
-          ai --provider openai --model gpt-4o "prompt"   # cross-provider + model
-    examples:
-      - { rush: 'ai "how do I find large files?"', note: "Simple prompt — streams to terminal" }
-      - { rush: 'ai "what went wrong?" < error.log', note: "File context via stdin redirection" }
-      - { rush: 'cat error.log | ai "what went wrong?"', note: "Pipe context into AI — stderr included" }
-      - { rush: 'git diff | ai "write a commit message"', note: "Pipe command output as context" }
-      - { rush: 'ai --provider ollama "hello"', note: "Use a specific provider for this call" }
-      - { rush: 'ai --model gpt-4o "explain this"', note: "Use a specific model for this call" }
-      - { rush: 'ai "generate a dockerfile" > Dockerfile', note: "Capture response to file" }
-      - { rush: 'ai --exec', note: "Run last AI response — prefers code block content" }
-      - { rush: 'ai --system "You are a pirate" "translate this"', note: "Override system prompt" }
-    transpiles_to: "native (not transpiled — HttpClient streaming to console, handled in REPL loop)"
-    config:
-      - { key: "aiProvider", default: "anthropic", options: "anthropic, openai, gemini, ollama, or custom" }
-      - { key: "aiModel", default: "auto", note: "auto = use provider default model" }
-    setup: "set --secret ANTHROPIC_API_KEY sk-ant-..."
-    limitations:
-      - "NOT an expression — cannot assign: `result = ai \"prompt\"` is invalid"
-      - "Single-turn only — no multi-turn conversation state"
-      - "No --file flag — use stdin redirection or pipe instead"
-      - "No tool use / function calling — simple chat completion"
-      - "Context window depends on provider/model — large prompts (14k+ tokens) work fine with Claude/GPT-4o but may truncate with smaller models"
-    notes:
-      - "Markdown code fences (```) are stripped from output automatically"
-      - "ai --exec prefers code block content over full response — explanatory text is skipped"
-      - "When piping to ai, both stdout and stderr from the prefix command are sent as context"
-      - "Cancellable with Ctrl+C — gracefully stops streaming"
-
-# ============================================================================
-# SHELL BUILTINS (REPL commands — not transpiled, handled directly)
-# ============================================================================
+# ── SHELL BUILTINS ───────────────────────────────────────────────
 shell_builtins:
-  - name: "cat"
-    description: "Read/concatenate files — custom .NET builtin (not PowerShell Get-Content)"
-    examples:
-      - { rush: 'cat file.txt', note: "Print file contents" }
-      - { rush: 'cat -n file.txt', note: "Print with line numbers" }
-      - { rush: 'cat file1.txt file2.txt', note: "Concatenate multiple files" }
-      - { rush: 'cat > output.txt', note: "Read stdin, write to file (Ctrl+D to end)" }
-      - { rush: 'cat < input.txt', note: "Read via stdin redirection" }
-    note: "Falls through to native /bin/cat when piped (cat file | grep). Supports -n/--number, stdin, redirection."
+  cat: "cat [-n] file — read/concatenate files"
+  export: "export FOO=bar [--save] — set env var"
+  path: "path [add|rm|check|dedupe] — manage PATH"
+  sql: "sql @conn \"query\" [--json|--csv] — database queries (SQLite/Postgres/ODBC)"
 
-  - name: "sql"
-    description: "Query databases with table/JSON/CSV output. Drivers: SQLite, PostgreSQL, ODBC."
-    examples:
-      - { rush: 'sql @mydb "SELECT * FROM users"', note: "Named connection" }
-      - { rush: 'sql sqlite:///path/to/db "SELECT 1"', note: "Inline SQLite URI" }
-      - { rush: 'sql postgres://user:pass@host/db "SELECT ..."', note: "Inline Postgres URI" }
-      - { rush: 'sql @db "SELECT ..." --json', note: "JSON output" }
-      - { rush: 'sql @db "SELECT ..." --csv', note: "CSV output" }
-      - { rush: 'sql add @name --driver sqlite --path ~/data.db', note: "Add named connection" }
-      - { rush: 'sql list', note: "List connections" }
-      - { rush: 'sql test @name', note: "Test connectivity" }
-    note: "Config: ~/.config/rush/databases.json. Default 1000-row limit (--no-limit to disable). Auto-JSON in LLM mode."
+# ── SIZE LITERALS ────────────────────────────────────────────────
+sizes: "1kb (1024), 5mb, 2gb — PowerShell native"
 
-  - name: "export"
-    description: "Set environment variable"
-    examples:
-      - { rush: 'export FOO=bar', note: "Set for current session" }
-      - { rush: 'export --save EDITOR=vim', note: "Set and persist to init.rush" }
-    note: "--save writes to ~/.config/rush/init.rush Environment section (idempotent)"
+# ── HELP SYSTEM ────────────────────────────────────────────────
+help:
+  command: "help [topic]"
+  no_args: "Lists available topics"
+  topics: [file, dir, time, strings, arrays, hashes, classes, enums,
+           functions, loops, control-flow, pipelines, regex, errors,
+           platforms, sql, pipeline-ops, llm-mode, objectify]
+  note: "Use help <topic> for detailed syntax, methods, examples, and rules."
 
-  - name: "path"
-    description: "Manage colon-separated path variables"
-    examples:
-      - { rush: 'path', note: "List PATH entries" }
-      - { rush: 'path add ~/bin', note: "Append to PATH" }
-      - { rush: 'path add --front ~/bin', note: "Prepend to PATH" }
-      - { rush: 'path add --save ~/bin', note: "Add to PATH and persist to init.rush" }
-      - { rush: 'path rm ~/bin', note: "Remove from PATH" }
-      - { rush: 'path edit', note: "Edit PATH in $EDITOR" }
-      - { rush: 'path --name=MANPATH add ~/man', note: "Manage any path-like variable" }
-      - { rush: 'path check', note: "List PATH entries with existence and duplicate detection" }
-      - { rush: 'path dedupe', note: "Remove duplicate PATH entries (first occurrence wins)" }
-      - { rush: 'path dedupe --save', note: "Remove duplicates and persist to init.rush" }
-      - { rush: 'path --name=PYTHONPATH', note: "List entries of any path variable" }
-      - rush: "path add\n  /opt/bin\n  ~/.local/bin\nend"
-        note: "Multi-line block — add multiple directories"
-      - rush: "path rm\n  /old/bin\nend"
-        note: "Multi-line block — remove multiple directories"
-    note: "--name=VARNAME works with any colon-separated env var (default: PATH)"
+# ── EXAMPLE ──────────────────────────────────────────────────────
+example: |
+  #!/usr/bin/env rush
+  target = ARGV[0] || die("usage: deploy.rush <env>")
+  branch = $(git rev-parse --abbrev-ref HEAD).strip
 
-  - name: "init"
-    description: "Edit startup script and reload"
-    examples:
-      - { rush: 'init', note: "Opens ~/.config/rush/init.rush in $EDITOR, then reloads" }
+  unless branch == "main" || target == "staging"
+    die "can only deploy from main (on #{branch})"
+  end
 
-  - name: "reload"
-    description: "Reload configuration"
-    examples:
-      - { rush: 'reload', note: "Soft reload — config only" }
-      - { rush: 'reload --hard', note: "Full binary restart with state preservation" }
+  puts "deploying #{branch} to #{target}..."
+  git pull origin main
+  npm run build
 
-  - name: "set"
-    description: "View or change settings"
-    examples:
-      - { rush: 'set', note: "Show all settings" }
-      - { rush: 'set editMode vi', note: "Change setting for this session" }
-      - { rush: 'set --save showTips false', note: "Change and persist to config.json" }
-      - { rush: 'set --secret ANTHROPIC_API_KEY sk-ant-...', note: "Save to secrets.rush" }
-      - { rush: 'set bg "#222733"', note: "Set terminal background color for precise 256-color theming" }
-      - { rush: 'set --save bg "#222733"', note: "Set and persist background color" }
-      - { rush: 'set bg off', note: "Disable Rush background control" }
-      - { rush: 'setbg "#222733"', note: "Shorthand for set bg" }
-    note: "Settings: editMode, theme, showTiming, showTips, showHints, aiProvider, aiModel, bg, and more"
+  if target == "production"
+    rsync -avz --delete dist/ prod.example.com:/var/www/
+  else
+    rsync -avz --delete dist/ staging.example.com:/var/www/
+  end
 
-  - name: "sync"
-    description: "Sync config across machines"
-    examples:
-      - { rush: 'sync init github', note: "Initialize sync via GitHub" }
-      - { rush: 'sync push', note: "Push config to remote" }
-      - { rush: 'sync pull', note: "Pull config from remote" }
-
-# ============================================================================
-# SIZE LITERALS
-# ============================================================================
-size_literals:
-  description: "Numeric suffixes for byte sizes (PowerShell-native)"
-  examples:
-    - { rush: "1kb", value: 1024 }
-    - { rush: "5mb", value: 5242880 }
-    - { rush: "2gb", value: 2147483648 }
-  note: "These are PowerShell-native and pass through unchanged"
-
-# ============================================================================
-# TIME / DURATION
-# ============================================================================
-time_duration:
-  status: "implemented"
-  description: |
-    Duration methods on numbers for readable time expressions.
-    Used in examples like `Time.now - 24.hours`.
-  examples:
-    - { rush: "24.hours", note: "TimeSpan of 24 hours" }
-    - { rush: "30.minutes", note: "TimeSpan of 30 minutes" }
-    - { rush: "7.days", note: "TimeSpan of 7 days" }
-    - { rush: "Time.now - 24.hours", note: "Files modified in last 24 hours" }
-  note: "Transpiles to [TimeSpan]::FromHours/Minutes/Seconds/Days and [DateTime]::Now/UtcNow/Today"
-
-# ============================================================================
-# LLM MODE (rush --llm)
-# ============================================================================
-# Machine-to-machine wire protocol. All I/O is JSON lines.
-# No ANSI colors, no decorations, no human prompts.
-
-llm_mode:
-  description: |
-    LLM mode (rush --llm) replaces the human shell interface with a structured
-    JSON wire protocol. Every prompt is a JSON context line. Every command result
-    is a JSON envelope. Designed for LLM agents driving the shell programmatically.
-  activation: "rush --llm"
-  flags:
-    inherit:
-      syntax: "rush --llm --inherit /path/to/state.json"
-      description: |
-        Carries over live runtime state from a parent interactive session.
-        The state file is consumed (deleted after loading) — one-shot transfer.
-      state_fields:
-        - { field: "env", description: "User-defined environment variables (diffed against baseline)" }
-        - { field: "variables", description: "User-defined PowerShell variables" }
-        - { field: "aliases", description: "Aliases from running session" }
-        - { field: "cwd", description: "Current working directory" }
-        - { field: "previousDirectory", description: "Previous directory (for cd -)" }
-        - { field: "setE", description: "set -e (stop on error)" }
-        - { field: "setX", description: "set -x (trace commands)" }
-        - { field: "setPipefail", description: "set -o pipefail" }
-  startup:
-    description: |
-      Before entering the wire protocol loop, LLM mode runs:
-      1. Config aliases are applied to the command translator
-      2. Rush built-in variables are injected ($os, $hostname, $rush_version, $is_login_shell)
-      3. init.rush and secrets.rush are executed (PATH, exports, functions)
-      4. Baseline snapshot is captured (for state diffing)
-      5. If --inherit is provided, inherited state is restored
-  environment:
-    description: "Environment variables forced on startup to prevent hidden interactive prompts"
-    forced:
-      - { var: "NO_COLOR", value: "1", reason: "Disable ANSI color codes in all output" }
-      - { var: "CI", value: "true", reason: "Signals build tools/installers to skip interactive prompts" }
-      - { var: "GIT_TERMINAL_PROMPT", value: "0", reason: "Forces git to fail-fast instead of prompting for credentials" }
-      - { var: "DEBIAN_FRONTEND", value: "noninteractive", reason: "Prevents package managers from hanging on configuration choices" }
-    ssh_keepalive:
-      description: "SSH commands auto-inject keepalive options so dead connections are detected in ~45s"
-      injected_args: "-o ServerAliveInterval=15 -o ServerAliveCountMax=3"
-      note: "Applied to any native command starting with 'ssh'. Prevents indefinite hangs on network partition."
-  wire_protocol:
-    context_prompt:
-      description: "Emitted before each command. Provides host, user, cwd, git state."
-      fields:
-        - { field: "ready", type: "bool", description: "Always true — signals ready for input" }
-        - { field: "host", type: "string", description: "Hostname (prevents LLM hallucinating which machine)" }
-        - { field: "user", type: "string", description: "Current user" }
-        - { field: "cwd", type: "string", description: "Current working directory (full path)" }
-        - { field: "git_branch", type: "string?", description: "Git branch name (omitted if not in a repo)" }
-        - { field: "git_dirty", type: "bool", description: "Whether there are uncommitted changes" }
-        - { field: "last_exit_code", type: "int", description: "Exit code of previous command" }
-        - { field: "shell", type: "string", description: "Always 'rush'" }
-        - { field: "version", type: "string", description: "Rush version string" }
-      example: '{"ready":true,"host":"server","user":"mark","cwd":"/home/mark","git_branch":"main","git_dirty":false,"last_exit_code":0,"shell":"rush","version":"1.2.54"}'
-    result_envelope:
-      description: "Emitted after each command execution."
-      fields:
-        - { field: "status", type: "string", description: "success | error | syntax_error | output_limit" }
-        - { field: "exit_code", type: "int", description: "Process exit code" }
-        - { field: "cwd", type: "string", description: "Working directory after command (may have changed via cd)" }
-        - { field: "stdout", type: "string | array", description: "Captured output — string for text, JSON array for objects" }
-        - { field: "stdout_type", type: "string?", description: "Present only when output is structured objects. Value: 'objects'. Omitted for text output." }
-        - { field: "stderr", type: "string?", description: "Captured standard error (omitted if empty)" }
-        - { field: "duration_ms", type: "int", description: "Execution time in milliseconds" }
-      example: '{"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"hello","duration_ms":12}'
-      object_mode:
-        description: "When PowerShell returns structured .NET objects (FileInfo, Process, etc.), stdout is a JSON array with curated property projections."
-        detection: "Auto-detected — simple values (string, int, bool, DateTime) and PathInfo stay as text."
-        example: '{"status":"success","exit_code":0,"cwd":"/tmp","stdout_type":"objects","stdout":[{"name":"foo.txt","size":1234,"modified":"2026-03-06T13:00:00Z","type":"file","path":"/tmp/foo.txt"}],"duration_ms":27}'
-        projections:
-          - { type: "FileInfo", fields: "name, size, modified (ISO 8601), type='file', path" }
-          - { type: "DirectoryInfo", fields: "name, modified (ISO 8601), type='directory', path" }
-          - { type: "Process", fields: "pid, name, memory, cpu" }
-          - { type: "PSDriveInfo", fields: "name, used, free, provider" }
-          - { type: "fallback", fields: "Up to 10 non-PS properties from the object" }
-      status_values:
-        - { value: "success", meaning: "Command completed successfully" }
-        - { value: "error", meaning: "Command failed (check exit_code and stderr)" }
-        - { value: "syntax_error", meaning: "Rush code failed to parse (errors field has details)" }
-        - { value: "output_limit", meaning: "Output exceeded 4KB limit — use spool to retrieve" }
-    input_format:
-      description: "Commands sent as plain text or JSON-quoted strings for multi-line input"
-      examples:
-        - { input: "ls", note: "Plain text for simple commands" }
-        - { input: '"if true\\n  puts 42\\nend"', note: "JSON string for multi-line Rush blocks" }
-  builtins:
-    lcat:
-      description: "Read files with metadata and encoding for transport"
-      usage: "lcat <path>"
-      note: "Text files return utf8 content. Binary files return base64-encoded content. Includes mime type, size, line count."
-      result_fields:
-        - { field: "type", values: "text | binary" }
-        - { field: "path", description: "Absolute path to file" }
-        - { field: "size", description: "File size in bytes" }
-        - { field: "mime", description: "MIME type (text/plain, application/json, image/png, etc.)" }
-        - { field: "encoding", values: "utf8 | base64" }
-        - { field: "content", description: "File content (UTF-8 text or base64-encoded binary)" }
-        - { field: "lines", description: "Line count (text files only)" }
-      examples:
-        - cmd: "lcat config.yaml"
-          result: '{"type":"text","path":"/home/mark/config.yaml","size":245,"mime":"text/yaml","encoding":"utf8","content":"key: value\n...","lines":12}'
-        - cmd: "lcat image.png"
-          result: '{"type":"binary","path":"/home/mark/image.png","size":8192,"mime":"image/png","encoding":"base64","content":"iVBORw0KGgo..."}'
-    spool:
-      description: "Sliding window into captured output from last command that exceeded 4KB limit"
-      usage: "spool <offset>:<count> | spool --head=N | spool --tail=N | spool --grep=<pattern> | spool --all"
-      note: "Returns spool_position and spool_total so you always know where you are in the buffer. Negative offset counts from end."
-      result_fields:
-        - { field: "spool_position", description: "Starting line index of this slice" }
-        - { field: "spool_total", description: "Total lines in the spool buffer" }
-        - { field: "stdout", description: "The requested lines joined with newlines" }
-      examples:
-        - { cmd: "spool 0:10", note: "First 10 lines" }
-        - { cmd: "spool 500:20", note: "Lines 500-519" }
-        - { cmd: "spool -50:50", note: "Last 50 lines (negative offset)" }
-        - { cmd: "spool --tail=50", note: "Last 50 lines (convenience)" }
-        - { cmd: "spool --grep=ERROR", note: "Matching lines with line numbers" }
-        - { cmd: "spool --all", note: "Full output (use with caution)" }
-    timeout:
-      description: "Run a command with a time limit. Kills the child on timeout."
-      usage: "timeout <seconds> <command>"
-      note: "Exit code 124 on timeout (Unix convention). Works on native commands and Rush syntax. The inner command is dispatched through the normal triage (IsRushSyntax → transpile, else → shell)."
-      result_fields:
-        - { field: "error_type", value: "timeout", description: "Present when the command timed out" }
-        - { field: "exit_code", value: 124, description: "Standard timeout exit code" }
-        - { field: "stdout", description: "Any partial output captured before timeout" }
-      examples:
-        - { cmd: "timeout 30 ssh server 'df -h'", note: "SSH with 30s safety net" }
-        - { cmd: "timeout 5 find / -name '*.log'", note: "Cap a potentially slow search" }
-        - { cmd: "timeout 60 ls", note: "Normal completion within limit — returns standard success result" }
-  output_limit:
-    threshold: "4KB"
-    preview_size: "512 bytes"
-    behavior: |
-      When command output exceeds 4KB, it is spooled internally instead of
-      returned in stdout. The result envelope has status=output_limit with a
-      512-byte preview, total line/byte counts, and a hint about using spool.
-  tty_commands_unavailable:
-    description: "These commands require a TTY and cannot run in LLM mode. Use the alternatives."
-    commands:
-      - { cmd: "vim, vi, nano, emacs", use_instead: "lcat to read, File.write() to write" }
-      - { cmd: "less, more", use_instead: "lcat or cat (output captured automatically)" }
-      - { cmd: "top, htop", use_instead: "ps aux" }
-      - { cmd: "ssh (interactive)", use_instead: "ssh host 'rush --llm' for structured remote access" }
-  ssh_usage:
-    description: "Rush on both ends for structured remote access"
-    example: "ssh server 'rush --llm'"
-    note: "Requires Rush installed on the remote host. The JSON protocol flows over SSH transparently. Context prompt includes host so you always know which machine you're on."
-
-# ============================================================================
-# EXAMPLE SCRIPTS
-# ============================================================================
-# These examples define the target experience — what Rush code SHOULD
-# look and feel like. The transpiler is implemented to make these work.
-
-examples:
-  simple_deploy:
-    description: "Deploy script showing shell + scripting integration"
-    rush: |
-      #!/usr/bin/env rush
-
-      target = ARGV[0] || die("usage: deploy.rush <env>")
-      branch = $(git rev-parse --abbrev-ref HEAD).strip
-
-      unless branch == "main" || target == "staging"
-        die "can only deploy to production from main (on #{branch})"
-      end
-
-      puts "deploying #{branch} to #{target}..."
-
-      # Shell commands just work
-      git pull origin #{branch}
-      npm run build
-
-      if target == "production"
-        rsync -avz --delete dist/ prod.example.com:/var/www/
-      else
-        rsync -avz --delete dist/ staging.example.com:/var/www/
-      end
-
-      puts "done."
-
-  file_processor:
-    description: "Log file analysis showing method chaining"
-    rush: |
-      # Find the top 10 largest log files modified in the last 24 hours
-      ls /var/log
-        .select { |f| f.name =~ /\.log$/ }
-        .select { |f| f.last_write_time > Time.now - 24.hours }
-        .sort_by { |f| f.length }
-        .reverse
-        .first(10)
-        .each { |f|
-          puts "#{f.name.ljust(30)} #{(f.length / 1mb).round(1)} MB"
-        }
-
-  config_reader:
-    description: "Reading and processing structured data"
-    rush: |
-      def load_servers(path)
-        servers = []
-        for line in File.read_lines(path)
-          next if line.strip.empty? || line.start_with?("#")
-          name, host, port = line.split(",").map { |s| s.strip }
-          servers.push({ name: name, host: host, port: port.to_i })
-        end
-        servers
-      end
-
-      servers = load_servers("servers.csv")
-      for s in servers
-        puts "checking #{s.name}..."
-        result = $(ssh #{s.host} -p #{s.port} "uptime" 2>/dev/null)
-        if $?.failed?
-          warn "  UNREACHABLE"
-        else
-          puts "  #{result.strip}"
-        end
-      end
-
-  system_monitor:
-    description: "System health check showing error handling"
-    rush: |
-      def check_disk(threshold = 90)
-        df -h
-          .skip(1)  # header
-          .each { |line|
-            parts = line.split_whitespace
-            usage = parts[4].trim_end("%").to_i
-            mount = parts[5]
-            if usage > threshold
-              warn "CRITICAL: #{mount} at #{usage}%"
-            end
-          }
-      end
-
-      begin
-        check_disk(85)
-      rescue => e
-        warn "health check failed: #{e.message}"
-        exit 1
-      end
+  puts "done.".green

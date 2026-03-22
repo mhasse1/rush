@@ -1,0 +1,645 @@
+# Rush Help System — LLM-Optimized Topic Reference
+# Each topic is self-contained. No cross-references needed.
+# Format: syntax, methods/keywords, examples, rules.
+# Designed for minimal token consumption by LLMs.
+
+file:
+  summary: "File I/O operations"
+  methods:
+    - name: "File.read(path)"
+      returns: "string"
+      transpiles_to: "Get-Content path -Raw"
+      example: 'content = File.read("/etc/hosts")'
+
+    - name: "File.read_lines(path)"
+      returns: "array of strings"
+      transpiles_to: "@(Get-Content path)"
+      example: |
+        lines = File.read_lines("log.txt")
+        puts lines.count
+
+    - name: "File.read_json(path)"
+      returns: "object/hash"
+      transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)"
+      example: |
+        config = File.read_json("config.json")
+        puts config.name
+
+    - name: "File.read_csv(path)"
+      returns: "array of objects (column-name properties)"
+      transpiles_to: "@(Import-Csv path)"
+      example: |
+        rows = File.read_csv("data.csv")
+        rows.each { |r| puts r.name }
+
+    - name: "File.write(path, content)"
+      returns: "void"
+      transpiles_to: "Set-Content -Path path -Value content"
+      example: 'File.write("/tmp/out.txt", "hello world")'
+      note: "Overwrites existing file"
+
+    - name: "File.append(path, content)"
+      returns: "void"
+      transpiles_to: "Add-Content -Path path -Value content"
+      example: 'File.append("log.txt", "new entry")'
+
+    - name: "File.exist?(path)"
+      returns: "bool"
+      transpiles_to: "(Test-Path path)"
+      example: |
+        if File.exist?("config.json")
+          puts "found"
+        end
+
+    - name: "File.delete(path)"
+      returns: "void"
+      transpiles_to: "Remove-Item path"
+      example: 'File.delete("/tmp/scratch.txt")'
+
+    - name: "File.size(path)"
+      returns: "int (bytes)"
+      transpiles_to: "(Get-Item path).Length"
+      example: 'puts File.size("data.bin").to_filesize'
+
+  rules:
+    - "Use forward slashes in paths on all platforms"
+    - "File.write overwrites; File.append adds to end"
+    - "File.read_json returns a hash/object — access props with dot notation"
+    - "File.read_csv returns array — each row is an object with column-name properties"
+    - "Standalone calls work (no assignment needed): File.write(path, data)"
+
+dir:
+  summary: "Directory operations"
+  methods:
+    - name: "Dir.list(path, type:nil, recursive:false, hidden:false)"
+      returns: "array of filenames (basenames)"
+      example: |
+        Dir.list(".")                           # all entries
+        Dir.list(".", type: "file")             # files only
+        Dir.list(".", type: "dir")              # dirs only
+        Dir.list("src", recursive: true)        # recursive
+        Dir.list(".", hidden: true)             # include dotfiles
+
+    - name: "Dir.list symbol shortcuts"
+      examples:
+        - { rush: 'Dir.list(".", :files)', note: "type: 'file'" }
+        - { rush: 'Dir.list(".", :dirs)', note: "type: 'dir'" }
+        - { rush: 'Dir.list(".", :recurse)', note: "recursive: true" }
+        - { rush: 'Dir.list(".", :hidden)', note: "hidden: true" }
+        - { rush: 'Dir.list(".", :ls)', note: "files + dirs (exclude . and ..)" }
+
+    - name: "Dir.exist?(path)"
+      returns: "bool"
+      example: 'puts Dir.exist?("/tmp/myapp")'
+
+    - name: "Dir.mkdir(path)"
+      returns: "void"
+      note: "Creates parent directories automatically"
+      example: 'Dir.mkdir("/tmp/myapp/logs")'
+
+  rules:
+    - "Dir.list returns basenames, not full paths"
+    - "Symbol shortcuts (:files, :dirs, :recurse, :hidden) are shorthand for named args"
+    - "Dir.mkdir is idempotent — no error if directory exists"
+    - "Hidden files are dot-prefixed on Unix; Windows uses file attributes"
+
+time:
+  summary: "Date/time and duration operations"
+  methods:
+    - { name: "Time.now", returns: "DateTime", example: "t = Time.now" }
+    - { name: "Time.utc_now", returns: "DateTime (UTC)" }
+    - { name: "Time.today", returns: "DateTime (midnight)" }
+
+  durations:
+    - { method: "N.hours", example: "24.hours", transpiles_to: "[TimeSpan]::FromHours(24)" }
+    - { method: "N.minutes", example: "30.minutes" }
+    - { method: "N.seconds", example: "5.seconds" }
+    - { method: "N.days", example: "7.days" }
+
+  examples:
+    - rush: "Time.now - 24.hours"
+      note: "DateTime 24 hours ago"
+    - rush: |
+        files = Dir.list(".")
+        recent = files.select { |f| f.LastWriteTime > Time.now - 1.hours }
+      note: "Files modified in last hour"
+
+strings:
+  summary: "String methods and operations"
+  transform: [".upcase", ".downcase", ".strip", ".lstrip", ".rstrip", ".reverse", ".chomp"]
+  query:
+    - { method: ".length", returns: "int" }
+    - { method: ".empty?", returns: "bool" }
+    - { method: ".include?(s)", returns: "bool" }
+    - { method: ".start_with?(s)", returns: "bool" }
+    - { method: ".end_with?(s)", returns: "bool" }
+    - { method: ".nil?", returns: "bool" }
+
+  modify:
+    - { method: ".replace(old, new)", note: "replace all occurrences" }
+    - { method: ".split(sep)", note: "returns array; sep can be string or regex" }
+    - { method: ".split_whitespace", note: "split on any whitespace (like awk)" }
+    - { method: ".lines", note: "split on newline" }
+    - { method: ".ljust(n) / .rjust(n)", note: "pad to n chars" }
+    - { method: ".trim_end(chars)", note: "remove trailing chars" }
+    - { method: ".sub(pat, rep)", note: "replace first regex match" }
+    - { method: ".gsub(pat, rep)", note: "replace all regex matches" }
+    - { method: ".scan(pat)", note: "all regex matches as array" }
+    - { method: ".match(pat)", note: "match object with captures" }
+
+  convert: [".to_i", ".to_f", ".to_s"]
+  color: [".red", ".green", ".blue", ".cyan", ".yellow", ".magenta", ".white", ".gray"]
+  output: [".print (no newline)", ".puts (with newline)"]
+
+  interpolation:
+    syntax: '"hello #{expr}"'
+    note: "Only in double-quoted strings. Single quotes are literal."
+    example: '"there are #{items.count} items"'
+
+  heredoc:
+    syntax: "text = <<END\\n  multi-line\\nEND"
+
+  escapes: ['\\n newline', '\\t tab', '\\e ESC', '\\\\ backslash']
+
+arrays:
+  summary: "Array creation and methods"
+  literal: "[1, 2, 3]"
+
+  methods:
+    - { method: ".count / .length", returns: "int" }
+    - { method: ".first / .first(n)", returns: "element or array" }
+    - { method: ".last / .last(n)", returns: "element or array" }
+    - { method: ".reverse", returns: "new array" }
+    - { method: ".sort", returns: "sorted array" }
+    - { method: ".uniq", returns: "deduplicated array" }
+    - { method: ".flatten", returns: "flattened array" }
+    - { method: ".include?(x)", returns: "bool" }
+    - { method: ".push(x)", note: "append element" }
+    - { method: ".skip(n)", returns: "array without first n" }
+    - { method: ".join(sep)", returns: "string" }
+
+  iteration:
+    - { method: ".each { |x| }", note: "iterate (no return)" }
+    - { method: ".map { |x| expr }", returns: "transformed array" }
+    - { method: ".select { |x| bool }", returns: "filtered array" }
+    - { method: ".reject { |x| bool }", returns: "inverse filter" }
+    - { method: ".sort_by { |x| expr }", returns: "sorted by key" }
+    - { method: ".find { |x| bool }", returns: "first match" }
+    - { method: ".any? { |x| bool }", returns: "bool" }
+    - { method: ".all? { |x| bool }", returns: "bool" }
+
+  examples:
+    - rush: |
+        names = ["charlie", "alice", "bob"]
+        sorted = names.sort
+        puts sorted.join(", ")
+      output: "alice, bob, charlie"
+
+    - rush: |
+        evens = (1..10).select { |n| n % 2 == 0 }
+        doubled = evens.map { |n| n * 2 }
+      note: "Method chaining: filter then transform"
+
+hashes:
+  summary: "Hash (dictionary) literals and methods"
+  literal: '{ name: "DNS", port: 53 }'
+  transpiles_to: '@{ name = "DNS"; port = 53 }'
+
+  access:
+    - { syntax: 'h["key"]', note: "bracket access" }
+    - { syntax: 'h.key', note: "dot access (when key is simple identifier)" }
+
+  iteration: 'h.each { |k, v| puts "#{k}=#{v}" }'
+
+  examples:
+    - rush: |
+        config = { host: "localhost", port: 8080, debug: false }
+        puts config["host"]
+        config.each { |k, v| puts "#{k}: #{v}" }
+
+    - rush: |
+        servers = [
+          { name: "web1", ip: "10.0.0.1" },
+          { name: "web2", ip: "10.0.0.2" },
+        ]
+        servers.each { |s| puts "#{s.name} → #{s.ip}" }
+      note: "Array of hashes — common pattern"
+
+classes:
+  summary: "Class definitions, inheritance, static methods"
+  syntax: |
+    class Dog < Animal
+      attr name: String, breed
+      attr age: Int = 0
+
+      def initialize(name, breed)
+        super(name)
+        self.breed = breed
+      end
+
+      def speak
+        return self.name + " says Woof!"
+      end
+
+      def self.species
+        return "Canis lupus"
+      end
+    end
+
+  instantiation: "d = Dog.new(\"Rex\", \"Lab\")"
+  method_call: "d.speak()"
+  static_call: "Dog.species()"
+
+  attr:
+    - "attr name — untyped (defaults to [object])"
+    - "attr name: String — typed"
+    - "attr name: Int = 0 — typed with default value"
+    - "attr a, b, c — multiple on one line"
+
+  constructor:
+    - "def initialize(params) — becomes PS constructor"
+    - "Default params generate constructor overloads"
+    - "super(args) calls parent constructor"
+
+  methods:
+    - "def method_name(params) ... end — instance method"
+    - "def self.method_name(params) ... end — static method"
+    - "self.prop for property access (required, not implicit)"
+    - "Methods with return get [object] return type"
+    - "Methods without return get [void]"
+
+  inheritance:
+    syntax: "class Child < Parent"
+    super_constructor: "super(args) — must be in initialize"
+    super_method: "super.method() — call parent implementation"
+
+  rules:
+    - "self.prop is required — bare names don't resolve to properties"
+    - ".new() is the only instantiation syntax"
+    - "Base class must be defined before derived class"
+    - "Named args at .new() are reordered to match constructor params"
+
+enums:
+  summary: "Enumeration types"
+  syntax: |
+    enum Status
+      pending = 0
+      active = 1
+      inactive = 2
+    end
+  access: "Status.active  →  [Status]::Active"
+  comparison: "if s == Status.active"
+  rules:
+    - "Enum name must be PascalCase"
+    - "Members are lowercase in Rush, PascalCased in output"
+    - "Optional = N for explicit integer values"
+    - "Defined before use in same script"
+
+functions:
+  summary: "Function definitions"
+  syntax: |
+    def greet(name, greeting = "hello")
+      puts "#{greeting}, #{name}!"
+    end
+  call: 'greet("World", greeting: "Hi")'
+
+  features:
+    - "Default parameter values: param = default"
+    - "Named arguments at call site: name: value"
+    - "Last expression is implicit return"
+    - "Explicit return also works: return expr"
+    - "Shell commands work inside function bodies"
+
+  example: |
+    def deploy(env, dry_run = false)
+      if dry_run
+        puts "would deploy to #{env}"
+      else
+        rsync -avz ./dist/ "#{env}.example.com:/var/www/"
+      end
+    end
+    deploy("staging", dry_run: true)
+
+loops:
+  summary: "Loop constructs and iteration"
+  constructs:
+    for: |
+      for item in collection
+        puts item
+      end
+    while: |
+      while count < 10
+        count += 1
+      end
+    until: "until cond ... end  (inverse of while)"
+    loop: |
+      loop
+        line = gets
+        break if line.nil?
+      end
+    times: |
+      5.times { |i|
+        puts "iteration #{i}"
+      }
+
+  control:
+    next: "skip to next iteration (preferred over continue)"
+    break: "exit loop immediately"
+    inline: "next if line.empty?  |  break if count > 100"
+
+  ranges:
+    inclusive: "for i in 1..5  →  1,2,3,4,5"
+    exclusive: "for i in 1...5  →  1,2,3,4"
+
+  compound: ["+=", "-=", "*=", "/="]
+  note: "No ++ or -- operators"
+
+control-flow:
+  summary: "Conditionals and branching"
+  if: |
+    if count > 10
+      puts "many"
+    elsif count > 0
+      puts "some"
+    else
+      puts "none"
+    end
+  unless: "unless cond ... end  (no elsif/else allowed)"
+  inline: "puts x if verbose  |  next unless valid"
+  ternary: "result = condition ? then_expr : else_expr"
+
+  case: |
+    case status
+    when "ok"
+      puts "success"
+    when "error"
+      puts "failure"
+    else
+      puts "unknown"
+    end
+  match: "match is an alias for case"
+
+  operators:
+    comparison: ["==", "!=", ">", "<", ">=", "<="]
+    logical: ["&&", "||", "!", "not"]
+    regex: ["=~", "!~"]
+    safe_nav: "obj&.method  (returns nil if obj is nil)"
+
+  exit_status:
+    - "$?.ok? — last command succeeded"
+    - "$?.failed? — last command failed"
+    - "$?.code — exit code number"
+
+pipelines:
+  summary: "Pipeline operators for filtering and transforming data"
+  operators:
+    - { op: "| where prop op value", note: "filter (==, !=, >, <, =~, !~)" }
+    - { op: "| where /regex/", note: "match whole line" }
+    - { op: "| where prop /regex/", note: "match property" }
+    - { op: "| select prop1, prop2", note: "pick columns" }
+    - { op: "| sort [--desc]", note: "sort ascending/descending" }
+    - { op: "| first N", note: "take first N" }
+    - { op: "| last N", note: "take last N" }
+    - { op: "| skip N", note: "skip first N" }
+    - { op: "| count", note: "count items" }
+    - { op: "| distinct", note: "unique values" }
+    - { op: "| sum / avg / min / max", note: "aggregates" }
+    - { op: "| as json", note: "format output as JSON" }
+    - { op: "| as csv", note: "format output as CSV" }
+    - { op: "| tee file", note: "write to file and pass through" }
+    - { op: "| columns 1,3,5", note: "select by index (1-based)" }
+
+  objectify:
+    syntax: "command | objectify [flags]"
+    purpose: "Convert text table output to objects"
+    flags:
+      - "--delim REGEX — field delimiter (default: \\s+)"
+      - "--no-header — first line is data"
+      - "--cols name,pid — manual column names"
+      - "--fixed [positions] — fixed-width parsing"
+      - "--skip N — skip first N lines"
+    auto: "Known commands auto-objectify when piped (netstat, docker ps, kubectl get, etc.)"
+    example: 'netstat | where State == "ESTABLISHED" | as json'
+
+  examples:
+    - rush: 'ps aux | where CPU > 50 | select Name, CPU | sort --desc'
+      note: "Filter, select columns, sort"
+    - rush: 'cat access.log | where /ERROR/ | count'
+      note: "Count error lines"
+    - rush: 'docker ps | where Status ~ "Up" | select Names'
+      note: "Auto-objectify with where filter"
+
+regex:
+  summary: "Regular expressions"
+  literal: "/pattern/flags"
+  flags: ["i (case-insensitive)", "m (multiline)", "x (extended)"]
+
+  operators:
+    - { op: "=~", note: "returns true if matches" }
+    - { op: "!~", note: "returns true if does NOT match" }
+
+  string_methods:
+    - { method: ".sub(pat, rep)", note: "replace first match" }
+    - { method: ".gsub(pat, rep)", note: "replace all matches" }
+    - { method: ".scan(pat)", note: "all matches as array" }
+    - { method: ".match(pat)", note: "match object; access groups: m[1], m[2]" }
+
+  examples:
+    - rush: 'name =~ /^test/'
+      note: "Simple match"
+    - rush: 'text.gsub(/\s+/, " ")'
+      note: "Collapse whitespace"
+    - rush: |
+        for line in File.read_lines("log.txt")
+          next unless line =~ /ERROR/
+          puts line
+        end
+      note: "Filter lines by regex"
+
+errors:
+  summary: "Error handling with begin/rescue/ensure"
+  syntax: |
+    begin
+      risky_operation()
+    rescue IOError => e
+      puts "IO failed: #{e.message}"
+    rescue => e
+      puts "caught: #{e.message}"
+    ensure
+      cleanup()
+    end
+
+  shorthand: |
+    try
+      something()
+    rescue e
+      warn e.message
+    end
+
+  raise: 'die "something went wrong"'
+  note: "die raises an exception (transpiles to throw)"
+
+  typed_rescue:
+    - "rescue IOError => e — catch specific type"
+    - "rescue => e — catch all"
+    - "Multiple rescue blocks allowed"
+
+platforms:
+  summary: "OS-conditional code blocks"
+  keywords: [macos, linux, win64, win32]
+
+  syntax: |
+    macos
+      puts "running on macOS"
+    end
+
+    linux
+      export LD_LIBRARY_PATH="/usr/local/lib"
+    end
+
+    win64
+      puts "64-bit Windows (PS 7)"
+    end
+
+  properties:
+    arch: |
+      linux.arch == "arm64"
+        puts "ARM Linux"
+      end
+    version: |
+      win64.version >= "10.0.22000"
+        puts "Windows 11+"
+      end
+
+  win32:
+    note: "win32 body is RAW PowerShell 5.1, not Rush syntax"
+    purpose: "32-bit OLEDB/ODBC drivers (ACE, Business Central)"
+    example: |
+      win32
+        $conn = New-Object System.Data.OleDb.OleDbConnection(...)
+        $conn.Open()
+      end
+
+  rules:
+    - "Non-matching platform blocks are silently skipped"
+    - "macos/linux/win64 contain normal Rush code"
+    - "win32 contains raw PowerShell 5.1"
+    - "Rush variables are auto-injected into win32 blocks"
+
+sql:
+  summary: "Database queries (SQLite, PostgreSQL, ODBC)"
+  syntax: 'sql @connection "SELECT * FROM table"'
+
+  connections:
+    add: 'sql add @mydb --driver sqlite --path ~/data.db'
+    list: 'sql list'
+    test: 'sql test @mydb'
+    inline_sqlite: 'sql sqlite:///path/to/db "SELECT 1"'
+    inline_postgres: 'sql postgres://user:pass@host/db "SELECT ..."'
+
+  output_formats:
+    - "Default: formatted table"
+    - "--json: JSON output"
+    - "--csv: CSV output"
+
+  examples:
+    - rush: 'sql @mydb "SELECT name, email FROM users WHERE active = 1"'
+    - rush: 'sql @mydb "SELECT * FROM orders" --json'
+    - rush: 'sql sqlite:///tmp/test.db "CREATE TABLE t(id INTEGER, name TEXT)"'
+
+  config: "~/.config/rush/databases.json"
+  note: "Default 1000-row limit. Use --no-limit to disable."
+
+pipeline-ops:
+  summary: "Detailed pipeline operator reference"
+  where:
+    forms:
+      - syntax: "| where prop == value"
+        note: "3-arg: property, operator, value"
+        operators: ["==", "!=", ">", "<", ">=", "<=", "=~", "!~", "~"]
+      - syntax: "| where /pattern/"
+        note: "1-arg: match regex against entire line/object"
+      - syntax: "| where prop /pattern/"
+        note: "2-arg: match regex against named property"
+    examples:
+      - 'netstat | where State == "ESTABLISHED"'
+      - 'ps | where CPU > 50'
+      - 'cat log.txt | where /error/i'
+      - 'docker ps | where Status /Up/'
+
+  select:
+    syntax: "| select prop1, prop2"
+    example: 'ps | select Name, CPU, Memory'
+
+  sort:
+    syntax: "| sort [--desc] [prop]"
+    examples:
+      - "data | sort"
+      - "data | sort --desc"
+      - "data | sort Name"
+
+  aggregates:
+    - { op: "| count", returns: "int" }
+    - { op: "| sum [prop]", returns: "numeric total" }
+    - { op: "| avg [prop]", returns: "numeric average" }
+    - { op: "| min [prop]", returns: "minimum value" }
+    - { op: "| max [prop]", returns: "maximum value" }
+
+  format:
+    - "| as json — JSON output"
+    - "| as csv — CSV output"
+    - "| from json — parse JSON input to objects"
+    - "| from csv — parse CSV input to objects"
+
+llm-mode:
+  summary: "rush --llm JSON wire protocol for LLM agents"
+
+  context_prompt:
+    fields: [ready, host, user, cwd, git_branch, git_dirty, last_exit_code, shell, version]
+    example: '{"ready":true,"host":"server","user":"mark","cwd":"/home/mark","last_exit_code":0,"shell":"rush"}'
+
+  result_envelope:
+    fields: [status, exit_code, cwd, stdout, stderr, duration_ms]
+    statuses: ["success", "error", "syntax_error", "output_limit"]
+    example: '{"status":"success","exit_code":0,"cwd":"/home/mark","stdout":"hello","duration_ms":12}'
+
+  builtins:
+    lcat: "Read files with metadata (mime, size, encoding). Binary → base64."
+    spool: "Sliding window into output that exceeded 4KB limit."
+    timeout: "Run command with time limit. Exit 124 on timeout."
+    help: "Topic-based reference. help <topic> for details."
+
+  output_limit: "4KB threshold. Excess → spool. 512-byte preview in result."
+
+  tty_blocklist:
+    blocked: ["vim", "nano", "less", "more", "top", "htop"]
+    alternatives: "lcat to read, File.write() to write, ps aux for processes"
+
+  object_mode:
+    note: "Structured .NET objects return as JSON array with curated projections"
+    projections:
+      - "FileInfo → name, size, modified, type, path"
+      - "Process → pid, name, memory, cpu"
+
+objectify:
+  summary: "Convert text table output to structured objects"
+
+  syntax: "command | objectify [flags]"
+  flags:
+    - { flag: "--delim REGEX", default: "\\s+", note: "field separator" }
+    - { flag: "--no-header", note: "first line is data, auto-generate col names" }
+    - { flag: "--cols name,pid", note: "manual column names (implies --no-header)" }
+    - { flag: "--fixed [positions]", note: "fixed-width column detection" }
+    - { flag: "--skip N", note: "skip N lines before header" }
+    - { flag: "--save", note: "persist flags for auto-objectify" }
+
+  auto_objectify:
+    note: "Known commands auto-inject objectify when piped downstream"
+    commands: ["netstat (--fixed)", "docker ps (--delim '\\s{2,}')",
+               "kubectl get", "lsof (--fixed)", "ss", "free (--skip 1)"]
+    config: "~/.config/rush/objectify.rush"
+
+  examples:
+    - rush: 'echo "NAME PID\nfoo 123" | objectify | as json'
+    - rush: 'my-tool | objectify --fixed | where col1 > 5'
+    - rush: 'my-tool | objectify --delim "," | select name,value'
