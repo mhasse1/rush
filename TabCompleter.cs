@@ -464,7 +464,13 @@ public class TabCompleter
 
             if (completions?.CompletionMatches != null && completions.CompletionMatches.Count > 0)
             {
-                _completionStart = completions.ReplacementIndex;
+                // Extract the text PowerShell is replacing to filter spurious matches
+                var replIndex = completions.ReplacementIndex;
+                var replLen = completions.ReplacementLength;
+                var originalToken = (replIndex >= 0 && replIndex + replLen <= input.Length)
+                    ? input.Substring(replIndex, replLen) : null;
+
+                _completionStart = replIndex;
                 foreach (var match in completions.CompletionMatches)
                 {
                     var text = match.CompletionText;
@@ -474,6 +480,10 @@ public class TabCompleter
                     {
                         text += "/";
                     }
+                    // Only accept completions that actually match the typed prefix —
+                    // PowerShell can return unrelated "best effort" results
+                    if (originalToken != null && !text.StartsWith(originalToken, CompareMode))
+                        continue;
                     if (!_completions.Contains(text))
                         _completions.Add(text);
                 }

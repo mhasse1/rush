@@ -1076,12 +1076,19 @@ public class LineEditor
             return;
         }
 
-        // No single completion — show list if multiple exist
+        // No single completion — show list if multiple exist.
+        // Save cursor position before invoking handler; only recapture and
+        // redraw if the handler actually moved the cursor (i.e., displayed
+        // a completion list and re-rendered the prompt).
+        var savedLeft = Console.CursorLeft;
+        var savedTop = Console.CursorTop;
         ShowCompletionsHandler?.Invoke();
-        // Recapture cursor position after completions redrew the prompt
-        _startLeft = Console.CursorLeft;
-        _startTop = Console.CursorTop;
-        Redraw();
+        if (Console.CursorLeft != savedLeft || Console.CursorTop != savedTop)
+        {
+            _startLeft = Console.CursorLeft;
+            _startTop = Console.CursorTop;
+            Redraw();
+        }
     }
 
     // ── Reverse Search (Ctrl+R) ──────────────────────────────────────────
