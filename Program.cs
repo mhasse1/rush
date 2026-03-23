@@ -1377,7 +1377,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         // ── Interactive alias definition ────────────────────────────
         // alias ll='ls -la'        (session-only)
         // alias --save ll='ls -la' (persisted to config.json)
-        if (segment.StartsWith("alias ", StringComparison.OrdinalIgnoreCase) && segment.Contains('='))
+        if (segment.StartsWith("alias ", StringComparison.OrdinalIgnoreCase))
         {
             var aliasBody = segment[6..].Trim();
             bool save = false;
@@ -1408,7 +1408,13 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                     : $"  alias {aliasName} → {aliasValue}");
                 Console.ResetColor();
             }
-            lastSegmentFailed = false;
+            else
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine("usage: alias name='command'  (or alias --save name='command')");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
             continue;
         }
 
