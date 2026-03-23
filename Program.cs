@@ -150,6 +150,10 @@ if (llmMode)
     // Set Rush built-in variables ($os, $hostname, $rush_version, $is_login_shell)
     InjectRushEnvVars(rs, Version, isLoginShell);
 
+    // Windows: shim uutils coreutils if installed
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        ShimCoreutilsIfNeeded(rs, quiet: true);
+
     // Run startup scripts (init.rush, secrets.rush) — user's PATH, exports, aliases
     RunStartupScripts(rs, se);
 
@@ -278,6 +282,10 @@ var state = new ShellState
     SetX = cfgTrace,
     SetPipefail = cfgPipefail,
 };
+
+// ── Windows: shim uutils coreutils if needed ────────────────────────
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    ShimCoreutilsIfNeeded(runspace);
 
 // ── Run Startup Scripts (with full builtin support) ─────────────────
 RunStartupScripts(runspace, scriptEngine, state);
@@ -1309,6 +1317,9 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 ApplyDirBackground(Environment.CurrentDirectory);
                 Theme.Initialize(state.Config.GetThemeOverride());
                 Theme.SetNativeColorEnvVars();
+                // Re-check coreutils shimming (user may have installed it since startup)
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    ShimCoreutilsIfNeeded(state.Runspace, quiet: true);
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  config reloaded");
                 Console.ResetColor();
@@ -2570,6 +2581,62 @@ function __rush_win32 {
 ");
     }
     ps2.Invoke();
+}
+
+// ── Windows: uutils coreutils shimming ──────────────────────────────
+
+/// <summary>
+/// On Windows, detect uutils coreutils.exe and shim its commands.
+/// Runs "coreutils --list" to discover available commands, then creates
+/// PowerShell functions that route transparently: ls → coreutils.exe ls $args
+/// </summary>
+static void ShimCoreutilsIfNeeded(Runspace runspace, bool quiet = false)
+{
+    try
+    {
+        // Try to get the command list from coreutils
+        var psi = new ProcessStartInfo("coreutils.exe", "--list")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return;
+        var output = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit(3000);
+        if (proc.ExitCode != 0 || string.IsNullOrWhiteSpace(output)) return;
+
+        var commands = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(c => c.Trim())
+            .Where(c => c.Length > 0 && !c.Contains(' '))
+            .ToList();
+        if (commands.Count == 0) return;
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var cmd in commands)
+        {
+            sb.AppendLine($"if (Test-Path \"Alias:{cmd}\") {{ Remove-Item \"Alias:{cmd}\" -Force }}");
+            sb.AppendLine($"Set-Item -Path \"Function:\\{cmd}\" -Value ([scriptblock]::Create(\"coreutils.exe {cmd} `$args\")).GetNewClosure()");
+        }
+
+        ps.AddScript(sb.ToString());
+        ps.Invoke();
+
+        if (!quiet)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"  Using uutils coreutils ({commands.Count} commands shimmed).");
+            Console.ResetColor();
+        }
+    }
+    catch
+    {
+        // coreutils.exe not found or failed — nothing to shim
+    }
 }
 
 // ── Script File Execution ──────────────────────────────────────────
@@ -5150,6 +5217,8 @@ static void RunNonInteractive(string command)
     using var rs = RunspaceFactory.CreateRunspace(h, ss);
     rs.Open();
     InjectRushEnvVars(rs, RushVersion.Full, false);
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        ShimCoreutilsIfNeeded(rs, quiet: true);
     var objConfig = ObjectifyConfig.Load();
     var tr = new CommandTranslator(objConfig);
     var scriptEngine = new ScriptEngine(tr);
