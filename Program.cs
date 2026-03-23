@@ -1375,10 +1375,17 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         }
 
         // ── Interactive alias definition ────────────────────────────
-        // alias ll='ls -la'  or  alias ll=ls -la
+        // alias ll='ls -la'        (session-only)
+        // alias --save ll='ls -la' (persisted to config.json)
         if (segment.StartsWith("alias ", StringComparison.OrdinalIgnoreCase) && segment.Contains('='))
         {
             var aliasBody = segment[6..].Trim();
+            bool save = false;
+            if (aliasBody.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
+            {
+                save = true;
+                aliasBody = aliasBody[7..].Trim();
+            }
             var eqPos = aliasBody.IndexOf('=');
             if (eqPos > 0)
             {
@@ -1390,10 +1397,15 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                     aliasValue = aliasValue[1..^1];
 
                 state.Translator.RegisterAlias(aliasName, aliasValue);
-                state.Config.Aliases[aliasName] = aliasValue;
-                state.Config.Save();
+                if (save)
+                {
+                    state.Config.Aliases[aliasName] = aliasValue;
+                    state.Config.Save();
+                }
                 Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  alias {aliasName} → {aliasValue}");
+                Console.WriteLine(save
+                    ? $"  alias {aliasName} → {aliasValue} (saved)"
+                    : $"  alias {aliasName} → {aliasValue}");
                 Console.ResetColor();
             }
             lastSegmentFailed = false;
@@ -1403,11 +1415,23 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         if (segment.StartsWith("unalias ", StringComparison.OrdinalIgnoreCase))
         {
             var name = segment[8..].Trim();
-            if (state.Config.Aliases.Remove(name))
+            bool save = false;
+            if (name.StartsWith("--save ", StringComparison.OrdinalIgnoreCase))
             {
-                state.Config.Save();
+                save = true;
+                name = name[7..].Trim();
+            }
+            if (state.Translator.UnregisterAlias(name))
+            {
+                if (save)
+                {
+                    state.Config.Aliases.Remove(name);
+                    state.Config.Save();
+                }
                 Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  unalias {name} (effective after reload)");
+                Console.WriteLine(save
+                    ? $"  unalias {name} (saved)"
+                    : $"  unalias {name}");
                 Console.ResetColor();
             }
             else
@@ -4875,7 +4899,7 @@ static string GetStartupTip(RushConfig config)
         "source file.rush  -- run a Rush script in current session",
         "$(ls | count)  -- command substitution: embed output inline",
         "export FOO=bar  -- set environment variable",
-        "alias ll='ls -la'  -- define a command shortcut",
+        "alias ll='ls -la'  -- define a command shortcut (--save to persist)",
 
         // ── Output ──
         "ls > files.txt  -- redirect output to file",

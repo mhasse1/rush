@@ -607,6 +607,16 @@ public class CommandTranslator
     }
 
     /// <summary>
+    /// Remove a user alias. Returns true if the alias existed.
+    /// </summary>
+    public bool UnregisterAlias(string alias)
+    {
+        if (_commands.TryGetValue(alias, out var mapping) && mapping.IsUserAlias)
+            return _commands.Remove(alias);
+        return false;
+    }
+
+    /// <summary>
     /// Check if a command is a user-defined alias (should run natively, not through PowerShell).
     /// </summary>
     public bool IsUserAlias(string command)
