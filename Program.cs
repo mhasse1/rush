@@ -166,7 +166,8 @@ if (llmMode)
             {
                 string? prevDir = null;
                 bool dummyE = false, dummyX = false, dummyPf = false;
-                ReloadState.Restore(saved, rs, ref prevDir, ref dummyE, ref dummyX, ref dummyPf);
+                ReloadState.Restore(saved, rs, ref prevDir, ref dummyE, ref dummyX, ref dummyPf,
+                    llmConfig, tr);
             }
         }
         catch (Exception ex)
@@ -314,7 +315,8 @@ if (isResuming)
         {
             string? prevDir = state.PreviousDirectory;
             bool tmpE = state.SetE, tmpX = state.SetX, tmpPf = state.SetPipefail;
-            ReloadState.Restore(saved, runspace, ref prevDir, ref tmpE, ref tmpX, ref tmpPf);
+            ReloadState.Restore(saved, runspace, ref prevDir, ref tmpE, ref tmpX, ref tmpPf,
+                state.Config, state.Translator);
             state.PreviousDirectory = prevDir;
             state.SetE = tmpE;
             state.SetX = tmpX;

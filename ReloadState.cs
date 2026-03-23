@@ -184,7 +184,8 @@ public static class ReloadState
     /// Restore session state from a saved snapshot.
     /// </summary>
     public static void Restore(SessionState state, Runspace runspace,
-        ref string? previousDirectory, ref bool setE, ref bool setX, ref bool setPipefail)
+        ref string? previousDirectory, ref bool setE, ref bool setX, ref bool setPipefail,
+        RushConfig config, CommandTranslator translator)
     {
         // Restore cwd
         if (!string.IsNullOrEmpty(state.Cwd) && Directory.Exists(state.Cwd))
@@ -222,6 +223,13 @@ public static class ReloadState
                 runspace.SessionStateProxy.SetVariable(name, UnwrapJsonElement(value));
             }
             catch { }
+        }
+
+        // Restore aliases to both config and translator (don't Save — already on disk)
+        foreach (var (alias, command) in state.Aliases)
+        {
+            config.Aliases[alias] = command;
+            translator.RegisterAlias(alias, command);
         }
     }
 
