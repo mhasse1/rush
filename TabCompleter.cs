@@ -462,7 +462,7 @@ public class TabCompleter
             ps.Runspace = _runspace;
             var completions = CommandCompletion.CompleteInput(input, cursor, null, ps);
 
-            if (completions?.CompletionMatches != null)
+            if (completions?.CompletionMatches != null && completions.CompletionMatches.Count > 0)
             {
                 _completionStart = completions.ReplacementIndex;
                 foreach (var match in completions.CompletionMatches)
