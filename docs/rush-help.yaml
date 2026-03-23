@@ -644,6 +644,61 @@ objectify:
     - rush: 'my-tool | objectify --fixed | where col1 > 5'
     - rush: 'my-tool | objectify --delim "," | select name,value'
 
+config:
+  summary: "Configuration model — how Rush organizes settings, startup, and secrets."
+
+  philosophy:
+    - "Rush uses a layered configuration model instead of a single rc file."
+    - "Each layer has a clear purpose — no overlapping responsibilities."
+    - "Settings are managed by commands (set, alias), not by editing JSON."
+
+  layers:
+    config_json:
+      file: "~/.config/rush/config.json"
+      purpose: "Shell settings and saved aliases"
+      managed_by: "set --save, alias --save, unalias --save"
+      contains: "edit mode, theme, bg color, history size, AI provider, aliases"
+      rule: "Don't edit by hand — use `set` and `alias --save` commands."
+
+    init_rush:
+      file: "~/.config/rush/init.rush"
+      purpose: "Startup script — PATH, exports, functions, prompt"
+      managed_by: "Edit directly"
+      contains: "PATH setup, environment variables, custom functions, prompt override"
+      rule: "Code that runs on every launch. No aliases — those go in config.json."
+
+    secrets_rush:
+      file: "~/.config/rush/secrets.rush"
+      purpose: "API keys and tokens — never synced"
+      managed_by: "Edit directly"
+      contains: "export OPENAI_API_KEY, GITHUB_TOKEN, etc."
+      rule: "Excluded from config sync. Create manually when needed."
+
+  vs_bash:
+    - { bash: ".bashrc / .zshrc", rush: "init.rush (startup code) + config.json (settings)" }
+    - { bash: ".bash_profile / .zprofile", rush: "init.rush (there is only one startup file)" }
+    - { bash: "alias in .bashrc", rush: "alias --save (persists to config.json)" }
+    - { bash: "export in .bashrc", rush: "export in init.rush (or export --save)" }
+    - { bash: ".env / secrets in rc file", rush: "secrets.rush (separate, never synced)" }
+    - { bash: "oh-my-zsh / plugins / frameworks", rush: "Not needed — Rush has batteries included" }
+
+  commands:
+    - "set                  — show all settings"
+    - "set editMode vi      — change for this session"
+    - "set --save editMode vi — persist to config.json"
+    - "alias                — show all aliases"
+    - "alias ll='ls -la'    — session-only alias"
+    - "alias --save ll='ls -la' — persist to config.json"
+    - "unalias ll           — remove for this session"
+    - "unalias --save ll    — remove from config.json"
+    - "sync                 — sync config across machines"
+
+  tips:
+    - "Coming from bash/zsh? You don't need a framework (oh-my-zsh, rcforge, etc.)."
+    - "Rush handles prompt, completions, syntax highlighting, and vi/emacs modes natively."
+    - "Keep init.rush short — most of what rc frameworks do is already built in."
+    - "Use `path add ... end` blocks instead of fragile PATH manipulation."
+
 xref:
   summary: "Bash/Unix → Rush cross-reference. Use Rush-native syntax instead of shell commands."
 

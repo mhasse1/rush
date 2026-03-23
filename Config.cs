@@ -391,7 +391,7 @@ public class RushConfig
         {
             sb.AppendLine();
             sb.AppendLine("  // ── Aliases ──────────────────────────────────────────────");
-            sb.AppendLine("  // Quick command shortcuts. For complex logic, use functions in init.rush.");
+            sb.AppendLine("  // Managed by: alias --save, unalias --save");
             sb.Append("  \"aliases\": ");
             if (Aliases.Count == 0)
             {
@@ -428,7 +428,7 @@ public class RushConfig
 
     /// <summary>
     /// Create default init.rush if it doesn't exist.
-    /// This is the single startup script — exports, aliases, functions, prompt.
+    /// This is the startup script — exports, functions, prompt customization.
     /// </summary>
     private static void EnsureStartupScripts()
     {
@@ -440,12 +440,23 @@ public class RushConfig
                 File.WriteAllText(initRush, """
                     # ~/.config/rush/init.rush
                     # Startup script — runs on every shell launch.
-                    # Full Rush syntax: exports, aliases, functions, control flow.
+                    # Full Rush syntax: exports, functions, control flow.
+                    #
+                    # Rush splits configuration across three layers:
+                    #   config.json  — settings, saved aliases (managed by set/alias --save)
+                    #   init.rush    — PATH, exports, functions, prompt (this file)
+                    #   secrets.rush — API keys and tokens (never synced)
+                    #
+                    # Aliases:  use `alias ll='ls -la'` at the REPL (session-only)
+                    #           or `alias --save ll='ls -la'` to persist to config.json.
+                    #           Don't put alias commands here — they belong in config.json.
 
                     # ── PATH ─────────────────────────────────────────────────
-                    # export PATH="/opt/homebrew/bin:$PATH"
-                    # export PATH="$HOME/.local/bin:$PATH"
-                    # export PATH="/usr/local/go/bin:$PATH"
+                    # path add
+                    #   /opt/homebrew/bin
+                    #   ~/.local/bin
+                    #   /usr/local/go/bin
+                    # end
 
                     # ── Environment ──────────────────────────────────────────
                     # export EDITOR=vim
@@ -464,11 +475,6 @@ public class RushConfig
                     # if os == "linux"
                     #   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
                     # end
-
-                    # ── Aliases ──────────────────────────────────────────────
-                    # alias ll='ls -la'
-                    # alias g='git'
-                    # alias dc='docker compose'
 
                     # ── Functions ─────────────────────────────────────────────
                     # def mkcd(dir)
