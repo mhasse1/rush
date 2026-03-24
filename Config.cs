@@ -20,6 +20,9 @@ public class RushConfig
     public bool ShowTips { get; set; } = true;
     public bool ShowHints { get; set; } = true;
 
+    // ── Internal state (not user-facing settings) ────────────────────
+    public bool CoreutilsTipShown { get; set; } = false;
+
     /// <summary>
     /// Terminal background color for palette generation. Hex like "#222733".
     /// "auto" = detect from env/OS. When set, enables 256-color palette with

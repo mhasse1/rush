@@ -285,7 +285,10 @@ var state = new ShellState
 
 // ── Windows: shim uutils coreutils if needed ────────────────────────
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
     ShimCoreutilsIfNeeded(runspace);
+    DetectWindowsCoreutils(runspace, config);
+}
 
 // ── Run Startup Scripts (with full builtin support) ─────────────────
 RunStartupScripts(runspace, scriptEngine, state);
@@ -2636,6 +2639,61 @@ static void ShimCoreutilsIfNeeded(Runspace runspace, bool quiet = false)
     catch
     {
         // coreutils.exe not found or failed — nothing to shim
+    }
+}
+
+/// <summary>
+/// On Windows, detect available coreutils and either add Git for Windows
+/// to PATH or show a one-time tip. Called after ShimCoreutilsIfNeeded.
+/// </summary>
+static void DetectWindowsCoreutils(Runspace runspace, RushConfig config)
+{
+    try
+    {
+        // Check if coreutils shim already set up a working 'ls' function
+        using var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+        ps.AddScript("Get-Command ls -CommandType Function -ErrorAction SilentlyContinue");
+        var result = ps.Invoke();
+        if (result.Count > 0)
+            return; // coreutils.exe shimmed — all good
+
+        // Check for Git for Windows
+        var gitUsrBin = @"C:\Program Files\Git\usr\bin";
+        if (Directory.Exists(gitUsrBin) && File.Exists(Path.Combine(gitUsrBin, "ls.exe")))
+        {
+            using var ps2 = PowerShell.Create();
+            ps2.Runspace = runspace;
+            ps2.AddScript($"$env:PATH = \"{gitUsrBin};$env:PATH\"");
+            ps2.Invoke();
+            // Also update .NET's PATH so Process.Start finds the tools
+            var currentPath = Environment.GetEnvironmentVariable("PATH") ?? "";
+            Environment.SetEnvironmentVariable("PATH", $"{gitUsrBin};{currentPath}");
+
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("  Using Git for Windows coreutils.");
+            Console.ResetColor();
+            return;
+        }
+
+        // Nothing found — show one-time tip
+        if (!config.CoreutilsTipShown)
+        {
+            Console.WriteLine();
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Write("  Tip: ");
+            Console.ResetColor();
+            Console.WriteLine("Rush works best with GNU-compatible tools (ls, grep, find).");
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine("        Install uutils:  winget install uutils.coreutils");
+            Console.ResetColor();
+            config.CoreutilsTipShown = true;
+            config.Save();
+        }
+    }
+    catch
+    {
+        // Best-effort — don't fail startup over detection
     }
 }
 
