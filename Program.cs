@@ -958,6 +958,19 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             break;
         }
 
+        // ── --help flag: "file --help" → "help file", "for --help" → "help loops"
+        if (segment.EndsWith(" --help", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("--help", StringComparison.OrdinalIgnoreCase))
+        {
+            var keyword = segment.Equals("--help", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : segment[..segment.LastIndexOf(" --help", StringComparison.OrdinalIgnoreCase)].Trim();
+            var topic = MapKeywordToHelpTopic(keyword);
+            Console.WriteLine(HelpCommand.Execute(topic));
+            lastSegmentFailed = false;
+            continue;
+        }
+
         if (segment.Equals("help", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("help ", StringComparison.OrdinalIgnoreCase))
         {
@@ -5157,6 +5170,72 @@ static void ApplySettingToRuntime(string key, ShellState state)
             Theme.SetNativeColorEnvVars();
             break;
     }
+}
+
+/// <summary>
+/// Map a keyword to its help topic. Direct matches (file, dir, sql) pass through.
+/// Keywords that don't match a topic directly are mapped via a lookup table.
+/// Returns null for bare --help (shows topic list).
+/// </summary>
+static string? MapKeywordToHelpTopic(string? keyword)
+{
+    if (string.IsNullOrWhiteSpace(keyword)) return null;
+
+    // Direct match — keyword IS a topic name (file, dir, time, sql, config, etc.)
+    if (HelpCommand.GetTopic(keyword) != null)
+        return keyword;
+
+    // Keyword mapping for things that don't match topic names directly
+    var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        // Control flow
+        ["if"] = "control-flow", ["unless"] = "control-flow", ["case"] = "control-flow",
+        ["match"] = "control-flow", ["else"] = "control-flow", ["elsif"] = "control-flow",
+        // Loops
+        ["for"] = "loops", ["while"] = "loops", ["until"] = "loops",
+        ["loop"] = "loops", ["each"] = "loops", ["times"] = "loops",
+        // Functions
+        ["def"] = "functions", ["return"] = "functions", ["lambda"] = "functions",
+        // Classes/enums
+        ["class"] = "classes", ["enum"] = "enums",
+        // Pipeline ops
+        ["where"] = "pipeline-ops", ["select"] = "pipeline-ops",
+        ["first"] = "pipeline-ops", ["last"] = "pipeline-ops",
+        ["skip"] = "pipeline-ops", ["count"] = "pipeline-ops",
+        ["sum"] = "pipeline-ops", ["avg"] = "pipeline-ops",
+        ["min"] = "pipeline-ops", ["max"] = "pipeline-ops",
+        ["distinct"] = "pipeline-ops", ["sort"] = "pipeline-ops",
+        ["tee"] = "pipeline-ops", ["columns"] = "pipeline-ops",
+        // Pipelines / format
+        ["as"] = "pipelines", ["from"] = "pipelines", ["pipe"] = "pipelines",
+        // Errors
+        ["try"] = "errors", ["catch"] = "errors", ["raise"] = "errors",
+        ["begin"] = "errors", ["rescue"] = "errors",
+        // Config/settings
+        ["alias"] = "config", ["unalias"] = "config", ["set"] = "config",
+        ["export"] = "config", ["reload"] = "config", ["sync"] = "config",
+        ["init"] = "config",
+        // Stdlib with dot notation
+        ["File"] = "file", ["Dir"] = "dir", ["Time"] = "time",
+        // Regex
+        ["regex"] = "regex", ["=~"] = "regex",
+        // Platforms
+        ["macos"] = "platforms", ["linux"] = "platforms",
+        ["windows"] = "platforms", ["win64"] = "platforms", ["win32"] = "platforms",
+        // LLM mode
+        ["llm"] = "llm-mode", ["lcat"] = "llm-mode", ["spool"] = "llm-mode",
+        // Objectify
+        ["objectify"] = "objectify",
+        // Cross-reference
+        ["xref"] = "xref", ["bash"] = "xref",
+    };
+
+    if (map.TryGetValue(keyword, out var topic))
+        return topic;
+
+    // Try prefix match on topic names (e.g., "pipe" → "pipelines")
+    return HelpCommand.GetTopicNames()
+        .FirstOrDefault(t => t.StartsWith(keyword, StringComparison.OrdinalIgnoreCase));
 }
 
 static void ShowHelp(LineEditor editor, CommandTranslator translator)
