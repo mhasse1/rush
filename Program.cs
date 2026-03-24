@@ -966,7 +966,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 ? null
                 : segment[..segment.LastIndexOf(" --help", StringComparison.OrdinalIgnoreCase)].Trim();
             var topic = MapKeywordToHelpTopic(keyword);
-            Console.WriteLine(HelpCommand.Execute(topic));
+            HelpRenderer.Render(topic);
             lastSegmentFailed = false;
             continue;
         }
@@ -984,7 +984,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             else
             {
                 // Topic-based help from embedded rush-help.yaml
-                Console.WriteLine(HelpCommand.Execute(helpArg));
+                HelpRenderer.Render(helpArg);
             }
             lastSegmentFailed = false;
             continue;
