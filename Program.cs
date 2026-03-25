@@ -530,6 +530,7 @@ while (true)
     Theme.ReemitBackground();
 
     prompt.SetLastCommandFailed(cmdFailed, cmdExitCode);
+    TrainingHints.TryShowHint(input, cmdFailed, config);
     lineEditor.SaveHistory();
 }
 
