@@ -170,14 +170,9 @@ public class CommandTranslator
             return cmd;
         }
 
-        // Special: wc after a pipe → Measure-Object
-        if (isAfterPipe && command.Equals("wc", StringComparison.OrdinalIgnoreCase))
-        {
-            if (args.Contains("-l")) return "Measure-Object -Line";
-            if (args.Contains("-w")) return "Measure-Object -Word";
-            if (args.Contains("-c")) return "Measure-Object -Character";
-            return "Measure-Object";
-        }
+        // wc: fall through to native (Unix) or coreutils shim (Windows).
+        // Previously translated to Measure-Object, but that produces PowerShell-
+        // formatted output with extra blank columns — not the Unix experience.
 
         // Special: uniq after a pipe → Select-Object -Unique
         if (isAfterPipe && command.Equals("uniq", StringComparison.OrdinalIgnoreCase))

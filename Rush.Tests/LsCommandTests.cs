@@ -237,8 +237,8 @@ public class LsCommandTests
         var dir = CreateTestDir();
         try
         {
-            // wc -l maps to Measure-Object -Line which produces table output
-            // Extract the numeric count from the formatted output
+            // wc -l runs natively — output is whitespace + count
+            // Extract the numeric count
             var (stdout, _, exitCode) = TestHelper.RunRush($"ls {TestHelper.RushPath(dir)} | wc -l");
             Assert.Equal(0, exitCode);
             // Parse the count from the table — look for first line that's purely numeric

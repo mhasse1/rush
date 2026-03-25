@@ -51,7 +51,7 @@ public class CommandTranslatorTests
     [InlineData("data | sort", "data | Sort-Object")]
     [InlineData("data | sort Name", "data | Sort-Object -Property Name")]
     [InlineData("data | sort -r", "data | Sort-Object -Descending")]
-    [InlineData("data | wc -l", "data | Measure-Object -Line")]
+    // wc falls through to native/coreutils — no Measure-Object translation
     [InlineData("data | uniq", "data | Select-Object -Unique")]
     [InlineData("data | count", "data | Measure-Object | ForEach-Object { $_.Count }")]
     [InlineData("data | first", "data | Select-Object -First 1")]
