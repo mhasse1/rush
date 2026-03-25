@@ -1264,6 +1264,49 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             continue;
         }
 
+        // history | ... → pipe history entries through the pipeline
+        if ((segment.StartsWith("history |", StringComparison.OrdinalIgnoreCase)
+            || segment.StartsWith("history|", StringComparison.OrdinalIgnoreCase))
+            && state.LineEditor != null)
+        {
+            var history = state.LineEditor.History;
+            var entries = new System.Text.StringBuilder();
+            entries.Append("@(");
+            for (int i = 0; i < history.Count; i++)
+            {
+                if (i > 0) entries.Append(',');
+                entries.Append($"'{history[i].Replace("'", "''")}'");
+            }
+            entries.Append(')');
+
+            // Replace "history" with the array, translate the rest of the pipeline
+            var pipeIdx = segment.IndexOf('|');
+            var rest = segment[pipeIdx..]; // "| distinct" etc.
+            var histTranslated = state.Translator.Translate($"data {rest}");
+            var tPipeIdx = histTranslated?.IndexOf('|') ?? -1;
+            var psPipe = tPipeIdx >= 0 ? histTranslated![tPipeIdx..] : rest;
+
+            var psCommand = $"{entries} {psPipe}";
+            try
+            {
+                using var ps = PowerShell.Create();
+                ps.Runspace = state.Runspace;
+                ps.AddScript(psCommand);
+                var results = ps.Invoke();
+                foreach (var r in results)
+                    Console.WriteLine(r);
+                lastSegmentFailed = ps.HadErrors;
+            }
+            catch (Exception ex)
+            {
+                Console.ForegroundColor = Theme.Current.Error;
+                Console.Error.WriteLine($"history: {ex.Message}");
+                Console.ResetColor();
+                lastSegmentFailed = true;
+            }
+            continue;
+        }
+
         if (segment.Equals("alias", StringComparison.OrdinalIgnoreCase))
         {
             ShowAliases(state.Translator);
