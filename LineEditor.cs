@@ -1576,7 +1576,7 @@ public class LineEditor
         {
             if (!Directory.Exists(HistoryDir))
                 Directory.CreateDirectory(HistoryDir);
-            File.WriteAllLines(HistoryPath, _history.TakeLast(MaxHistory));
+            File.WriteAllLines(HistoryPath, _history.Where(h => !string.IsNullOrWhiteSpace(h)).TakeLast(MaxHistory));
         }
         catch { }
     }
