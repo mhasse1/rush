@@ -2597,6 +2597,57 @@ function __rush_win32 {
 ");
     }
     ps2.Invoke();
+
+    // Inject __rush_puts — semantic output formatting for puts
+    // Detects prefix characters (# heading, ! warn, !! error, > success, ~ info)
+    // and applies theme-aware colors. Strips prefix when piped or NO_COLOR is set.
+    using var ps3 = PowerShell.Create();
+    ps3.Runspace = runspace;
+    ps3.AddScript(@"
+function __rush_puts {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { Write-Output ''; return }
+
+    # Check for escaped prefixes — emit literal without prefix
+    if ($Text.StartsWith('\# ') -or $Text.StartsWith('\## ') -or
+        $Text.StartsWith('\> ') -or $Text.StartsWith('\! ') -or
+        $Text.StartsWith('\!! ') -or $Text.StartsWith('\~ ')) {
+        Write-Output $Text.Substring(1)
+        return
+    }
+
+    # Detect semantic prefix
+    $level = $null; $body = $Text
+    if ($Text.StartsWith('## '))     { $level = 'h2';      $body = $Text.Substring(3) }
+    elseif ($Text.StartsWith('# '))  { $level = 'h1';      $body = $Text.Substring(2) }
+    elseif ($Text.StartsWith('!! ')) { $level = 'error';   $body = $Text.Substring(3) }
+    elseif ($Text.StartsWith('! '))  { $level = 'warn';    $body = $Text.Substring(2) }
+    elseif ($Text.StartsWith('> '))  { $level = 'success'; $body = $Text.Substring(2) }
+    elseif ($Text.StartsWith('~ '))  { $level = 'info';    $body = $Text.Substring(2) }
+
+    if ($null -eq $level) { Write-Output $Text; return }
+
+    # If piped/redirected or NO_COLOR set, strip prefix and emit plain text
+    if ($env:NO_COLOR -or -not [Console]::IsOutputRedirected -eq $false) {
+        # IsOutputRedirected is true when piped — emit plain
+    }
+    if ([Console]::IsOutputRedirected -or $env:NO_COLOR) {
+        Write-Output $body
+        return
+    }
+
+    # Apply colors
+    switch ($level) {
+        'h1'      { Write-Host $body -ForegroundColor White -BackgroundColor DarkBlue }
+        'h2'      { Write-Host $body -ForegroundColor Cyan }
+        'error'   { Write-Host $body -ForegroundColor Red }
+        'warn'    { Write-Host $body -ForegroundColor Yellow }
+        'success' { Write-Host $body -ForegroundColor Green }
+        'info'    { Write-Host $body -ForegroundColor DarkGray }
+    }
+}
+");
+    ps3.Invoke();
 }
 
 // ── Windows: uutils coreutils shimming ──────────────────────────────
@@ -2731,25 +2782,8 @@ static void RunScriptFile(string path, string[] scriptArgs)
         var runspace = RunspaceFactory.CreateRunspace(host, iss);
         runspace.Open();
 
-        // Inject Rush environment variables (same as REPL startup)
-        {
-            using var initPs = PowerShell.Create();
-            initPs.Runspace = runspace;
-            var osName = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
-                System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
-            var archName = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch
-            {
-                System.Runtime.InteropServices.Architecture.X64 => "x64",
-                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
-                System.Runtime.InteropServices.Architecture.X86 => "x86",
-                _ => System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()
-            };
-            var osVersion = Environment.OSVersion.Version.ToString();
-            initPs.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{RushVersion.Full}'; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
-            initPs.Invoke();
-        }
+        // Inject Rush environment variables and helper functions
+        InjectRushEnvVars(runspace, RushVersion.Full, false);
 
         // Inject script-specific variables: ARGV, __FILE__, __DIR__
         {

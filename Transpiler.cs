@@ -1145,9 +1145,17 @@ public class RushTranspiler
         // that PS would misinterpret as multiple Write-Output arguments.
         // Also wrap size literals (1kb, 5mb) — PS treats bare Write-Output 1kb as string.
         // Exempt quoted strings and variable references which are safe as-is.
-        if (expr.StartsWith("[") ||
+        bool needsParens = expr.StartsWith("[") ||
             System.Text.RegularExpressions.Regex.IsMatch(expr, @"^\d+[kmgt]b$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ||
-            (expr.Contains(' ') && !expr.StartsWith('"') && !expr.StartsWith("'") && !expr.StartsWith("$")))
+            (expr.Contains(' ') && !expr.StartsWith('"') && !expr.StartsWith("'") && !expr.StartsWith("$"));
+
+        // Route through __rush_puts for semantic prefix detection (# heading, ! warn, etc.)
+        // Only for quoted string literals and interpolated strings — not variables or expressions
+        bool isQuotedString = expr.StartsWith('"') || expr.StartsWith("'");
+        if (isQuotedString)
+            return $"__rush_puts ({expr})";
+
+        if (needsParens)
             return $"Write-Output ({expr})";
         return $"Write-Output {expr}";
     }

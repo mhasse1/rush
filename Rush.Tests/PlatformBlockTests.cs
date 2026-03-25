@@ -143,7 +143,7 @@ public class PlatformBlockTests
         var code = "macos\n  puts \"hello\"\nend";
         var ps = Transpile(code);
         Assert.Contains("if ($os -eq 'macos')", ps);
-        Assert.Contains("Write-Output", ps);
+        Assert.True(ps.Contains("Write-Output") || ps.Contains("__rush_puts"), "Expected puts output statement");
     }
 
     [Fact]
