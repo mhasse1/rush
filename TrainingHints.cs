@@ -29,7 +29,8 @@ static class TrainingHints
 
         _impressions[hint.PatternKey] = (count + 1);
 
-        // Render as dim hint
+        // Render as dim hint with blank line separator
+        Console.WriteLine();
         Console.ForegroundColor = Theme.Current.Muted;
         Console.WriteLine($"  ~ Rush: {hint.Suggestion}");
         Console.ResetColor();

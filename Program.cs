@@ -435,6 +435,19 @@ while (true)
     input = input.Trim();
     if (string.IsNullOrEmpty(input)) continue;
 
+    // ── --help flag (must be before Rush syntax triage — "for --help" etc.) ──
+    if (input.EndsWith(" --help", StringComparison.OrdinalIgnoreCase)
+        || input.Equals("--help", StringComparison.OrdinalIgnoreCase))
+    {
+        var keyword = input.Equals("--help", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : input[..input.LastIndexOf(" --help", StringComparison.OrdinalIgnoreCase)].Trim();
+        var helpTopic = MapKeywordToHelpTopic(keyword);
+        // Pass original keyword if mapping returned null, so renderer shows "unknown topic"
+        HelpRenderer.Render(helpTopic ?? keyword);
+        continue;
+    }
+
     // ── Rush Scripting Language Triage ─────────────────────────────
     // Check if input is Rush syntax (if/for/def/assignment/method chains).
     // If so, accumulate multi-line blocks, parse, transpile to PS, and execute.
@@ -967,7 +980,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 ? null
                 : segment[..segment.LastIndexOf(" --help", StringComparison.OrdinalIgnoreCase)].Trim();
             var topic = MapKeywordToHelpTopic(keyword);
-            HelpRenderer.Render(topic);
+            HelpRenderer.Render(topic ?? keyword);
             lastSegmentFailed = false;
             continue;
         }
