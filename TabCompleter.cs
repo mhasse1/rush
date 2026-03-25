@@ -133,6 +133,13 @@ public class TabCompleter
             // Path-like tokens (contain / or start with ./ ../) always get path completion
             CompletePaths(matchToken);
         }
+        else if (IsAfterPipe(beforeToken))
+        {
+            // After a pipe: complete Rush pipeline operators first, then paths
+            CompletePipelineOps(matchToken);
+            if (_completions.Count == 0)
+                CompletePaths(matchToken);
+        }
         else if (isFirstToken)
         {
             // Complete command names (builtins + translator + PATH binaries)
@@ -451,6 +458,29 @@ public class TabCompleter
         catch
         {
             // Ignore completion errors silently
+        }
+    }
+
+    private static bool IsAfterPipe(string beforeToken)
+    {
+        // Check if the last non-space character before the current token is '|'
+        var trimmed = beforeToken.TrimEnd();
+        return trimmed.Length > 0 && trimmed[^1] == '|';
+    }
+
+    private static readonly string[] PipelineOps = new[]
+    {
+        "where", "select", "sort", "first", "last", "skip", "count",
+        "distinct", "sum", "avg", "min", "max", "tee", "columns",
+        "as", "from", "objectify", "grep", "head", "tail",
+    };
+
+    private void CompletePipelineOps(string prefix)
+    {
+        foreach (var op in PipelineOps)
+        {
+            if (op.StartsWith(prefix, CompareMode) && !_completions.Contains(op))
+                _completions.Add(op);
         }
     }
 

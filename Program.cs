@@ -5057,7 +5057,7 @@ static string GetStartupTip(RushConfig config)
         "ps | select ProcessName, CPU  -- pick specific columns",
         "ls | count  -- count items (also: sum, avg, min, max)",
         "ls | first 5  -- slice results (also: last, skip)",
-        "history | distinct  -- unique values (works on unsorted data)",
+        "ps | sort CPU | distinct  -- unique values (works on unsorted data)",
         "ps | .ProcessName  -- dot-notation extracts a single property",
         "ls | as json  -- format output as JSON (also: csv, table, list)",
         "cat data.json | from json  -- parse JSON input into objects",
