@@ -5315,6 +5315,8 @@ static string? MapKeywordToHelpTopic(string? keyword)
         ["windows"] = "platforms", ["win64"] = "platforms", ["win32"] = "platforms",
         // LLM mode
         ["llm"] = "llm-mode", ["lcat"] = "llm-mode", ["spool"] = "llm-mode",
+        // MCP
+        ["mcp"] = "mcp", ["mcp-ssh"] = "mcp", ["ssh"] = "mcp",
         // Objectify
         ["objectify"] = "objectify",
         // Cross-reference

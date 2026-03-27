@@ -621,6 +621,52 @@ llm-mode:
       - "FileInfo → name, size, modified, type, path"
       - "Process → pid, name, memory, cpu"
 
+mcp:
+  summary: "MCP server integration for Claude Code and Claude Desktop"
+
+  install: "rush install mcp --claude  (registers both servers, restarts required)"
+
+  servers:
+    rush-local:
+      command: "rush --mcp"
+      state: "Persistent — variables, cwd, and env survive across tool calls"
+      hosts: "Local machine only"
+      startup: "Loads init.rush and secrets.rush — Claude gets user's PATH, aliases, env"
+      tools:
+        - { tool: "rush_execute", desc: "Execute Rush syntax, Unix commands, or PowerShell. State persists." }
+        - { tool: "rush_read_file", desc: "Read file with MIME detection. Text as UTF-8, binary as base64." }
+        - { tool: "rush_context", desc: "Current hostname, cwd, git branch/dirty, last exit code." }
+
+    rush-ssh:
+      command: "rush --mcp-ssh"
+      state: "Persistent per host when Rush is installed remotely, stateless fallback otherwise"
+      hosts: "Any SSH-accessible host (key-based auth, BatchMode enforced)"
+      tools:
+        - { tool: "rush_execute", desc: "Execute command on host via SSH. Requires host parameter." }
+        - { tool: "rush_read_file", desc: "Read file from host via SSH." }
+        - { tool: "rush_context", desc: "Get hostname, cwd, git status from host." }
+
+  resources:
+    - "rush://lang-spec — Rush language specification (YAML), served by both servers"
+
+  ssh_requirements:
+    - "Key-based auth required (no password prompts)"
+    - "Rush on remote host enables persistent sessions with structured JSON output"
+    - "Without Rush on remote: falls back to raw shell (stateless, unstructured)"
+    - "ControlMaster multiplexing automatic (~0ms reconnect after first connection)"
+
+  comparison:
+    - { aspect: "State", local: "Persistent (vars, cwd, env survive)", ssh: "Persistent per host (with Rush) or stateless" }
+    - { aspect: "Hosts", local: "Local machine", ssh: "Any SSH-accessible host" }
+    - { aspect: "Use case", local: "Multi-step scripts, interactive workflows", ssh: "Remote admin, multi-host operations" }
+    - { aspect: "Parallelism", local: "Single session", ssh: "Concurrent across hosts" }
+
+  rules:
+    - "rush-local is best for multi-step workflows — state persists between calls"
+    - "rush-ssh can target multiple hosts in parallel — each host gets its own session"
+    - "Both servers provide rush://lang-spec so Claude understands Rush syntax"
+    - "rush-ssh auto-detects Rush on remote: persistent session if found, raw shell fallback if not"
+
 objectify:
   summary: "Convert text table output to structured objects"
 
