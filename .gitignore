@@ -9,3 +9,4 @@ publish/
 *~
 .DS_Store
 .rushbg
+tmp/
