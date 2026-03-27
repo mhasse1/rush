@@ -5,6 +5,16 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using Rush;
 
+// ── Windows Console Setup ────────────────────────────────────────────
+// Enable UTF-8 output (for ✓/✗ and other Unicode) and ANSI virtual
+// terminal processing (for escape codes like \x1b[J, colors, cursor movement).
+if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+{
+    Console.OutputEncoding = System.Text.Encoding.UTF8;
+    Console.InputEncoding = System.Text.Encoding.UTF8;
+    EnableWindowsAnsi();
+}
+
 // Version is derived from git at build time (see Rush.csproj GitVersion target).
 // InformationalVersion = "1.2.348-a3b4c5d" (commit count + short SHA)
 string Version = RushVersion.Full;
@@ -5678,6 +5688,43 @@ static void RunNonInteractive(string command)
 /// Used by ProcessCommand, ExecuteTranspiledBlock, and the REPL loop.
 /// Interactive-only fields (LineEditor, JobManager, etc.) are null in script contexts.
 /// </summary>
+// ── Windows Console ANSI Support ────────────────────────────────────
+
+/// <summary>
+/// Enable ANSI virtual terminal processing on Windows console.
+/// Required for escape codes (\x1b[J, colors, cursor movement) to work
+/// instead of appearing as literal text. No-op on non-Windows.
+/// </summary>
+static void EnableWindowsAnsi()
+{
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+    try
+    {
+        var stdout = GetStdHandle(-11); // STD_OUTPUT_HANDLE
+        if (GetConsoleMode(stdout, out uint mode))
+        {
+            mode |= 0x0004; // ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            SetConsoleMode(stdout, mode);
+        }
+        var stderr = GetStdHandle(-12); // STD_ERROR_HANDLE
+        if (GetConsoleMode(stderr, out uint errMode))
+        {
+            errMode |= 0x0004;
+            SetConsoleMode(stderr, errMode);
+        }
+    }
+    catch { } // Best-effort — some environments may not support it
+}
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern IntPtr GetStdHandle(int nStdHandle);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+
+[DllImport("kernel32.dll", SetLastError = true)]
+static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+
 static class RushConstants
 {
     /// <summary>

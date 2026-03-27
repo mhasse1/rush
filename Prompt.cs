@@ -217,12 +217,16 @@ public class Prompt
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            // Windows: check if running elevated
+            // Windows: check if the process token is actually elevated.
+            // Being in the Administrators group ≠ elevated — UAC means the
+            // token is filtered until "Run as Administrator" is used.
             try
             {
                 using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
-                var principal = new System.Security.Principal.WindowsPrincipal(identity);
-                return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+                // Owner SID equals the Administrators group SID only when truly elevated
+                var adminSid = new System.Security.Principal.SecurityIdentifier(
+                    System.Security.Principal.WellKnownSidType.BuiltinAdministratorsSid, null);
+                return identity.Owner?.Equals(adminSid) == true;
             }
             catch
             {
