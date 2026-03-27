@@ -485,8 +485,8 @@ errors:
     - "Multiple rescue blocks allowed"
 
 platforms:
-  summary: "OS-conditional code blocks"
-  keywords: [macos, linux, win64, win32]
+  summary: "OS-conditional and PowerShell block syntax"
+  keywords: [macos, linux, win64, win32, isssh, ps, ps5]
 
   syntax: |
     macos
@@ -499,6 +499,10 @@ platforms:
 
     win64
       puts "64-bit Windows (PS 7)"
+    end
+
+    isssh
+      puts "connected via SSH"
     end
 
   properties:
@@ -520,11 +524,41 @@ platforms:
         $conn.Open()
       end
 
+  ps_blocks:
+    note: "ps/ps5 blocks pass content directly to PowerShell with NO Rush expansion"
+    purpose: "Raw PowerShell passthrough — $_, $job, script blocks all survive untouched"
+    ps: |
+      ps
+        Get-Service | Where-Object { $_.Status -eq "Running" }
+        $fw = Get-NetFirewallProfile
+        $fw | Format-Table Name, Enabled
+      end
+    ps_version: |
+      ps.version >= "7.4"
+        # Requires PS 7.4+ features
+        $result = Get-Something -UseNewAPI
+      end
+    ps5: |
+      ps5
+        # Runs in Windows PowerShell 5.1 (for legacy modules)
+        Import-Module ActiveDirectory
+        Get-ADUser -Filter *
+      end
+
+  ps_vs_rush:
+    - { context: "Rush syntax (puts, if, for)", use: "Normal Rush code — Rush expands $variables" }
+    - { context: "PowerShell cmdlets with $_ or script blocks", use: "ps...end — no Rush expansion" }
+    - { context: "Legacy PS 5.1 modules (AD, OLEDB)", use: "ps5...end or win32...end" }
+    - { context: "Quick one-liner", use: "powershell -Command '...' (but ps block is cleaner)" }
+
   rules:
     - "Non-matching platform blocks are silently skipped"
     - "macos/linux/win64 contain normal Rush code"
     - "win32 contains raw PowerShell 5.1"
-    - "Rush variables are auto-injected into win32 blocks"
+    - "ps...end runs raw PowerShell 7 on ALL platforms (cross-platform)"
+    - "ps5...end runs raw PowerShell 5.1 on Windows only"
+    - "isssh runs Rush code only when connected via SSH"
+    - "ps as a command (ps -ef, ps aux) still works — only bare ps triggers block mode"
 
 sql:
   summary: "Database queries (SQLite, PostgreSQL, ODBC)"

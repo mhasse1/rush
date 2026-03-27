@@ -1340,6 +1340,46 @@ end
 - Rush variables are automatically injected as `$var = 'value'` preamble
 - On macOS/Linux, win32 blocks are silently skipped
 
+### ps — Raw PowerShell Passthrough
+
+The `ps` block passes content directly to the embedded PowerShell 7 engine with **NO Rush variable expansion**. `$_`, `$job`, script blocks, and all PowerShell syntax survive untouched. This is the recommended way to use PowerShell cmdlets that rely on `$_`, `Where-Object` script blocks, or PS-native variable scoping.
+
+```rush
+ps
+  Get-Service | Where-Object { $_.Status -eq "Running" }
+  $fw = Get-NetFirewallProfile
+  $fw | Format-Table Name, Enabled
+end
+```
+
+**Key features:**
+- `$` variables are NOT expanded by Rush — they reach PowerShell as-is
+- Works on **all platforms** (Rush bundles the PS 7 SDK)
+- Supports version gating: `ps.version >= "7.4" ... end`
+- Bare `ps` starts a block; `ps -ef` and `ps aux` still run the Unix `ps` command
+
+**When to use `ps` vs regular Rush:**
+
+| Scenario | Use |
+|----------|-----|
+| Simple commands, file ops, pipelines | Regular Rush |
+| PowerShell cmdlets with `$_` or `{}` script blocks | `ps ... end` |
+| Windows admin (Get-Service, Get-NetFirewall, etc.) | `ps ... end` |
+| Legacy PS 5.1 modules (AD, OLEDB) | `ps5 ... end` or `win32 ... end` |
+
+### ps5 — PowerShell 5.1 (Windows Only)
+
+The `ps5` block runs raw PowerShell 5.1 via `powershell.exe` on Windows. Use it for modules that require Windows PowerShell 5.1 (not PS 7), such as some Active Directory cmdlets or older management tools.
+
+```rush
+ps5
+  Import-Module ActiveDirectory
+  Get-ADUser -Filter * | Select-Object Name, Enabled
+end
+```
+
+On macOS/Linux, `ps5` blocks are silently skipped (PS 5.1 doesn't exist there).
+
 ### Cross-Platform Scripts
 
 Combine platform blocks for scripts that run everywhere:

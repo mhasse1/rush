@@ -173,10 +173,13 @@ errors:
 
 # ── PLATFORM BLOCKS ──────────────────────────────────────────────
 platforms:
-  keywords: [macos, linux, win64, win32]
+  keywords: [macos, linux, win64, win32, isssh, ps, ps5]
   syntax: "macos; puts \"macOS\"; end  →  if ($os -eq 'macos') { }"
-  properties: [".arch (x64, arm64)", ".version (OS version comparison)"]
+  properties: [".arch (x64, arm64)", ".version (OS or PS version comparison)"]
   win32_note: "win32 body is raw PowerShell 5.1 (for 32-bit OLEDB/ODBC)"
+  ps_note: "ps...end = raw PowerShell 7, NO Rush expansion. $_ and script blocks survive. Cross-platform."
+  ps5_note: "ps5...end = raw PowerShell 5.1 on Windows (legacy modules like ActiveDirectory)"
+  ps_collision: "bare 'ps' = block keyword. 'ps -ef' / 'ps aux' = Unix ps command (not a block)"
 
 # ── STDLIB: File ─────────────────────────────────────────────────
 file_stdlib:
@@ -277,7 +280,8 @@ help:
   no_args: "Lists available topics"
   topics: [file, dir, time, strings, arrays, hashes, classes, enums,
            functions, loops, control-flow, pipelines, regex, errors,
-           platforms, sql, pipeline-ops, llm-mode, objectify, xref]
+           platforms, sql, pipeline-ops, llm-mode, mcp, objectify,
+           config, xref, known-issues]
   key_topic: "xref — bash/Unix → Rush cross-reference. Use BEFORE writing shell commands."
   note: "Use help <topic> for detailed syntax, methods, examples, and rules."
 
