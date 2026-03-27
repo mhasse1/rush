@@ -62,7 +62,7 @@ static class HelpRenderer
             ("Types", new[] { "strings", "arrays", "hashes", "classes", "enums" }),
             ("Flow", new[] { "functions", "loops", "control-flow", "errors" }),
             ("Data", new[] { "pipelines", "pipeline-ops", "regex", "objectify", "sql" }),
-            ("Shell", new[] { "config", "platforms", "llm-mode", "mcp", "xref" }),
+            ("Shell", new[] { "config", "platforms", "llm-mode", "mcp", "xref", "known-issues" }),
         };
 
         foreach (var (label, items) in groups)

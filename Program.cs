@@ -5324,6 +5324,8 @@ static string? MapKeywordToHelpTopic(string? keyword)
         ["llm"] = "llm-mode", ["lcat"] = "llm-mode", ["spool"] = "llm-mode",
         // MCP
         ["mcp"] = "mcp", ["mcp-ssh"] = "mcp", ["ssh"] = "mcp",
+        // Known issues
+        ["bugs"] = "known-issues", ["issues"] = "known-issues", ["workarounds"] = "known-issues",
         // Objectify
         ["objectify"] = "objectify",
         // Cross-reference

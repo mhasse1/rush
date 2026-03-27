@@ -804,3 +804,54 @@ xref:
     - "Shell commands still work — use them for tools Rush doesn't wrap (git, docker, curl)"
     - "Pipeline operators (where, select, count) work on both Rush objects and shell output"
     - "Dir.list returns basenames, not full paths — different from find"
+
+known-issues:
+  summary: "Known limitations and workarounds for the current beta (v0.9.x)"
+
+  issues:
+    - problem: "puts with redirect (>> or >) gives syntax error"
+      reason: "puts is Rush syntax — the parser doesn't understand shell redirects"
+      workaround: 'File.append("file.txt", "text") for >>, File.write("file.txt", "text") for >'
+      alt: 'echo "text" >> file.txt  (echo goes through shell path, supports redirects)'
+
+    - problem: "Rush builtins (history, alias, cd, export) cannot be piped"
+      reason: "Builtins write directly to console, bypassing the pipeline"
+      workaround: "history | distinct works (special-cased). For others, use PowerShell equivalents: Get-History, Get-ChildItem"
+      note: "history piping was added in v0.9.199 — other builtins not yet pipeable"
+
+    - problem: "wc without coreutils on Windows shows PowerShell table format"
+      reason: "Without native wc, PowerShell's Measure-Object runs instead"
+      workaround: "Install uutils (winget install uutils.coreutils) or use | count"
+
+    - problem: "Variables matching builtin names (dirs, jobs, fg) can't be assigned"
+      reason: "IsShellBuiltin() rejects them during triage before assignment is detected"
+      workaround: "Use a different variable name (my_dirs, dir_list, etc.)"
+
+    - problem: "Semicolon-separated Rush statements may fail if # appears in a string value"
+      reason: "Edge case in REPL triage with inline comments vs string content"
+      workaround: "Split into separate lines instead of using semicolons"
+      note: "Works correctly in rush -c and script files"
+
+    - problem: "Platform blocks (macos/linux/win64) require Rush syntax in body"
+      reason: "Block bodies are parsed and transpiled — raw shell commands need quoting or variables"
+      workaround: "Assign shell output to variables: result = $(shell command)"
+
+    - problem: "Single-file binary on Linux self-extracts on first run (~2-3s delay)"
+      reason: "PowerShell SDK assemblies extracted to ~/.net/rush/ on first execution"
+      workaround: "Normal — subsequent launches are instant. Pre-warm by running rush --version after install"
+
+  windows_specific:
+    - problem: "ls output looks different from Unix (PowerShell Get-ChildItem)"
+      reason: "Without coreutils, ls is a PowerShell alias to Get-ChildItem"
+      workaround: "Install uutils: winget install uutils.coreutils (or deploy zip to PATH)"
+      note: "Rush auto-shims coreutils.exe if detected, or add individual binaries to PATH"
+
+    - problem: "Some Unix commands missing (grep, find, head, tail)"
+      reason: "Windows has no native GNU tools"
+      workaround: "Install uutils or Git for Windows. Rush auto-detects and configures on startup."
+
+  rules:
+    - "When hitting a known issue, use the workaround — don't try to debug the underlying cause"
+    - "File issues at https://github.com/mhasse1/rush/issues for new bugs"
+    - "Use | count, | where, | first instead of wc, grep, head for reliable cross-platform behavior"
+    - "Prefer Rush stdlib (File/Dir/Time) over shell commands when structured output matters"
