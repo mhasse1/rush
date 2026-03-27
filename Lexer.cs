@@ -16,7 +16,7 @@ public enum RushTokenType
     Do, And, Or, Not, True, False, Nil,
     Next, Continue, Break, Begin,
     Class, Attr, Self, Super, Enum,
-    Macos, Win64, Win32, Linux, Isssh,
+    Macos, Win64, Win32, Linux, Isssh, Ps, Ps5,
 
     // Operators
     Assign,         // =
@@ -127,6 +127,8 @@ public class Lexer
         ["win32"] = RushTokenType.Win32,
         ["linux"] = RushTokenType.Linux,
         ["isssh"] = RushTokenType.Isssh,
+        ["ps"] = RushTokenType.Ps,
+        ["ps5"] = RushTokenType.Ps5,
     };
 
     private readonly string _source;

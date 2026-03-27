@@ -49,7 +49,7 @@ public class SyntaxHighlighter
         "true", "false", "nil",
         "next", "continue", "break",
         "class", "attr", "self", "super", "enum",
-        "macos", "win64", "win32", "linux", "isssh",
+        "macos", "win64", "win32", "linux", "isssh", "ps", "ps5",
         "objectify", "columns"
     };
 

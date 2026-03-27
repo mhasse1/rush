@@ -395,6 +395,39 @@ public class RushTranspiler
     {
         var sb = new StringBuilder();
 
+        // ps block: raw PowerShell passthrough — no Rush expansion
+        if (node.Platform == "ps")
+        {
+            if (node.Property == "version" && node.Operator != null && node.PropertyValue != null)
+            {
+                var psOp = node.Operator switch
+                {
+                    "==" => "-eq", "!=" => "-ne", ">" => "-gt",
+                    ">=" => "-ge", "<" => "-lt", "<=" => "-le", _ => "-eq"
+                };
+                sb.AppendLine($"if ([version]$PSVersionTable.PSVersion {psOp} [version]'{node.PropertyValue}') {{");
+                sb.AppendLine(node.RawBody ?? "");
+                sb.Append('}');
+            }
+            else
+            {
+                // No condition — always runs in embedded PS 7
+                sb.Append(node.RawBody ?? "");
+            }
+            return sb.ToString();
+        }
+
+        // ps5 block: raw PS 5.1 via __rush_win32 (Windows only)
+        if (node.Platform == "ps5")
+        {
+            var encoded = Convert.ToBase64String(
+                System.Text.Encoding.UTF8.GetBytes(node.RawBody ?? ""));
+            sb.AppendLine("if ($os -eq 'windows') {");
+            sb.AppendLine($"  __rush_win32 '{encoded}'");
+            sb.Append('}');
+            return sb.ToString();
+        }
+
         if (node.IsRaw)
         {
             // win32: encode raw PS 5.1 body as base64 and call the injected helper

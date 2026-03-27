@@ -386,10 +386,18 @@ public class PlatformBlockNode : RushNode
         Property = property; Operator = op; PropertyValue = propertyValue;
     }
 
-    /// <summary>Constructor for raw platform blocks (win32).</summary>
+    /// <summary>Constructor for raw platform blocks (win32, ps, ps5).</summary>
     public PlatformBlockNode(string platform, string rawBody)
     {
         Platform = platform; RawBody = rawBody;
+    }
+
+    /// <summary>Constructor for raw blocks with property condition (ps.version >= "7.4").</summary>
+    public PlatformBlockNode(string platform, string rawBody,
+        string? property, string? op, string? propertyValue)
+    {
+        Platform = platform; RawBody = rawBody;
+        Property = property; Operator = op; PropertyValue = propertyValue;
     }
 }
 
@@ -519,6 +527,8 @@ public class Parser
             RushTokenType.Win32 => ParseWin32Block(),
             RushTokenType.Linux => ParsePlatformBlock(),
             RushTokenType.Isssh => ParsePlatformBlock(),
+            RushTokenType.Ps => ParseRawPsBlock(),
+            RushTokenType.Ps5 => ParseRawPsBlock(),
             RushTokenType.Next => ParseLoopControl(),
             RushTokenType.Continue => ParseLoopControl(),
             RushTokenType.Break => ParseLoopControl(),
@@ -612,6 +622,74 @@ public class Parser
             Expect(RushTokenType.End);
             return new PlatformBlockNode("win32", sb.ToString().Trim());
         }
+    }
+
+    /// <summary>
+    /// Parse ps/ps5 block — raw PowerShell passthrough, no Rush expansion.
+    /// Supports optional dot-notation: ps.version >= "7.4"
+    /// </summary>
+    private PlatformBlockNode ParseRawPsBlock()
+    {
+        var keyword = Advance(); // skip 'ps' or 'ps5'
+        var platform = keyword.Value.ToLowerInvariant();
+
+        // Check for optional property condition: ps.version >= "7.4"
+        string? property = null, op = null, propValue = null;
+        if (Current.Type == RushTokenType.Dot)
+        {
+            Advance(); // skip '.'
+            property = Expect(RushTokenType.Identifier).Value.ToLowerInvariant();
+            op = Current.Type switch
+            {
+                RushTokenType.Equals => Advance().Value,
+                RushTokenType.NotEquals => Advance().Value,
+                RushTokenType.GreaterThan => Advance().Value,
+                RushTokenType.GreaterEqual => Advance().Value,
+                RushTokenType.LessThan => Advance().Value,
+                RushTokenType.LessEqual => Advance().Value,
+                _ => throw new RushParseException($"Expected comparison operator after {platform}.{property}")
+            };
+            if (Current.Type == RushTokenType.StringLiteral)
+                propValue = Advance().Value.Trim('"', '\'');
+            else if (Current.Type == RushTokenType.Identifier)
+                propValue = Advance().Value;
+            else
+                throw new RushParseException($"Expected value after {platform}.{property} {op}");
+        }
+
+        SkipNewlines();
+
+        // Capture raw body (same technique as win32 — no Rush parsing)
+        string rawBody;
+        if (_source != null && Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+        {
+            int startPos = Current.Position;
+            while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+                Advance();
+            int endPos = Current.Position;
+            rawBody = _source[startPos..endPos].Trim();
+        }
+        else
+        {
+            var sb = new System.Text.StringBuilder();
+            while (Current.Type != RushTokenType.End && Current.Type != RushTokenType.EOF)
+            {
+                if (Current.Type == RushTokenType.Newline)
+                    sb.AppendLine();
+                else
+                {
+                    if (sb.Length > 0 && sb[^1] != '\n') sb.Append(' ');
+                    sb.Append(Current.Value);
+                }
+                Advance();
+            }
+            rawBody = sb.ToString().Trim();
+        }
+        Expect(RushTokenType.End);
+
+        if (property != null)
+            return new PlatformBlockNode(platform, rawBody, property, op, propValue);
+        return new PlatformBlockNode(platform, rawBody);
     }
 
     /// <summary>

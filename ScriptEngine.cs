@@ -17,7 +17,8 @@ public class ScriptEngine
     {
         "if", "unless", "for", "while", "until", "loop", "def", "try", "case",
         "begin", "match", "class", "enum",
-        "macos", "win64", "win32", "linux", "isssh"
+        "macos", "win64", "win32", "linux", "isssh",
+        "ps", "ps5"
     };
 
     /// <summary>
@@ -34,7 +35,8 @@ public class ScriptEngine
         "true", "false", "nil",
         "next", "continue", "break",
         "class", "attr", "self", "super", "enum",
-        "macos", "win64", "win32", "linux", "isssh"
+        "macos", "win64", "win32", "linux", "isssh",
+        "ps", "ps5"
     };
 
     /// <summary>
@@ -107,8 +109,22 @@ public class ScriptEngine
         var firstWord = firstSpace >= 0 ? trimmed[..firstSpace] : trimmed;
 
         // Rule 1: Block-start keywords (also check base word before '.' for platform.property syntax)
+        // Special case: "ps" collides with the Unix ps command. Only treat as Rush keyword
+        // when bare ("ps" alone) or with dot-notation ("ps.version"). "ps -ef" etc. are shell commands.
         if (BlockStartKeywords.Contains(firstWord))
-            return true;
+        {
+            if (firstWord.Equals("ps", StringComparison.OrdinalIgnoreCase)
+                || firstWord.Equals("ps5", StringComparison.OrdinalIgnoreCase))
+            {
+                // ps/ps5 is a block keyword only when bare (no args) — "ps" on its own line
+                if (firstSpace < 0) return true; // bare keyword, no args
+                // Otherwise fall through — "ps -ef", "ps aux" are shell commands
+            }
+            else
+            {
+                return true;
+            }
+        }
         var dotIdx = firstWord.IndexOf('.');
         if (dotIdx > 0 && BlockStartKeywords.Contains(firstWord[..dotIdx]))
             return true;
@@ -504,6 +520,9 @@ public class ScriptEngine
                     case RushTokenType.Win64:
                     case RushTokenType.Win32:
                     case RushTokenType.Linux:
+                    case RushTokenType.Isssh:
+                    case RushTokenType.Ps:
+                    case RushTokenType.Ps5:
                         depth++;
                         break;
                     case RushTokenType.End:
