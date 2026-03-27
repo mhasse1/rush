@@ -742,25 +742,9 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         }
     }
 
-    // ── Brace Expansion ──────────────────────────────────────────
-    input = ExpandBraces(input);
-
-    // ── Tilde Expansion ────────────────────────────────────────────
-    input = ExpandTilde(input);
-
-    // ── Environment Variable Expansion ──────────────────────────────
-    input = ExpandEnvVars(input);
-
-    // ── Arithmetic Expansion $((expr)) ──────────────────────────────
-    input = ExpandArithmetic(input, state.Runspace);
-
-    // ── Process Substitution <(cmd) ────────────────────────────────
-    List<string>? procSubTempFiles = null;
-    if (input.Contains("<("))
-        (input, procSubTempFiles) = ExpandProcessSubstitution(input, state.Translator, state.Runspace);
-
-    // ── Command Substitution $(...) and `...` ────────────────────────
-    input = ExpandCommandSubstitution(input, state.Translator, state.Runspace);
+    // ── Expansion Pipeline (brace, tilde, env, arithmetic, process, command sub) ──
+    List<string>? procSubTempFiles;
+    (input, procSubTempFiles) = RunExpansionPipeline(input, state.Translator, state.Runspace);
 
     // ── Split on Chain Operators (&&, ||, ;) ──────────────────────────
     var (chainSegments, chainOps) = SplitChainOperators(input);
@@ -1011,13 +995,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             var whichCmd = segment.IndexOf(' ') is var sp && sp > 0 ? segment[(sp + 1)..].Trim() : "";
             if (!string.IsNullOrEmpty(whichCmd))
             {
-                var rushBuiltins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
-                    "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
-                    "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
-                    "path", "ai", "sql", "set", "which", "type"
-                };
+                var rushBuiltins = RushConstants.Builtins;
 
                 if (rushBuiltins.Contains(whichCmd))
                 {
@@ -3988,6 +3966,25 @@ static string StripQuotes(string s)
 /// Respects quotes — no expansion inside quoted strings.
 /// Must run before tilde expansion (bash canonical order).
 /// </summary>
+/// <summary>
+/// Run the full expansion pipeline: brace, tilde, env vars, arithmetic,
+/// process substitution, command substitution. Shared by interactive and
+/// non-interactive paths.
+/// </summary>
+static (string expanded, List<string>? tempFiles) RunExpansionPipeline(
+    string input, CommandTranslator translator, System.Management.Automation.Runspaces.Runspace runspace)
+{
+    input = ExpandBraces(input);
+    input = ExpandTilde(input);
+    input = ExpandEnvVars(input);
+    input = ExpandArithmetic(input, runspace);
+    List<string>? tempFiles = null;
+    if (input.Contains("<("))
+        (input, tempFiles) = ExpandProcessSubstitution(input, translator, runspace);
+    input = ExpandCommandSubstitution(input, translator, runspace);
+    return (input, tempFiles);
+}
+
 static string ExpandBraces(string input)
 {
     if (!input.Contains('{')) return input;
@@ -5019,8 +5016,7 @@ static void WriteRedirectedOutput(IReadOnlyList<PSObject> results, RedirectInfo 
 
 static void ShowSuggestions(string cmd, CommandTranslator translator)
 {
-    var builtins = new[] { "exit", "quit", "help", "history", "alias", "unalias", "reload", "init", "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait", "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap", "path", "ai", "setbg" };
-    var allCommands = translator.GetCommandNames().Concat(builtins);
+    var allCommands = translator.GetCommandNames().Concat(RushConstants.Builtins);
 
     var suggestions = allCommands
         .Where(c => LevenshteinDistance(cmd.ToLowerInvariant(), c.ToLowerInvariant()) <= 2)
@@ -5587,14 +5583,9 @@ static void RunNonInteractive(string command)
             if (op == "||" && !lastFailed) continue;
         }
 
-        // Full expansion pipeline (same order as interactive mode)
-        segment = ExpandBraces(segment);
-        segment = ExpandTilde(segment);
-        segment = ExpandEnvVars(segment);
-        segment = ExpandArithmetic(segment, rs);
-        var (procExpanded, procTempFiles) = ExpandProcessSubstitution(segment, tr, rs);
-        segment = procExpanded;
-        segment = ExpandCommandSubstitution(segment, tr, rs);
+        // Full expansion pipeline (shared with interactive mode)
+        List<string>? procTempFiles;
+        (segment, procTempFiles) = RunExpansionPipeline(segment, tr, rs);
         if (procTempFiles != null)
         {
             allProcTempFiles ??= new List<string>();
@@ -5675,6 +5666,20 @@ static void RunNonInteractive(string command)
 /// Used by ProcessCommand, ExecuteTranspiledBlock, and the REPL loop.
 /// Interactive-only fields (LineEditor, JobManager, etc.) are null in script contexts.
 /// </summary>
+static class RushConstants
+{
+    /// <summary>
+    /// Authoritative list of all Rush shell builtins. Used by which/type and suggestions.
+    /// </summary>
+    public static readonly HashSet<string> Builtins = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
+        "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
+        "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
+        "path", "ai", "sql", "set", "which", "type", "setbg"
+    };
+}
+
 class ShellState
 {
     public required System.Management.Automation.Runspaces.Runspace Runspace { get; init; }

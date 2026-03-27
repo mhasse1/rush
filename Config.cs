@@ -102,6 +102,7 @@ public class RushConfig
         new SettingInfo("strictGlobs",         "Globbing",      "false", "true, false",      "Error when a glob pattern (*.txt) matches nothing. false = pass the pattern through as literal text."),
         new SettingInfo("completionIgnoreCase","Completion",    "true",  "true, false",      "Case-insensitive Tab completion for paths and commands."),
         new SettingInfo("contrast",            "Accessibility", "standard","standard, aa, aaa","WCAG contrast level. standard=3:1 (large text), aa=4.5:1 (normal text), aaa=7:1 (enhanced)."),
+        new SettingInfo("rootBackground",     "Accessibility", "auto",  "auto, none, #hex","Background color for root/admin shells. \"auto\" = dark red (dark) or dark yellow (light). \"none\" = disabled."),
         new SettingInfo("aiProvider",          "AI",            "anthropic","anthropic, openai, gemini, ollama","AI provider for the `ai` command. Custom providers via ~/.config/rush/ai-providers/"),
         new SettingInfo("aiModel",             "AI",            "auto","model name","Override the default model for your AI provider. \"auto\" = use provider default."),
     };
@@ -199,6 +200,7 @@ public class RushConfig
         "strictglobs" => StrictGlobs.ToString().ToLowerInvariant(),
         "completionignorecase" => CompletionIgnoreCase.ToString().ToLowerInvariant(),
         "contrast" => Contrast,
+        "rootbackground" => RootBackground,
         "aiprovider" => AiProvider,
         "aimodel" => AiModel,
         _ => ""
@@ -272,6 +274,9 @@ public class RushConfig
                 var lv = value.ToLowerInvariant();
                 if (lv != "standard" && lv != "aa" && lv != "aaa") return false;
                 Contrast = lv;
+                return true;
+            case "rootbackground":
+                RootBackground = value;
                 return true;
             case "aiprovider":
                 AiProvider = value;
@@ -472,10 +477,10 @@ public class RushConfig
                     #   export GITHUB_TOKEN="ghp_..."
 
                     # ── OS-Specific ──────────────────────────────────────────
-                    # if os == "macos"
+                    # macos
                     #   export PATH="/opt/homebrew/bin:$PATH"
                     # end
-                    # if os == "linux"
+                    # linux
                     #   export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
                     # end
 

@@ -4,9 +4,8 @@ using Xunit;
 namespace Rush.Tests;
 
 /// <summary>
-/// Tests for Rush's custom ls implementation and ls piping behavior.
-/// Rush uses a custom FileListCommand for non-piped ls,
-/// and translates to Get-ChildItem for piped ls.
+/// Tests for ls behavior in Rush.
+/// Native ls runs on Unix; Get-ChildItem is used on Windows or for piped ls.
 /// </summary>
 public class LsCommandTests
 {
