@@ -9,4 +9,7 @@ publish/
 *~
 .DS_Store
 .rushbg
+.env
+.env.*
+*.log
 tmp/

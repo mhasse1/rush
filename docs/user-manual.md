@@ -112,9 +112,8 @@ All configuration lives in `~/.config/rush/`:
 
 | File | Purpose |
 |------|---------|
-| `config.json` | Settings (edit mode, aliases, theme, history size) |
-| `config.rush` | Rush-syntax config (loaded after config.json) |
-| `init.rush` | Startup script — transpiled through Rush engine |
+| `config.json` | Settings and saved aliases (managed by `set`/`alias --save`) |
+| `init.rush` | Startup script — PATH, exports, functions, prompt |
 | `secrets.rush` | API keys and tokens (not synced) |
 | `history` | Persistent command history |
 | `sync.json` | Config sync settings |
@@ -126,23 +125,33 @@ Created automatically on first run. All settings with their defaults:
 ```json
 {
   "editMode": "vi",
-  "aliases": {},
-  "promptFormat": "default",
   "historySize": 500,
+  "bg": "off",
   "theme": "auto",
+  "promptFormat": "default",
   "showTiming": true,
   "showTips": true,
-  "showHints": true
+  "showHints": true,
+  "stopOnError": false,
+  "pipefailMode": false,
+  "traceCommands": false,
+  "strictGlobs": false,
+  "completionIgnoreCase": true,
+  "contrast": "standard",
+  "rootBackground": "auto",
+  "aiProvider": "anthropic",
+  "aiModel": "auto",
+  "aliases": {}
 }
 ```
 
 | Setting | Values | Description |
 |---------|--------|-------------|
 | `editMode` | `"vi"`, `"emacs"` | Line editing mode |
-| `aliases` | `{ "ll": "ls -la" }` | Command aliases |
-| `promptFormat` | `"default"` | Prompt style |
 | `historySize` | `10`–`∞` (default `500`) | Max history entries |
+| `bg` | `"#hex"`, `"off"` | Terminal background color for palette |
 | `theme` | `"auto"`, `"dark"`, `"light"` | Color theme (`auto` detects terminal) |
+| `promptFormat` | `"default"` | Prompt style |
 | `showTiming` | `true`, `false` | Show elapsed time for commands > 500ms |
 | `showTips` | `true`, `false` | Show a rotating tip on startup |
 | `showHints` | `true`, `false` | Show contextual hints during editing — surfaces lesser-known features so you can use them today |
