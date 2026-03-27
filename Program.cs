@@ -2779,6 +2779,13 @@ static void DetectWindowsCoreutils(Runspace runspace, RushConfig config)
         if (result.Count > 0)
             return; // coreutils.exe shimmed — all good
 
+        // Check if individual uutils binaries are in PATH (zip install)
+        ps.Commands.Clear();
+        ps.AddScript("Get-Command ls.exe -ErrorAction SilentlyContinue");
+        var lsExe = ps.Invoke();
+        if (lsExe.Count > 0)
+            return; // Individual binaries installed — no shim or tip needed
+
         // Check for Git for Windows
         var gitUsrBin = @"C:\Program Files\Git\usr\bin";
         if (Directory.Exists(gitUsrBin) && File.Exists(Path.Combine(gitUsrBin, "ls.exe")))
