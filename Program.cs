@@ -2586,16 +2586,20 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
     ps.Invoke();
 
-    // Set execution policy to RemoteSigned for this process only (Windows).
-    // Rush's embedded PS inherits the system policy which is often Restricted
-    // on Windows Server, blocking all scripts including ps...end blocks.
-    // Process scope doesn't change system/user settings — resets when Rush exits.
+    // Windows-specific runspace setup
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     {
-        using var epPs = PowerShell.Create();
-        epPs.Runspace = runspace;
-        epPs.AddScript("Set-ExecutionPolicy RemoteSigned -Scope Process -Force");
-        epPs.Invoke();
+        using var winPs = PowerShell.Create();
+        winPs.Runspace = runspace;
+        // Set execution policy to RemoteSigned for this process only.
+        // Rush's embedded PS inherits the system policy which is often Restricted
+        // on Windows Server, blocking all scripts including ps...end blocks.
+        // Process scope doesn't change system/user settings — resets when Rush exits.
+        winPs.AddScript("Set-ExecutionPolicy RemoteSigned -Scope Process -Force");
+        // Import CimCmdlets — required for Test-NetConnection, Get-CimInstance,
+        // Get-NetAdapter, Get-NetFirewallProfile and other Windows admin cmdlets.
+        winPs.AddScript("Import-Module CimCmdlets -ErrorAction SilentlyContinue");
+        winPs.Invoke();
     }
 
     // Inject __rush_win32 helper function for win32 platform blocks
