@@ -1315,7 +1315,9 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                     ReloadState.Save(rlState);
                     state.LineEditor?.SaveHistory();
 
-                    var currentBinary = Environment.ProcessPath ?? "rush";
+                    // Use "rush" to re-resolve via PATH/symlink, not Environment.ProcessPath
+                    // which points at the resolved (possibly stale) binary.
+                    var currentBinary = "rush";
                     Console.ForegroundColor = Theme.Current.Muted;
                     Console.WriteLine("  restarting rush...");
                     Console.ResetColor();
