@@ -48,25 +48,37 @@ internal class SshLlmSession : IDisposable
     /// </summary>
     internal static SshLlmSession? TryCreate(string host)
     {
-        var session = new SshLlmSession(host);
-        if (!session.StartProcess())
+        // Try rush in PATH, then common install locations
+        string[] commands = new[]
         {
+            "rush --llm",
+            "rush.exe --llm",
+            "C:\\bin\\rush.exe --llm",
+            "/usr/local/bin/rush --llm",
+        };
+
+        foreach (var cmd in commands)
+        {
+            var session = new SshLlmSession(host);
+            if (!session.StartProcessWith(cmd))
+            {
+                session.Dispose();
+                continue;
+            }
+
+            var ctx = session.ReadContextLine(ConnectTimeoutMs);
+            if (ctx != null && ctx.Ready)
+            {
+                Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version})");
+                session._lastContext = ctx;
+                return session;
+            }
+
             session.Dispose();
-            return null;
         }
 
-        // Read the first line — should be LlmContext JSON with ready:true
-        var ctx = session.ReadContextLine(ConnectTimeoutMs);
-        if (ctx == null || !ctx.Ready)
-        {
-            Console.Error.WriteLine($"[rush-ssh] Rush not available on {host}, using raw shell");
-            session.Dispose();
-            return null;
-        }
-
-        Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version})");
-        session._lastContext = ctx;
-        return session;
+        Console.Error.WriteLine($"[rush-ssh] Rush not available on {host}, using raw shell");
+        return null;
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────────
@@ -83,7 +95,13 @@ internal class SshLlmSession : IDisposable
         {
             KillProcess();
 
-            if (!StartProcess())
+            // Try same paths as TryCreate
+            bool started = false;
+            foreach (var cmd in new[] { "rush --llm", "rush.exe --llm", "C:\\bin\\rush.exe --llm", "/usr/local/bin/rush --llm" })
+            {
+                if (StartProcessWith(cmd)) { started = true; break; }
+            }
+            if (!started)
                 return false;
 
             var ctx = ReadContextLine(ConnectTimeoutMs);
@@ -174,7 +192,7 @@ internal class SshLlmSession : IDisposable
 
     // ── Internals ────────────────────────────────────────────────────────
 
-    private bool StartProcess()
+    private bool StartProcessWith(string remoteCommand)
     {
         var psi = new ProcessStartInfo("ssh")
         {
@@ -189,9 +207,10 @@ internal class SshLlmSession : IDisposable
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveInterval=15");
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveCountMax=3");
         psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+        psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ConnectTimeout=5");
         SshPool.Apply(psi);
         psi.ArgumentList.Add(_host);
-        psi.ArgumentList.Add("rush --llm");
+        psi.ArgumentList.Add(remoteCommand);
 
         try
         {
