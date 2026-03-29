@@ -4951,13 +4951,24 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
             return (true, null);
         }
 
-        // Sync .NET process working directory so native commands (ls builtin,
-        // Process.Start for TUI programs) see the correct current directory.
-        try { Environment.CurrentDirectory = Path.GetFullPath(path); }
+        // Sync .NET process working directory from PowerShell's resolved location.
+        // Don't use Path.GetFullPath(path) — it resolves relative to the potentially
+        // stale Environment.CurrentDirectory, which may differ from PS on symlinked paths.
+        string resolvedDir = path;
+        try
+        {
+            using var locPs2 = PowerShell.Create();
+            locPs2.Runspace = runspace;
+            locPs2.AddCommand("Get-Location");
+            var newLoc = locPs2.Invoke();
+            if (newLoc.Count > 0)
+                resolvedDir = newLoc[0].ToString()!;
+            Environment.CurrentDirectory = resolvedDir;
+        }
         catch { /* ignore — Set-Location succeeded, this is best-effort */ }
 
         // Check for .rushbg in this directory or ancestors
-        ApplyDirBackground(Path.GetFullPath(path));
+        ApplyDirBackground(resolvedDir);
 
         return (false, currentDir);
     }
