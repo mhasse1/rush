@@ -5011,8 +5011,11 @@ static void ApplyDirBackground(string dir)
     else if (Theme.ActiveRushBgFile != null)
     {
         // Left a .rushbg directory tree — restore original background
+        // and re-initialize theme so all colors recalculate
         Theme.ResetBackground();
         Theme.ActiveRushBgFile = null;
+        Theme.Initialize();
+        Theme.SetNativeColorEnvVars();
     }
 }
 

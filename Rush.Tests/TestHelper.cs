@@ -38,7 +38,7 @@ public static class TestHelper
 
             foreach (var rid in rids)
             {
-                var candidate = Path.Combine(dir, "bin", "Debug", "net8.0", rid, exeName);
+                var candidate = Path.Combine(dir, "bin", "Debug", "net10.0", rid, exeName);
                 if (File.Exists(candidate))
                 {
                     _cachedBinary = candidate;
@@ -47,7 +47,7 @@ public static class TestHelper
             }
 
             // Generic fallback (no RID subfolder)
-            var generic = Path.Combine(dir, "bin", "Debug", "net8.0", exeName);
+            var generic = Path.Combine(dir, "bin", "Debug", "net10.0", exeName);
             if (File.Exists(generic))
             {
                 _cachedBinary = generic;

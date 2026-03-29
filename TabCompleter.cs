@@ -349,7 +349,7 @@ public class TabCompleter
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
                         var dirPart = Path.GetDirectoryName(prefix) ?? "";
-                        _completions.Add(Path.Combine(dirPart, name) + "/");
+                        _completions.Add(Path.Combine(dirPart, name).Replace('\\', '/') + "/");
                     }
                     else
                     {
@@ -428,7 +428,7 @@ public class TabCompleter
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
                         var dirPart = Path.GetDirectoryName(prefix) ?? "";
-                        _completions.Add(Path.Combine(dirPart, name) + "/");
+                        _completions.Add(Path.Combine(dirPart, name).Replace('\\', '/') + "/");
                     }
                     else
                     {
@@ -446,7 +446,7 @@ public class TabCompleter
                     if (prefix.Contains('/') || prefix.Contains(Path.DirectorySeparatorChar))
                     {
                         var dirPart = Path.GetDirectoryName(prefix) ?? "";
-                        _completions.Add(Path.Combine(dirPart, name));
+                        _completions.Add(Path.Combine(dirPart, name).Replace('\\', '/'));
                     }
                     else
                     {
