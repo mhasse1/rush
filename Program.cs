@@ -5406,10 +5406,14 @@ static string? MapKeywordToHelpTopic(string? keyword)
         // Errors
         ["try"] = "errors", ["catch"] = "errors", ["raise"] = "errors",
         ["begin"] = "errors", ["rescue"] = "errors",
-        // Config/settings
-        ["alias"] = "config", ["unalias"] = "config", ["set"] = "config",
-        ["export"] = "config", ["reload"] = "config", ["sync"] = "config",
-        ["init"] = "config",
+        // Builtins (each has its own help topic)
+        ["alias"] = "alias", ["unalias"] = "alias",
+        ["path"] = "path",
+        ["export"] = "export", ["unset"] = "export",
+        ["set"] = "set",
+        ["cd"] = "cd", ["pushd"] = "cd", ["popd"] = "cd",
+        ["init"] = "init", ["reload"] = "init",
+        ["sync"] = "config",
         // Stdlib with dot notation
         ["File"] = "file", ["Dir"] = "dir", ["Time"] = "time",
         // Regex

@@ -161,6 +161,7 @@ static class HelpCommand
         var types = new[] { "strings", "arrays", "hashes", "classes", "enums" };
         var flow = new[] { "functions", "loops", "control-flow", "errors" };
         var data = new[] { "pipelines", "pipeline-ops", "regex", "objectify", "sql" };
+        var builtins = new[] { "alias", "path", "export", "set", "cd", "init" };
         var other = new[] { "config", "platforms", "llm-mode", "mcp", "xref", "known-issues" };
 
         void PrintGroup(string label, string[] items)
@@ -174,10 +175,11 @@ static class HelpCommand
         PrintGroup("Types:", types);
         PrintGroup("Flow:", flow);
         PrintGroup("Data:", data);
+        PrintGroup("Builtins:", builtins);
         PrintGroup("Other:", other);
 
         // Any topics not in our categories
-        var all = stdlib.Concat(types).Concat(flow).Concat(data).Concat(other).ToHashSet();
+        var all = stdlib.Concat(types).Concat(flow).Concat(data).Concat(builtins).Concat(other).ToHashSet();
         var uncategorized = names.Where(n => !all.Contains(n)).ToArray();
         if (uncategorized.Length > 0)
         {

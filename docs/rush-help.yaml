@@ -570,6 +570,173 @@ platforms:
       - "ls //nas/backups/2026/"
       - "cp //server/share/file.txt ./"
 
+alias:
+  summary: "Command aliases — session-only by default, --save to persist"
+
+  philosophy:
+    - "In bash, aliases go in .bashrc and persist automatically."
+    - "In Rush, aliases are session-only by default. --save persists to config.json."
+    - "Why: keeps config.json as the single source of truth. No rc file maintenance."
+    - "Both config.json and init.rush sync via the sync command."
+
+  usage:
+    - "alias                     — list all active aliases"
+    - "alias ll='ls -la'         — create session-only alias (gone after restart)"
+    - "alias --save ll='ls -la'  — create and persist to config.json"
+    - "unalias ll                — remove for this session"
+    - "unalias --save ll         — remove from config.json"
+
+  examples:
+    - "alias g='git'"
+    - "alias dc='docker compose'"
+    - "alias --save k='kubectl'"
+
+  rules:
+    - "Session-only aliases register in the command translator immediately"
+    - "Saved aliases persist in config.json and survive restarts"
+    - "Aliases expand before command execution — they work with pipes and flags"
+    - "Don't put alias commands in init.rush — they belong in config.json via --save"
+
+path:
+  summary: "PATH management — add, remove, check, dedupe, edit"
+
+  philosophy:
+    - "In bash, PATH is managed by fragile export chains in .bashrc."
+    - "In Rush, PATH has dedicated commands with --save for persistence."
+    - "path add is session-only by default. --save writes to init.rush."
+    - "Multi-line blocks: path add...end for adding several directories at once."
+
+  usage:
+    - "path                        — list all PATH entries with existence check (✓/✗)"
+    - "path add ~/bin              — add to PATH for this session"
+    - "path add --save ~/bin       — add and persist to init.rush"
+    - "path add --save --front /opt/bin — prepend (higher priority)"
+    - "path rm /old/dir            — remove for this session"
+    - "path rm --save /old/dir     — remove from init.rush"
+    - "path dedupe                 — remove duplicate entries (first wins)"
+    - "path check                  — show ✓/✗ existence and ↑ duplicates"
+    - "path edit                   — edit PATH in $EDITOR (one entry per line)"
+
+  blocks: |
+    # Add multiple directories at once
+    path add
+      ~/bin
+      ~/.local/bin
+      /opt/homebrew/bin
+    end
+
+    # With --save to persist
+    path add --save
+      ~/bin
+      ~/.local/bin
+    end
+
+  rules:
+    - "path (bare) shows all entries with existence and duplicate flags"
+    - "path add without --save is session-only"
+    - "path add --save writes a path add line to init.rush"
+    - "path add --front prepends instead of appending"
+    - "path dedupe keeps first occurrence, removes later duplicates"
+
+export:
+  summary: "Environment variables — set for session or persist to init.rush"
+
+  philosophy:
+    - "In bash, exports go in .bashrc and persist automatically."
+    - "In Rush, export is session-only by default. Put persistent exports in init.rush."
+    - "Secrets (API keys, tokens) go in secrets.rush — never synced."
+
+  usage:
+    - "export FOO=bar             — set for this session"
+    - "export FOO=bar --save      — persist to init.rush"
+    - "unset FOO                  — remove for this session"
+
+  where_to_put:
+    - { what: "PATH entries", where: "path add --save (not export)" }
+    - { what: "EDITOR, PAGER, LANG", where: "init.rush (export EDITOR=vim)" }
+    - { what: "API keys, tokens", where: "secrets.rush (export OPENAI_API_KEY=...)" }
+    - { what: "Session-only vars", where: "export at the REPL" }
+
+  rules:
+    - "export without --save is session-only"
+    - "init.rush runs on every shell launch — put persistent exports there"
+    - "secrets.rush is never synced — safe for credentials"
+
+set:
+  summary: "Shell settings — view and change configuration"
+
+  usage:
+    - "set                         — show all settings with current values"
+    - "set editMode vi             — change for this session"
+    - "set --save editMode vi      — persist to config.json"
+    - "set -e                      — stop on first error (like bash set -e)"
+    - "set -x                      — trace commands (shows + command)"
+    - "set -o pipefail             — fail pipeline if any command fails"
+
+  settings:
+    - "editMode: vi, emacs"
+    - "theme: auto, dark, light"
+    - "bg: #hex color or off"
+    - "showTips: true, false"
+    - "showHints: true, false"
+    - "showTiming: true, false"
+    - "completionIgnoreCase: true, false"
+    - "contrast: standard, aa, aaa"
+    - "aiProvider: anthropic, openai, gemini, ollama"
+    - "aiModel: auto or model name"
+
+  rules:
+    - "set without --save is session-only"
+    - "set --save writes to config.json"
+    - "set (bare) shows all settings with descriptions and current values"
+    - "Strict mode flags: -e (stop on error), -x (trace), -o pipefail"
+
+cd:
+  summary: "Change directory — supports ~, -, CDPATH, spaces, quotes"
+
+  usage:
+    - "cd /path/to/dir             — change directory"
+    - "cd ~                        — home directory"
+    - "cd ~/Documents              — relative to home"
+    - "cd -                        — previous directory (toggle)"
+    - "cd ~mark                    — another user's home"
+    - 'cd "My Folder"             — quoted path with spaces'
+    - "cd My\\ Folder              — backslash-escaped spaces"
+
+  windows: |
+    cd //server/share             — Windows SMB (Rush translates to \\server\share)
+    cd C:/Users                   — forward slashes work on Windows
+    cd z:                         — drive letter
+
+  features:
+    - "Syncs both PowerShell and .NET working directories"
+    - "Per-directory themes via .rushbg files"
+    - "CDPATH support — search multiple directories"
+    - "Symlink-aware — prompt shows the path you used, not the resolved path"
+
+init:
+  summary: "Edit startup script — opens init.rush in $EDITOR and reloads"
+
+  philosophy:
+    - "init.rush is for code that runs on every shell launch."
+    - "PATH setup, environment variables, custom functions, prompt override."
+    - "Don't put aliases here — use alias --save (persists to config.json)."
+    - "Don't put settings here — use set --save (persists to config.json)."
+
+  usage:
+    - "init                        — edit init.rush in $EDITOR and reload on save"
+    - "reload                      — reload config.json and re-run init.rush"
+    - "reload --hard               — full binary restart with state preservation"
+
+  what_goes_where:
+    - { what: "Aliases", where: "alias --save (config.json)" }
+    - { what: "Settings (edit mode, theme)", where: "set --save (config.json)" }
+    - { what: "PATH entries", where: "path add --save (init.rush)" }
+    - { what: "Environment variables", where: "export in init.rush" }
+    - { what: "Custom functions", where: "def in init.rush" }
+    - { what: "Prompt override", where: "def rush_prompt() in init.rush" }
+    - { what: "API keys", where: "secrets.rush" }
+
 sql:
   summary: "Database queries (SQLite, PostgreSQL, ODBC)"
   syntax: 'sql @connection "SELECT * FROM table"'
