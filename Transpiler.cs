@@ -676,7 +676,7 @@ public class RushTranspiler
 
     /// <summary>
     /// Convert backslash escape sequences in double-quoted strings to PowerShell backtick escapes.
-    /// Single-quoted strings are left unchanged (literal, matching Ruby/PowerShell convention).
+    /// Single-quoted strings are left unchanged (literal, matching PowerShell convention).
     /// </summary>
     private static string ConvertEscapes(string s)
     {

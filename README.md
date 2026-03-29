@@ -2,7 +2,7 @@
 
 A modern shell with clean syntax, structured data pipelines, and a built-in LLM agent protocol.
 
-Rush gives you Ruby-like scripting, Unix shell commands, and PowerShell 7's structured object pipeline — in one shell, on every platform.
+Rush gives you clean scripting syntax, Unix shell commands, and PowerShell 7's structured object pipeline — in one shell, on every platform.
 
 ```rush
 # Shell commands just work
@@ -11,7 +11,7 @@ ls -la /var/log | grep ".log"
 # Structured pipelines — filter, select, format
 ps aux | where CPU > 50 | select Name, CPU | sort --desc
 
-# Ruby-like scripting — no $ prefix, blocks use end
+# Clean scripting — no $ prefix, blocks use end
 files = Dir.list(".", :files)
 large = files.select { |f| File.size(f) > 1mb }
 large.each { |f| puts "#{f}: #{File.size(f).to_filesize}" }
