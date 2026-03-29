@@ -1,6 +1,7 @@
 using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace Rush;
 
@@ -408,6 +409,15 @@ public class TabCompleter
             {
                 var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 expandedPrefix = expandedPrefix == "~" ? home : Path.Combine(home, expandedPrefix[2..]);
+            }
+
+            // Windows UNC: //server/share → \\server\share for OS APIs
+            bool isUnc = false;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                && expandedPrefix.StartsWith("//") && expandedPrefix.Length > 2 && expandedPrefix[2] != '/')
+            {
+                expandedPrefix = "\\\\" + expandedPrefix[2..].Replace('/', '\\');
+                isUnc = true;
             }
 
             if (expandedPrefix.Contains('/') || expandedPrefix.Contains(Path.DirectorySeparatorChar))

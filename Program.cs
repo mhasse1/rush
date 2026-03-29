@@ -4010,7 +4010,46 @@ static (string expanded, List<string>? tempFiles) RunExpansionPipeline(
     if (input.Contains("<("))
         (input, tempFiles) = ExpandProcessSubstitution(input, translator, runspace);
     input = ExpandCommandSubstitution(input, translator, runspace);
+
+    // Windows: translate //server/share paths to \\server\share for native UNC
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        input = ExpandWindowsUnc(input);
+
     return (input, tempFiles);
+}
+
+/// <summary>
+/// On Windows, translate //server/share style paths to \\server\share.
+/// Only converts paths that start with // followed by a non-/ character
+/// (to avoid interfering with //ssh: UNC or // comments).
+/// </summary>
+static string ExpandWindowsUnc(string input)
+{
+    if (!input.Contains("//")) return input;
+
+    // Split on spaces (respecting quotes) and translate //server paths
+    var result = new System.Text.StringBuilder();
+    bool inQuote = false;
+    int wordStart = 0;
+
+    for (int i = 0; i <= input.Length; i++)
+    {
+        if (i < input.Length && input[i] == '"') inQuote = !inQuote;
+        if (i == input.Length || (!inQuote && input[i] == ' '))
+        {
+            var word = input[wordStart..i];
+            // Translate //server/share (not //ssh:) to \\server\share
+            if (word.StartsWith("//") && word.Length > 2 && word[2] != '/'
+                && !word.StartsWith("//ssh:", StringComparison.OrdinalIgnoreCase))
+            {
+                word = "\\\\" + word[2..].Replace('/', '\\');
+            }
+            result.Append(word);
+            if (i < input.Length) result.Append(' ');
+            wordStart = i + 1;
+        }
+    }
+    return result.ToString().TrimEnd();
 }
 
 static string ExpandBraces(string input)
@@ -4872,6 +4911,10 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
 
     // Handle backslash-space escaping: cd My\ Folder → My Folder
     path = path.Replace("\\ ", " ");
+
+    // Windows UNC: //server/share → \\server\share
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && path.StartsWith("//") && path.Length > 2 && path[2] != '/')
+        path = "\\\\" + path[2..].Replace('/', '\\');
 
     string? currentDir = null;
     try
