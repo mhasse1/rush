@@ -249,20 +249,37 @@ Supports Anthropic, OpenAI, Gemini, and Ollama out of the box. Pipe anything to 
 
 ### LLM Agent Mode
 
-`rush --llm` is a JSON wire protocol designed for AI agents:
+`rush --llm` is a JSON wire protocol designed for AI agents. The agent reads structured JSON — no terminal parsing needed:
 
-```json
-← {"ready":true,"host":"server","user":"deploy","cwd":"/home/deploy","shell":"rush"}
-→ ps aux | where CPU > 50 | as json
-← {"status":"success","exit_code":0,"stdout":"[...]","duration_ms":45}
+```
+$ rush --llm
+
+← Rush emits context (ready prompt):
+{"ready":true,"host":"web-prod","user":"deploy","cwd":"/var/www","git_branch":"main","shell":"rush"}
+
+→ Agent sends a command:
+ls src | where /\.cs$/ | count
+
+← Rush returns structured result:
+{"status":"success","exit_code":0,"cwd":"/var/www","stdout":"47","duration_ms":12}
+
+→ Agent sends a failing command:
+cat /nonexistent
+
+← Rush returns structured error:
+{"status":"error","exit_code":1,"cwd":"/var/www","stderr":"cat: /nonexistent: No such file or directory","duration_ms":3}
 ```
 
-- Structured errors with exit codes, stderr separation, and error types
-- Output spooling — large output is capped at 4KB with a spool buffer for paging
-- TTY blocklist — interactive commands (vim, top, less) are blocked with alternatives
-- `lcat` — read files with metadata (mime type, size, encoding, binary detection)
-- `help <topic>` — on-demand reference the LLM can query to reduce context burn
+**Built-in LLM commands:**
+- `lcat file` — read files with metadata (mime type, size, encoding, binary → base64)
+- `spool` — retrieve output that exceeded the 4KB capture limit
+- `help <topic>` — on-demand reference (22 topics) to reduce context burn
 - `timeout N command` — prevent runaway commands
+
+**Safety features:**
+- Output capped at 4KB — excess goes to a spool buffer the agent can page through
+- TTY blocklist — `vim`, `top`, `less` etc. are blocked with suggested alternatives
+- Structured errors — exit codes, stderr, and error types in every response
 
 ### MCP Server Integration
 
