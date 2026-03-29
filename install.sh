@@ -9,35 +9,26 @@ PUBLISH_DIR="$SCRIPT_DIR/bin/Release/net10.0/osx-arm64/publish"
 export PATH="/opt/homebrew/opt/dotnet/bin:/opt/homebrew/Cellar/dotnet/10.0.105/libexec:$PATH"
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/Cellar/dotnet/10.0.105/libexec}"
 
-# ── Build (as the real user, not root) ───────────────────────────────
-# If run with sudo, drop to the real user for the build so files
-# aren't owned by root (which blocks future non-sudo publishes).
+# ── Build (always as current user) ──────────────────────────────────
 echo "Building release binary..."
-if [[ "${SUDO_USER:-}" != "" ]]; then
-    sudo -u "$SUDO_USER" dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
-else
-    dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
-fi
+dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
 echo ""
 
 VERSION=$("$PUBLISH_DIR/rush" --version 2>/dev/null || echo "unknown")
 
-# ── Symlink to publish dir (default) ────────────────────────────────
-# Every dotnet publish instantly updates the installed binary.
-# Remove old copy-based install if it exists.
+# ── Symlink (sudo only if needed) ───────────────────────────────────
 OLD_INSTALL="/usr/local/lib/rush"
 if [[ -d "$OLD_INSTALL" ]]; then
     echo "  → removing $OLD_INSTALL/ (switching to direct symlink)"
     sudo rm -rf "$OLD_INSTALL"
 fi
 
-# Create or update symlink
 if [[ ! -L "$BIN_LINK" ]] || [[ "$(readlink "$BIN_LINK")" != "$PUBLISH_DIR/rush" ]]; then
     echo "  → $BIN_LINK → $PUBLISH_DIR/rush"
     sudo ln -sf "$PUBLISH_DIR/rush" "$BIN_LINK"
 fi
 
-# Register as valid login shell
+# ── Register as login shell (sudo only if needed) ───────────────────
 if ! grep -q "$BIN_LINK" "$SHELLS_FILE" 2>/dev/null; then
     echo "  → $SHELLS_FILE (registering as valid shell)"
     echo "$BIN_LINK" | sudo tee -a "$SHELLS_FILE" > /dev/null
