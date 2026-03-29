@@ -28,18 +28,23 @@ rush --llm   # structured I/O for AI agents
 
 **For scripts:** A real scripting language with classes, error handling, named arguments, and a File/Dir/Time stdlib — without leaving the shell.
 
+**For Windows admins:** `ps...end` blocks pass raw PowerShell through without Rush expansion — `$_`, script blocks, and cmdlets work untouched. Platform blocks (`win64`, `ps5`, `win32`) target specific Windows layers in one script.
+
 ## Install
 
 ```bash
 # macOS (Homebrew)
 brew install mhasse1/tap/rush
 
-# Build from source (any platform)
+# Manual (all platforms) — download from GitHub Releases
+# https://github.com/mhasse1/rush/releases
+
+# Build from source
 dotnet publish -c Release -r osx-arm64    # or linux-x64, win-x64
 ./install.sh
 ```
 
-Requires .NET 8 SDK to build. Published binaries are self-contained (no runtime needed).
+Requires .NET 10 SDK to build. Published binaries are self-contained (no runtime needed).
 
 ## Feature Highlights
 
@@ -137,6 +142,32 @@ t = Time.now
 recent = Time.now - 24.hours
 ```
 
+### Platform Blocks & PowerShell Passthrough
+
+```rush
+# Platform-specific code
+macos
+  export HOMEBREW_NO_AUTO_UPDATE=1
+end
+
+linux
+  export LD_LIBRARY_PATH="/usr/local/lib"
+end
+
+# Raw PowerShell — $_ and script blocks survive untouched
+ps
+  Get-Service | Where-Object { $_.Status -eq "Running" }
+  $fw = Get-NetFirewallProfile
+  $fw | Format-Table Name, Enabled
+end
+
+# PowerShell 5.1 for legacy modules
+ps5
+  Import-Module ActiveDirectory
+  Get-ADUser -Filter *
+end
+```
+
 ### Database Queries
 
 ```rush
@@ -146,20 +177,17 @@ sql @mydb "SELECT name, email FROM users WHERE active = 1"
 sql @mydb "SELECT * FROM orders" --json
 ```
 
-### Platform Blocks
+### Windows Network Paths
 
 ```rush
-macos
-  export HOMEBREW_NO_AUTO_UPDATE=1
-end
+# SMB shares — forward slashes always, Rush translates for Windows
+cd //fileserver/shared/docs
+ls //nas/backups/2026/
+cp //server/share/report.xlsx ./
 
-linux
-  export LD_LIBRARY_PATH="/usr/local/lib"
-end
-
-win64
-  puts "Windows detected"
-end
+# SSH remote files — works on all platforms
+cat //ssh:server/etc/hosts
+cp //ssh:server/data/file.csv .
 ```
 
 ### LLM Agent Mode
@@ -167,7 +195,7 @@ end
 `rush --llm` is a JSON wire protocol designed for AI agents:
 
 ```json
-← {"ready":true,"host":"server","user":"mark","cwd":"/home/mark","shell":"rush"}
+← {"ready":true,"host":"server","user":"deploy","cwd":"/home/deploy","shell":"rush"}
 → ps aux | where CPU > 50 | as json
 ← {"status":"success","exit_code":0,"stdout":"[...]","duration_ms":45}
 ```
@@ -179,17 +207,32 @@ end
 - `help <topic>` — on-demand reference the LLM can query to reduce context burn
 - `timeout N command` — prevent runaway commands
 
+### MCP Server Integration
+
+Rush provides two MCP servers for Claude Code and Claude Desktop:
+
+```bash
+rush install mcp --claude    # registers both servers
+```
+
+- **rush-local** — persistent session on local machine (variables, cwd survive between calls)
+- **rush-ssh** — SSH gateway for remote hosts (parallel execution, auto-detects Rush on remote)
+
+Both servers expose `rush_execute`, `rush_read_file`, and `rush_context` tools, plus a `rush://lang-spec` resource so Claude understands Rush syntax.
+
 ### Shell Features
 
 - Vi and Emacs line editing modes
-- Tab completion (paths + commands)
+- Tab completion (paths, commands, pipeline operators, flags)
 - Ctrl+R reverse history search, vi `/` search with `n`/`N` cycling
 - Real-time syntax highlighting
 - Git-aware prompt with branch and dirty state
 - Theme-aware colors — auto-adapts to dark and light terminals
 - `setbg --selector` — in-terminal color picker for background
+- Per-directory themes via `.rushbg` files
 - PATH management (`path add`, `path rm`, `path check`, `path dedupe`)
-- `help <topic>` — 19 built-in reference topics
+- `help <topic>` — 22 built-in reference topics, `keyword --help` routing
+- Bash-to-Rush training hints after commands
 - `ai "prompt"` — built-in AI assistant (Anthropic, OpenAI, Gemini, Ollama)
 - Background jobs, command chaining, output redirection, heredocs
 
@@ -200,16 +243,19 @@ rush                  Interactive shell
 rush -c 'command'     Execute and exit
 rush script.rush      Run a script
 rush --llm            LLM agent mode (JSON wire protocol)
+rush --mcp            MCP server (local persistent session)
+rush --mcp-ssh        MCP server (SSH gateway)
 rush --version        Show version
 rush --help           Show help
 ```
 
 ## Configuration
 
-```bash
-~/.config/rush/config.json    # Settings (edit mode, theme, aliases, AI provider)
-~/.config/rush/init.rush      # Startup script (runs on shell launch)
-~/.config/rush/secrets.rush   # API keys (set --secret KEY value)
+```
+~/.config/rush/
+  config.json       Settings and saved aliases (managed by set/alias --save)
+  init.rush         Startup script — PATH, exports, functions, prompt
+  secrets.rush      API keys and tokens (never synced)
 ```
 
 ## Architecture
@@ -221,7 +267,7 @@ Rush source → Lexer → Parser → AST → Transpiler → PowerShell 7 engine
                                                   ↘ native commands (ls, git, etc.)
 ```
 
-Built on the MIT-licensed `Microsoft.PowerShell.SDK`. Single self-contained binary — no runtime dependencies.
+Built on the MIT-licensed `Microsoft.PowerShell.SDK` (.NET 10 LTS). Single self-contained binary — no runtime dependencies.
 
 ## Documentation
 

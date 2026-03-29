@@ -17,6 +17,9 @@ jobs:
           - rid: osx-arm64
             os: macos-latest
             artifact: rush
+          - rid: osx-x64
+            os: macos-latest
+            artifact: rush
           - rid: linux-x64
             os: ubuntu-latest
             artifact: rush
@@ -26,19 +29,16 @@ jobs:
           - rid: win-x64
             os: windows-latest
             artifact: rush.exe
-          - rid: win-arm64
-            os: windows-latest
-            artifact: rush.exe
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.x
+          dotnet-version: 10.x
 
       - name: Publish
         run: dotnet publish -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true
@@ -46,7 +46,7 @@ jobs:
       - name: Rename binary
         shell: bash
         run: |
-          src="bin/Release/net8.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}"
+          src="bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}"
           if [[ "${{ matrix.artifact }}" == "rush.exe" ]]; then
             cp "$src" "rush-${{ matrix.rid }}.exe"
           else
