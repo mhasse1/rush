@@ -559,6 +559,16 @@ platforms:
     - "ps5...end runs raw PowerShell 5.1 on Windows only"
     - "isssh runs Rush code only when connected via SSH"
     - "ps as a command (ps -ef, ps aux) still works — only bare ps triggers block mode"
+    - "//server/share paths translate to native UNC on Windows (forward slashes always)"
+
+  unc_paths:
+    ssh: "//ssh:host/path — remote file operations via SSH (all platforms)"
+    smb: "//server/share/path — Windows SMB network shares (Windows only)"
+    note: "Rush always uses forward slashes. //server/share → \\\\server\\share on Windows."
+    examples:
+      - "cd //fileserver/shared/docs"
+      - "ls //nas/backups/2026/"
+      - "cp //server/share/file.txt ./"
 
 sql:
   summary: "Database queries (SQLite, PostgreSQL, ODBC)"

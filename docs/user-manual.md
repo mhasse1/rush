@@ -509,6 +509,35 @@ Supports user@ syntax: `//ssh:mark@server/path`. Uses your SSH config (`~/.ssh/c
 
 **Requires Rush on the remote host** — UNC operations run `rush -c` over SSH. Copy operations (`cp`) use `scp`.
 
+### Windows SMB/UNC Paths
+
+On Windows, Rush supports native SMB network paths using forward slashes:
+
+```rush
+cd //fileserver/shared/docs        # Navigate to network share
+ls //nas/backups/2026/              # List network directory
+cp //server/share/file.txt ./      # Copy from network share
+```
+
+Rush translates `//server/share` to native Windows UNC (`\\server\share`) transparently. You never type backslashes — Rush handles it.
+
+**How it works:**
+- `//server/share/path` → `\\server\share\path` (automatic translation)
+- Tab completion works on share subfolders
+- Authentication uses your Windows session/domain credentials
+- Works with any SMB share accessible from the machine
+
+**Windows only** — on macOS/Linux, SMB shares must be mounted first (see `man mount_smbfs` or `man mount.cifs`). Full cross-platform SMB proxy support is planned.
+
+**Path convention:**
+
+| Syntax | Purpose | Platform |
+|--------|---------|----------|
+| `//ssh:host/path` | SSH remote file operations | All |
+| `//server/share` | Windows SMB network share | Windows |
+
+Both use forward slashes consistently. Rush always displays `/`, never `\`.
+
 ---
 
 ## Objectify & Auto-Objectify

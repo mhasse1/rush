@@ -180,6 +180,7 @@ platforms:
   ps_note: "ps...end = raw PowerShell 7, NO Rush expansion. $_ and script blocks survive. Cross-platform."
   ps5_note: "ps5...end = raw PowerShell 5.1 on Windows (legacy modules like ActiveDirectory)"
   ps_collision: "bare 'ps' = block keyword. 'ps -ef' / 'ps aux' = Unix ps command (not a block)"
+  unc_paths: "//ssh:host/path (SSH, all platforms), //server/share (SMB, Windows — auto-translates to \\\\server\\share)"
 
 # ── STDLIB: File ─────────────────────────────────────────────────
 file_stdlib:
