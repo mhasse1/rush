@@ -10,7 +10,8 @@ namespace Rush;
 /// </summary>
 public class BinaryWatcher
 {
-    private readonly string? _resolvedPath;
+    private readonly string? _processPath;    // original path (may be symlink)
+    private readonly string? _resolvedPath;    // resolved target at startup
     private readonly DateTime _startupMtime;
     private DateTime _lastCheckTime;
     private bool _isStale;
@@ -22,14 +23,14 @@ public class BinaryWatcher
     {
         try
         {
-            var processPath = Environment.ProcessPath;
-            if (processPath == null)
+            _processPath = Environment.ProcessPath;
+            if (_processPath == null)
             {
                 _resolvedPath = null;
                 return;
             }
 
-            _resolvedPath = ResolveSymlinks(processPath);
+            _resolvedPath = ResolveSymlinks(_processPath);
             _startupMtime = File.GetLastWriteTimeUtc(_resolvedPath);
             _lastCheckTime = DateTime.UtcNow;
         }
@@ -70,6 +71,18 @@ public class BinaryWatcher
 
             try
             {
+                // Check if the symlink now points to a different file
+                // (e.g., install.sh changed the target after a framework upgrade)
+                if (_processPath != null)
+                {
+                    var currentResolved = ResolveSymlinks(_processPath);
+                    if (currentResolved != _resolvedPath)
+                    {
+                        _isStale = true;
+                        return _isStale;
+                    }
+                }
+
                 var currentMtime = File.GetLastWriteTimeUtc(_resolvedPath);
                 if (currentMtime != _startupMtime)
                     _isStale = true;
