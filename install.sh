@@ -9,9 +9,15 @@ PUBLISH_DIR="$SCRIPT_DIR/bin/Release/net10.0/osx-arm64/publish"
 export PATH="/opt/homebrew/opt/dotnet/bin:/opt/homebrew/Cellar/dotnet/10.0.105/libexec:$PATH"
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/Cellar/dotnet/10.0.105/libexec}"
 
-# ── Build ────────────────────────────────────────────────────────────
+# ── Build (as the real user, not root) ───────────────────────────────
+# If run with sudo, drop to the real user for the build so files
+# aren't owned by root (which blocks future non-sudo publishes).
 echo "Building release binary..."
-dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
+if [[ "${SUDO_USER:-}" != "" ]]; then
+    sudo -u "$SUDO_USER" dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
+else
+    dotnet publish -c Release -r osx-arm64 "$SCRIPT_DIR"
+fi
 echo ""
 
 VERSION=$("$PUBLISH_DIR/rush" --version 2>/dev/null || echo "unknown")
