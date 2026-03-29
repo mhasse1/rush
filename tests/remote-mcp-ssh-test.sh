@@ -4,7 +4,7 @@
 # Requires: jq, ssh access to host, rush installed locally and on remote
 set -uo pipefail
 
-HOST="${1:-buster}"
+HOST="${1:?Usage: $0 <hostname>}"
 SSH_OPTS="-o LogLevel=ERROR"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUSH_BIN="$SCRIPT_DIR/bin/Debug/net8.0/osx-arm64/rush"

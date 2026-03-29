@@ -4,7 +4,7 @@
 # Tests exercise `rush -c` (non-interactive mode) and .rush scripts
 set -uo pipefail
 
-HOST="${1:-buster}"
+HOST="${1:?Usage: $0 <hostname> [--skip-build] [--skip-deploy]}"
 SKIP_BUILD=false
 SKIP_DEPLOY=false
 for arg in "$@"; do
@@ -209,8 +209,8 @@ if [[ "$SKIP_DEPLOY" == false ]]; then
     echo "  → integration_test.rush → C:\\rush-test\\"
     scp -q $SSH_OPTS "$SCRIPT_DIR/Rush.Tests/Fixtures/integration_test.rush" "$HOST:C:/rush-test/"
 
-    # Deploy standalone .rush scripts (from Resilio dir if available)
-    STANDALONE_DIR="$HOME/Resilio/coi/src/rush-tests"
+    # Deploy standalone .rush scripts (from dist dir if available)
+    STANDALONE_DIR="${RUSH_TEST_SCRIPTS:-$SCRIPT_DIR/dist}"
     if [[ -d "$STANDALONE_DIR" ]]; then
         for f in "$STANDALONE_DIR"/[0-9]*.rush; do
             [[ -f "$f" ]] && scp -q $SSH_OPTS "$f" "$HOST:C:/rush-test/"
