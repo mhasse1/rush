@@ -142,10 +142,10 @@ t = Time.now
 recent = Time.now - 24.hours
 ```
 
-### Platform Blocks & PowerShell Passthrough
+### Platform Blocks
 
 ```rush
-# Platform-specific code
+# Code runs only on the matching OS
 macos
   export HOMEBREW_NO_AUTO_UPDATE=1
 end
@@ -154,19 +154,54 @@ linux
   export LD_LIBRARY_PATH="/usr/local/lib"
 end
 
-# Raw PowerShell — $_ and script blocks survive untouched
+win64
+  export TEMP="C:\\Temp"
+end
+
+# Property conditions
+macos.arch == "arm64"
+  puts "Apple Silicon"
+end
+
+linux.version >= "6.0"
+  puts "Modern kernel"
+end
+```
+
+### Windows: One Script, Every Layer
+
+No other shell wraps all Windows execution environments in one syntax. Rush gives you `ps`, `ps5`, and `win32` blocks — each targeting a different PowerShell layer, all in the same script:
+
+```rush
+# PowerShell 7 — raw passthrough, no Rush expansion
+# $_, script blocks, and cmdlets work untouched
 ps
   Get-Service | Where-Object { $_.Status -eq "Running" }
   $fw = Get-NetFirewallProfile
   $fw | Format-Table Name, Enabled
 end
 
-# PowerShell 5.1 for legacy modules
+# PowerShell 5.1 — legacy modules (AD, Exchange, older management tools)
 ps5
   Import-Module ActiveDirectory
-  Get-ADUser -Filter *
+  Get-ADUser -Filter * | Select-Object Name, Enabled
+end
+
+# 32-bit PowerShell 5.1 — OLEDB/ODBC drivers (Access, Excel, Business Central)
+win32
+  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;...")
+  $conn.Open()
 end
 ```
+
+| Block | Engine | Use case |
+|-------|--------|----------|
+| `ps` | PowerShell 7 (cross-platform) | Cmdlets with `$_`, script blocks, Where-Object |
+| `ps5` | PowerShell 5.1 (Windows) | Legacy modules: AD, Exchange, older management tools |
+| `win32` | 32-bit PS 5.1 (Windows) | 32-bit OLEDB/ODBC: Access, Excel, Business Central |
+| `win64` | Rush syntax (Windows) | Windows-specific Rush code |
+
+Version gating: `ps.version >= "7.4"` targets specific PowerShell versions.
 
 ### Database Queries
 
