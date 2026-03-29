@@ -1,6 +1,6 @@
 # Rush
 
-A cross-platform (macOS, Linux, Windows), modern shell with clean syntax, structured data pipelines, and a built-in LLM agent protocol.
+A cross-platform (macOS, Linux, Windows), modern shell with clean syntax, structured data pipelines, and built-in LLM agent protocol and MCP support.
 
 Rush gives you clean scripting syntax, Unix shell commands, and PowerShell 7's structured object pipeline — in one shell, on every platform.
 
