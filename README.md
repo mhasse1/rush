@@ -225,6 +225,28 @@ cat //ssh:server/etc/hosts
 cp //ssh:server/data/file.csv .
 ```
 
+### Built-in AI Assistant
+
+```rush
+# Ask a question
+ai "how do I find large files on macOS?"
+
+# Pipe context to AI — the killer feature
+cat error.log | ai "what went wrong?"
+git diff | ai "review this change"
+ps aux | ai "anything unusual?"
+sql @prod "SELECT * FROM orders WHERE status='failed'" | ai "summarize these failures"
+
+# Use any provider
+set --save aiProvider anthropic    # or openai, gemini, ollama
+set --save aiModel claude-sonnet-4-20250514
+
+# Custom providers
+# ~/.config/rush/ai-providers/my-llm.json
+```
+
+Supports Anthropic, OpenAI, Gemini, and Ollama out of the box. Pipe anything to `ai` — logs, diffs, query results, command output — and get an answer in context.
+
 ### LLM Agent Mode
 
 `rush --llm` is a JSON wire protocol designed for AI agents:
