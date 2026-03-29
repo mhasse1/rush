@@ -100,7 +100,9 @@ public class TabCompleter
 
         // Strip leading quote from token for matching purposes
         // (ApplyCompletion handles re-quoting the result)
+        // Also unescape backslash-spaces for filesystem matching
         var matchToken = token.StartsWith('"') ? token[1..] : token;
+        matchToken = matchToken.Replace("\\ ", " ");
 
         // Determine context
         var beforeToken = input[..tokenStart].TrimEnd();
@@ -219,22 +221,25 @@ public class TabCompleter
         var afterTokenEnd = FindTokenEnd(originalInput, _completionStart);
         var after = originalInput[afterTokenEnd..];
 
-        // If the completion contains spaces, wrap in double quotes
+        // Handle spaces in completions:
+        // If user started with a quote ("Computer...), complete inside quotes.
+        // Otherwise, escape spaces with backslash (bash-style: Computer\ Setup)
         var quoted = completion;
-        bool needsQuoting = completion.Contains(' ');
-        bool alreadyQuoted = _completionStart < originalInput.Length
-            && originalInput[_completionStart] == '"';
-
-        if (needsQuoting && alreadyQuoted)
+        bool alreadyQuoted = _completionStart > 0
+            && _completionStart <= originalInput.Length
+            && originalInput[_completionStart - 1] == '"';
+        if (completion.Contains(' '))
         {
-            // User already started a quote — include opening quote and add closing quote
-            // FindTokenEnd consumed the opening " so we must re-add it
-            quoted = $"\"{completion}\"";
-        }
-        else if (needsQuoting)
-        {
-            // Wrap in double quotes
-            quoted = $"\"{completion}\"";
+            if (alreadyQuoted)
+            {
+                // User started a quote — complete inside and close it
+                quoted = $"{completion}\"";
+            }
+            else
+            {
+                // No quote — escape spaces with backslash
+                quoted = completion.Replace(" ", "\\ ");
+            }
         }
 
         // Add trailing space if it's a complete match (not a directory or dot-completion)
@@ -807,8 +812,14 @@ public class TabCompleter
         }
 
         // Standard: walk backwards from cursor to find token start (space-delimited)
+        // Treat backslash-space (\ ) as part of the token, not a delimiter
         int pos = end - 1;
-        while (pos >= 0 && input[pos] != ' ') pos--;
+        while (pos >= 0)
+        {
+            if (input[pos] == ' ' && (pos == 0 || input[pos - 1] != '\\'))
+                break;
+            pos--;
+        }
         int start = pos + 1;
 
         var tok = input[start..end];
