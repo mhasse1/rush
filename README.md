@@ -349,6 +349,7 @@ Built on the MIT-licensed `Microsoft.PowerShell.SDK` (.NET 10 LTS). Single self-
 - [Feature Reference](docs/rush-features.md) — complete feature list
 - [LLM Mode Design](docs/llm-mode-design.md) — wire protocol specification
 - [Language Spec](docs/rush-lang-spec.yaml) — compact syntax reference
+- [Contributing](CONTRIBUTING.md) — development setup, project structure, how to add features
 
 ## License
 
