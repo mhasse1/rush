@@ -13,3 +13,5 @@ publish/
 .env.*
 *.log
 tmp/
+dist/
+.claude/

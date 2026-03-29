@@ -39,21 +39,22 @@ echo "Installed: $VERSION  (dev symlink)"
 
 # ── Windows cross-compile (only with --full) ─────────────────────────
 if [[ "${1:-}" == "--full" ]]; then
-    WIN_STAGING="$HOME/Resilio/coi/src/rush-tests"
+    WIN_STAGING="${WIN_STAGING:-$SCRIPT_DIR/dist}"
     mkdir -p "$WIN_STAGING"
 
     echo ""
     echo "  → Building Windows ARM64..."
     dotnet publish -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true "$SCRIPT_DIR" > /dev/null
-    cp "$SCRIPT_DIR/bin/Release/net10.0/win-arm64/publish/rush.exe" "$WIN_STAGING/rush.exe"
-    echo "  → $WIN_STAGING/rush.exe"
+    cp "$SCRIPT_DIR/bin/Release/net10.0/win-arm64/publish/rush.exe" "$WIN_STAGING/rush-arm64.exe"
+    echo "  → $WIN_STAGING/rush-arm64.exe"
 
     echo "  → Building Windows x64..."
     dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true "$SCRIPT_DIR" > /dev/null
     cp "$SCRIPT_DIR/bin/Release/net10.0/win-x64/publish/rush.exe" "$WIN_STAGING/rush-x64.exe"
     echo "  → $WIN_STAGING/rush-x64.exe"
 
-    echo "  → Copying docs..."
-    cp "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$WIN_STAGING/"
-    cp "$SCRIPT_DIR/docs/user-manual.md" "$WIN_STAGING/"
+    echo "  → Building Linux x64..."
+    dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true "$SCRIPT_DIR" > /dev/null
+    cp "$SCRIPT_DIR/bin/Release/net10.0/linux-x64/publish/rush" "$WIN_STAGING/rush-linux-x64"
+    echo "  → $WIN_STAGING/rush-linux-x64"
 fi
