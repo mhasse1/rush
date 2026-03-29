@@ -4863,6 +4863,14 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
 {
     var path = input.Length > 3 ? input[3..].Trim() : "~";
 
+    // Strip surrounding quotes: cd "My Folder" or cd 'My Folder'
+    if (path.Length >= 2 &&
+        ((path[0] == '"' && path[^1] == '"') || (path[0] == '\'' && path[^1] == '\'')))
+        path = path[1..^1];
+
+    // Handle backslash-space escaping: cd My\ Folder → My Folder
+    path = path.Replace("\\ ", " ");
+
     string? currentDir = null;
     try
     {
