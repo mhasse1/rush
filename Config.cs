@@ -24,6 +24,14 @@ public class RushConfig
     public bool CoreutilsTipShown { get; set; } = false;
 
     /// <summary>
+    /// True when this config was just created (first run). Not persisted —
+    /// only set during the Load() call that creates the default config.
+    /// Used to show the first-run welcome message.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsFirstRun { get; set; } = false;
+
+    /// <summary>
     /// Terminal background color for palette generation. Hex like "#222733".
     /// "auto" = detect from env/OS. When set, enables 256-color palette with
     /// WCAG contrast validation. Applied before banner — no visible glitch.
@@ -133,6 +141,7 @@ public class RushConfig
 
         // Create self-documenting config on first run
         var defaultConfig = new RushConfig();
+        defaultConfig.IsFirstRun = true;
         defaultConfig.Save();
         EnsureStartupScripts();
         return defaultConfig;

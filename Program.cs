@@ -221,7 +221,24 @@ Console.ForegroundColor = Theme.Current.Muted;
 Console.WriteLine($"PowerShell 7 engine | {config.EditMode} mode | Tab | Ctrl+R");
 Console.ResetColor();
 
-if (config.ShowTips)
+if (config.IsFirstRun)
+{
+    Console.WriteLine();
+    Console.ForegroundColor = Theme.Current.Banner;
+    Console.WriteLine("Welcome to Rush! A few things work differently here:");
+    Console.ResetColor();
+    Console.WriteLine();
+    Console.ForegroundColor = Theme.Current.Muted;
+    Console.WriteLine("  alias ll='ls -la'     session-only (--save to persist)");
+    Console.WriteLine("  path add ~/bin         session-only (--save to persist)");
+    Console.WriteLine("  set editMode emacs     session-only (--save to persist)");
+    Console.WriteLine();
+    Console.WriteLine("  Builtins support --help:  alias --help, path --help, cd --help");
+    Console.WriteLine("  help                   list all help topics");
+    Console.WriteLine("  help xref              bash → Rush cross-reference");
+    Console.ResetColor();
+}
+else if (config.ShowTips)
 {
     var tip = GetStartupTip(config);
     Console.WriteLine();
@@ -5246,6 +5263,11 @@ static string GetStartupTip(RushConfig config)
         "cmd1 && cmd2  -- run cmd2 only if cmd1 succeeds",
         "cmd1 || echo 'failed'  -- run on failure only",
         "sleep 10 &  -- run in background (jobs/fg to manage)",
+
+        // ── Help ──
+        "alias --help  -- builtins have built-in help (also: path, cd, set, export)",
+        "help xref  -- bash → Rush cross-reference (great for learning Rush)",
+        "help  -- list all 28 help topics",
 
         // ── Config ──
         "~/.config/rush/config.json  -- all settings, commented with descriptions",
