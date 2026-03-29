@@ -5002,9 +5002,8 @@ static void ApplyDirBackground(string dir)
                 if (!string.IsNullOrEmpty(hex) && Theme.SetBackground(hex))
                 {
                     Theme.ActiveRushBgFile = rushBgFile;
-                    // Re-initialize theme so contrast validation matches the set bg path
-                    Theme.Initialize();
-                    Theme.SetNativeColorEnvVars();
+                    // SetBackground already re-creates the Theme with correct
+                    // dark/light and RGB values — no Initialize() needed.
                 }
             }
             catch { /* file read error — silently ignore */ }
@@ -5012,12 +5011,21 @@ static void ApplyDirBackground(string dir)
     }
     else if (Theme.ActiveRushBgFile != null)
     {
-        // Left a .rushbg directory tree — restore original background
-        // and re-initialize theme so all colors recalculate
-        Theme.ResetBackground();
+        // Left a .rushbg directory tree — restore original background.
+        // If config has a bg color, re-apply it (which rebuilds the theme).
+        // Otherwise reset to terminal default and re-detect.
         Theme.ActiveRushBgFile = null;
-        Theme.Initialize();
-        Theme.SetNativeColorEnvVars();
+        var configBg = RushConfig.Load().Bg;
+        if (!string.IsNullOrEmpty(configBg) && !string.Equals(configBg, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            Theme.SetBackground(configBg);
+        }
+        else
+        {
+            Theme.ResetBackground();
+            Theme.Initialize();
+            Theme.SetNativeColorEnvVars();
+        }
     }
 }
 
