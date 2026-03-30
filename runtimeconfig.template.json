@@ -1,7 +1,0 @@
-{
-  "additionalProbingPaths": [
-    "/opt/homebrew/lib/rush-sdk",
-    "/usr/local/lib/rush-sdk",
-    "C:\\lib\\rush-sdk"
-  ]
-}

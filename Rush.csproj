@@ -7,7 +7,8 @@
     <Nullable>enable</Nullable>
     <AssemblyName>rush</AssemblyName>
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
-    <SelfContained>false</SelfContained>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
@@ -70,8 +71,5 @@
     <InternalsVisibleTo Include="Rush.Tests" />
   </ItemGroup>
 
-  <!-- ── SDK probing paths for split deployment ──────────────────────── -->
-  <!-- runtimeconfig.template.json merges additional probing paths into the
-       generated runtimeconfig. Allows rush-sdk DLLs in a separate directory. -->
 
 </Project>
