@@ -7,13 +7,8 @@
     <Nullable>enable</Nullable>
     <AssemblyName>rush</AssemblyName>
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
-    <SelfContained>true</SelfContained>
+    <SelfContained>false</SelfContained>
     <PublishTrimmed>false</PublishTrimmed>
-    <!-- PowerShell SDK 7.4 resolves PSHOME from Assembly.Location, which is
-         empty for single-file publish. IncludeAllContentForSelfExtract makes
-         the binary self-extract to ~/.net/rush/ on first run, restoring a
-         real Assembly.Location. Required for single-file on all platforms. -->
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
     <RushMajorMinor>0.9</RushMajorMinor>
@@ -74,5 +69,9 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Rush.Tests" />
   </ItemGroup>
+
+  <!-- ── SDK probing paths for split deployment ──────────────────────── -->
+  <!-- runtimeconfig.template.json merges additional probing paths into the
+       generated runtimeconfig. Allows rush-sdk DLLs in a separate directory. -->
 
 </Project>
