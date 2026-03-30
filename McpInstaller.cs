@@ -36,18 +36,26 @@ public static class McpInstaller
 
         var rushPath = GetRushBinaryPath();
 
-        // 1. Claude Code — ~/.claude/mcp.json
-        var claudeCodePath = GetClaudeCodeConfigPath();
-        UpdateMcpConfig(claudeCodePath, "rush", "Claude Code");
+        // 1. Claude Code — ~/.claude.json (top-level mcpServers)
+        // This is where Claude Code actually reads user-level MCP servers.
+        var claudeJsonPath = GetClaudeJsonPath();
+        if (File.Exists(claudeJsonPath))
+            UpdateClaudeJson(claudeJsonPath, rushPath);
+        else
+            Console.WriteLine("   - ~/.claude.json not found (run Claude Code first, then re-run this)");
 
-        // 2. Claude Desktop — platform-specific config path
+        // 2. Claude Code — ~/.claude/mcp.json (legacy location, kept for compat)
+        var claudeCodePath = GetClaudeCodeConfigPath();
+        UpdateMcpConfig(claudeCodePath, "rush", "Claude Code (mcp.json)");
+
+        // 3. Claude Desktop — platform-specific config path
         var desktopPath = GetClaudeDesktopConfigPath();
         if (desktopPath != null)
             UpdateMcpConfig(desktopPath, rushPath, "Claude Desktop");
         else
             Console.WriteLine("   - Claude Desktop config not found (skipped)");
 
-        // 3. Claude Code settings — permissions allow list
+        // 4. Claude Code settings — permissions allow list
         var settingsPath = GetClaudeCodeSettingsPath();
         UpdateClaudeSettings(settingsPath);
 
@@ -75,6 +83,12 @@ public static class McpInstaller
                 return resolved;
         }
         return Path.GetFullPath(procPath);
+    }
+
+    private static string GetClaudeJsonPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".claude.json");
     }
 
     private static string GetClaudeCodeConfigPath()
@@ -128,6 +142,58 @@ public static class McpInstaller
     }
 
     // ── Config file updaters ───────────────────────────────────────────
+
+    /// <summary>
+    /// Update the top-level mcpServers in ~/.claude.json.
+    /// This is where Claude Code actually reads user-level MCP servers.
+    /// Must preserve all other keys in the file.
+    /// </summary>
+    private static void UpdateClaudeJson(string configPath, string rushPath)
+    {
+        try
+        {
+            var content = File.ReadAllText(configPath);
+            var root = JsonNode.Parse(content);
+            if (root == null) return;
+
+            if (root["mcpServers"] == null)
+                root.AsObject().Add("mcpServers", new JsonObject());
+
+            var servers = root["mcpServers"]!.AsObject();
+
+            // Clean up old entries
+            servers.Remove("rush");
+            servers.Remove(LocalServerName);
+            servers.Remove(SshServerName);
+
+            // Add rush-local
+            servers.Add(LocalServerName, new JsonObject
+            {
+                ["type"] = "stdio",
+                ["command"] = (JsonNode)rushPath,
+                ["args"] = new JsonArray { "--mcp" },
+                ["env"] = new JsonObject()
+            });
+
+            // Add rush-ssh
+            servers.Add(SshServerName, new JsonObject
+            {
+                ["type"] = "stdio",
+                ["command"] = (JsonNode)rushPath,
+                ["args"] = new JsonArray { "--mcp-ssh" },
+                ["env"] = new JsonObject()
+            });
+
+            File.WriteAllText(configPath, WritePrettyJson(root));
+            Console.WriteLine($"   + Claude Code: {configPath}");
+        }
+        catch (Exception ex)
+        {
+            Console.ForegroundColor = ConsoleColor.Yellow;
+            Console.Error.WriteLine($"   ! Failed to update {configPath}: {ex.Message}");
+            Console.ResetColor();
+        }
+    }
 
     /// <summary>
     /// Register both rush-local and rush-ssh in an MCP config file.
