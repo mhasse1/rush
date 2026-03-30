@@ -652,6 +652,22 @@ public class LlmMode
                 results = ps.Invoke().Where(r => r != null).ToList(); // existing — no timeout
             }
 
+            // ── Format object detection ───────────────────────────
+            // Format-Table/Format-List/Format-Wide produce Format objects
+            // that aren't data — pipe through Out-String to render them.
+            if (results.Count > 0 && IsFormatOutput(results))
+            {
+                try
+                {
+                    using var fmtPs = PowerShell.Create();
+                    fmtPs.Runspace = _runspace;
+                    fmtPs.AddCommand("Out-String");
+                    var fmtResults = fmtPs.Invoke(results);
+                    results = fmtResults.Where(r => r != null).ToList();
+                }
+                catch { /* fall through to normal rendering */ }
+            }
+
             // ── Object-mode detection ──────────────────────────────
             bool objectMode = IsObjectOutput(results);
             string? stdoutType = objectMode ? "objects" : null;
@@ -920,6 +936,22 @@ public class LlmMode
 
     /// <summary>
     /// Detect whether PowerShell results are structured objects (FileInfo, Process, etc.)
+    /// Detect Format-Table/Format-List/Format-Wide output objects.
+    /// These are rendering instructions, not data — need Out-String to render.
+    /// </summary>
+    private static bool IsFormatOutput(List<PSObject> results)
+    {
+        foreach (var r in results)
+        {
+            if (r?.BaseObject == null) continue;
+            var typeName = r.BaseObject.GetType().FullName ?? "";
+            if (typeName.StartsWith("Microsoft.PowerShell.Commands.Internal.Format."))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
     /// rather than simple values (string, int, bool, etc.) that should stay as text.
     /// </summary>
     private static bool IsObjectOutput(List<PSObject> results)
