@@ -2319,6 +2319,22 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             }
         }
 
+        // ── Quoted executable path ── prepend & for PowerShell invocation
+        // "C:\Program Files\app.exe" -args → & "C:\Program Files\app.exe" -args
+        if (commandToRun.StartsWith('"') || commandToRun.StartsWith('\''))
+        {
+            var cmdTrimmed = commandToRun.TrimStart();
+            char q = cmdTrimmed[0];
+            var closeIdx = cmdTrimmed.IndexOf(q, 1);
+            if (closeIdx > 0)
+            {
+                var path = cmdTrimmed[1..closeIdx];
+                // Only prepend & if it looks like a file path (contains / or \)
+                if (path.Contains('/') || path.Contains('\\'))
+                    commandToRun = "& " + commandToRun;
+            }
+        }
+
         // ── Stderr Merge ── inject PS redirect so errors flow into output
         if (redirect?.MergeStderr == true)
             commandToRun += " 2>&1";
@@ -5779,6 +5795,20 @@ static void RunNonInteractive(string command)
                 Console.ResetColor();
                 lastFailed = true;
                 continue;
+            }
+        }
+
+        // Quoted executable path — prepend & for PowerShell invocation
+        if (commandToRun.StartsWith('"') || commandToRun.StartsWith('\''))
+        {
+            var cmdTrimmed = commandToRun.TrimStart();
+            char q = cmdTrimmed[0];
+            var closeIdx = cmdTrimmed.IndexOf(q, 1);
+            if (closeIdx > 0)
+            {
+                var path = cmdTrimmed[1..closeIdx];
+                if (path.Contains('/') || path.Contains('\\'))
+                    commandToRun = "& " + commandToRun;
             }
         }
 
