@@ -4659,7 +4659,11 @@ static string ExpandGlobs(string command)
 
         var matches = ExpandSingleGlob(arg);
         if (matches.Count > 0)
-            expanded.AddRange(matches);
+        {
+            // Quote filenames containing spaces so they survive word splitting
+            foreach (var m in matches)
+                expanded.Add(m.Contains(' ') ? $"\"{m}\"" : m);
+        }
         else
             expanded.Add(arg); // No match: pass literal (bash default)
     }
