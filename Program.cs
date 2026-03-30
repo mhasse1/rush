@@ -1015,6 +1015,20 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             continue;
         }
 
+        // ── man — intercept for Rush builtins, pass through for everything else ──
+        if (segment.StartsWith("man ", StringComparison.OrdinalIgnoreCase))
+        {
+            var manTopic = segment[4..].Trim();
+            var helpTopic = MapKeywordToHelpTopic(manTopic);
+            if (helpTopic != null || HelpCommand.GetTopic(manTopic) != null)
+            {
+                HelpRenderer.Render(helpTopic ?? manTopic);
+                lastSegmentFailed = false;
+                continue;
+            }
+            // Not a Rush topic — fall through to system man
+        }
+
         // ── which — check builtins before falling through to Get-Command ──
         if (segment.StartsWith("which ", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("type ", StringComparison.OrdinalIgnoreCase))
