@@ -526,9 +526,15 @@ while (true)
             }
         }
 
+        // Handle puts/print/warn with shell redirects (>> or >)
+        // These are Rush syntax but users expect redirects to work like echo.
+        var rushRedirect = ExtractRushOutputRedirect(ref input);
+
         var psCode = scriptEngine.TranspileLine(input);
         if (psCode != null)
         {
+            if (rushRedirect != null)
+                psCode += rushRedirect;
             var (rushFailed, rushShouldExit) = ExecuteTranspiledBlock(psCode, state);
             if (!rushFailed)
             {
@@ -5868,6 +5874,44 @@ static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 /// Open a file, URL, or directory with the system default handler.
 /// Returns true on failure, false on success (matches lastSegmentFailed convention).
 /// </summary>
+/// <summary>
+/// Extract a shell redirect (>> or >) from the end of a Rush output statement
+/// (puts, print, warn). Returns the PowerShell redirect string, or null if no
+/// redirect found. Modifies input to remove the redirect portion.
+/// </summary>
+static string? ExtractRushOutputRedirect(ref string input)
+{
+    var trimmed = input.TrimStart();
+    // Only for Rush output builtins
+    if (!trimmed.StartsWith("puts ", StringComparison.OrdinalIgnoreCase) &&
+        !trimmed.StartsWith("print ", StringComparison.OrdinalIgnoreCase) &&
+        !trimmed.StartsWith("warn ", StringComparison.OrdinalIgnoreCase))
+        return null;
+
+    // Find >> or > outside of quotes
+    bool inSingle = false, inDouble = false;
+    for (int i = 0; i < input.Length; i++)
+    {
+        if (input[i] == '\'' && !inDouble) inSingle = !inSingle;
+        if (input[i] == '"' && !inSingle) inDouble = !inDouble;
+        if (inSingle || inDouble) continue;
+
+        if (i + 1 < input.Length && input[i] == '>' && input[i + 1] == '>')
+        {
+            var file = input[(i + 2)..].Trim();
+            input = input[..i].TrimEnd();
+            return $" | Add-Content -Path '{file}'";
+        }
+        if (input[i] == '>' && (i + 1 >= input.Length || input[i + 1] != '>'))
+        {
+            var file = input[(i + 1)..].Trim();
+            input = input[..i].TrimEnd();
+            return $" | Set-Content -Path '{file}'";
+        }
+    }
+    return null;
+}
+
 static bool OpenWithSystem(string target)
 {
     try
