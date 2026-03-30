@@ -1465,6 +1465,22 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             continue;
         }
 
+        // ── o: cross-platform open (file, URL, directory) ───────────
+        if (segment.Equals("o", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("o ", StringComparison.OrdinalIgnoreCase))
+        {
+            var target = segment.Length > 2 ? segment[2..].Trim() : ".";
+            // Strip quotes
+            if (target.Length >= 2 &&
+                ((target[0] == '"' && target[^1] == '"') || (target[0] == '\'' && target[^1] == '\'')))
+                target = target[1..^1];
+            // Handle backslash-space
+            target = target.Replace("\\ ", " ");
+
+            lastSegmentFailed = OpenWithSystem(target);
+            continue;
+        }
+
         // ── Interactive alias definition ────────────────────────────
         // alias ll='ls -la'        (session-only)
         // alias --save ll='ls -la' (persisted to config.json)
@@ -5834,6 +5850,67 @@ static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
 [DllImport("kernel32.dll", SetLastError = true)]
 static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
 
+/// <summary>
+/// Open a file, URL, or directory with the system default handler.
+/// Returns true on failure, false on success (matches lastSegmentFailed convention).
+/// </summary>
+static bool OpenWithSystem(string target)
+{
+    try
+    {
+        ProcessStartInfo psi;
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            // Windows: Start-Process via cmd to handle URLs and files
+            psi = new ProcessStartInfo("cmd", $"/c start \"\" \"{target}\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+            };
+        }
+        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            psi = new ProcessStartInfo("/usr/bin/open", target)
+            {
+                UseShellExecute = false,
+                RedirectStandardError = true,
+            };
+        }
+        else
+        {
+            // Linux: xdg-open, suppress stderr (it's noisy)
+            psi = new ProcessStartInfo("xdg-open", target)
+            {
+                UseShellExecute = false,
+                RedirectStandardError = true,
+            };
+        }
+
+        var proc = Process.Start(psi);
+        if (proc == null)
+        {
+            Console.ForegroundColor = Theme.Current.Error;
+            Console.Error.WriteLine($"o: failed to open '{target}'");
+            Console.ResetColor();
+            return true;
+        }
+
+        // Don't wait for GUI apps — fire and forget
+        // But drain stderr to avoid buffer deadlock
+        _ = proc.StandardError.ReadToEndAsync();
+        return false;
+    }
+    catch (Exception ex)
+    {
+        Console.ForegroundColor = Theme.Current.Error;
+        Console.Error.WriteLine($"o: {ex.Message}");
+        Console.ResetColor();
+        return true;
+    }
+}
+
 static class RushConstants
 {
     /// <summary>
@@ -5844,7 +5921,7 @@ static class RushConstants
         "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
         "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
         "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
-        "path", "ai", "sql", "set", "which", "type", "setbg"
+        "path", "ai", "sql", "set", "which", "type", "setbg", "o"
     };
 }
 
