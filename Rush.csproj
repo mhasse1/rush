@@ -8,7 +8,9 @@
     <AssemblyName>rush</AssemblyName>
     <Description>Unix-style shell built on the PowerShell 7 engine</Description>
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
+    <!-- PublishSingleFile set per publish command, not globally.
+         install.sh uses loose files (fast) for dev.
+         install.sh --full uses -p:PublishSingleFile=true for distribution. -->
     <PublishTrimmed>false</PublishTrimmed>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->

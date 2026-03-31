@@ -27,25 +27,30 @@ if [[ "$CURRENT_SHA" == "$LAST_SHA" && "$FORCE" != "true" && -f "$BIN_LINK" ]]; 
     echo "Use FORCE=true ./install.sh to rebuild anyway."
 else
     # ── Build to temp dir (never conflicts with running binary) ──────
-    rm -rf "$PUBLISH_TMP"
+    rm -rf "$PUBLISH_TMP" "$PUBLISH_TMP"-*
     echo "Building release binary..."
+    # Dev: loose files (fast ~5s). --full: single-file bundles for distribution.
     dotnet publish -c Release -r osx-arm64 -o "$PUBLISH_TMP" "$SCRIPT_DIR"
     echo ""
 
-    # ── Install: copy binary (Unix unlinks first → no lock conflict) ──
-    sudo cp -f "$PUBLISH_TMP/rush" "$BIN_LINK"
-    sudo chmod +x "$BIN_LINK"
+    # ── Install: copy binary + deps (Unix unlinks first → no lock conflict) ──
+    # For loose-file publish, copy the whole directory
+    sudo rm -rf /usr/local/lib/rush
+    sudo mkdir -p /usr/local/lib/rush
+    sudo cp -rf "$PUBLISH_TMP"/* /usr/local/lib/rush/
+    sudo rm -f "$BIN_LINK"
+    sudo ln -sf /usr/local/lib/rush/rush "$BIN_LINK"
 
     VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "unknown")
 
-    # ── Cross-compile (only with --full) ─────────────────────────────
+    # ── Cross-compile single-file (only with --full) ─────────────────
     if [[ "${1:-}" == "--full" ]]; then
         echo "  → Building Windows ARM64..."
-        dotnet publish -c Release -r win-arm64 -o "$PUBLISH_TMP-win-arm64" "$SCRIPT_DIR" > /dev/null
+        dotnet publish -c Release -r win-arm64 -p:PublishSingleFile=true -o "$PUBLISH_TMP-win-arm64" "$SCRIPT_DIR" > /dev/null
         echo "  → Building Windows x64..."
-        dotnet publish -c Release -r win-x64 -o "$PUBLISH_TMP-win-x64" "$SCRIPT_DIR" > /dev/null
+        dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -o "$PUBLISH_TMP-win-x64" "$SCRIPT_DIR" > /dev/null
         echo "  → Building Linux x64..."
-        dotnet publish -c Release -r linux-x64 -o "$PUBLISH_TMP-linux-x64" "$SCRIPT_DIR" > /dev/null
+        dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -o "$PUBLISH_TMP-linux-x64" "$SCRIPT_DIR" > /dev/null
     fi
 
     # Save build SHA
