@@ -14,5 +14,6 @@ publish/
 *.log
 tmp/
 dist/
+.last-build-sha
 internal/
 .claude/
