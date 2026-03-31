@@ -12,7 +12,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: rush
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: rush
+          - os: windows-latest
+            rid: win-x64
+            artifact: rush.exe
 
     steps:
       - uses: actions/checkout@v5
@@ -29,6 +38,17 @@ jobs:
 
       - name: Test
         run: dotnet test Rush.Tests --logger "trx;LogFileName=results.trx"
+
+      - name: Publish single-file binary
+        if: success()
+        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:PublishSingleFile=true
+
+      - name: Upload binary
+        if: success()
+        uses: actions/upload-artifact@v6
+        with:
+          name: rush-${{ matrix.rid }}
+          path: bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
 
       - name: Upload test results
         if: failure()
@@ -51,7 +71,7 @@ jobs:
           script: |
             const title = `CI failure on main (${context.sha.substring(0, 7)})`;
 
-            // Don't create duplicates — check for open issues with same title prefix
+            // Don't create duplicates
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -62,7 +82,6 @@ jobs:
 
             const duplicate = existing.data.find(i => i.title.startsWith('CI failure on main'));
             if (duplicate) {
-              // Add a comment to the existing issue instead
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
