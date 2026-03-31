@@ -181,7 +181,9 @@ A commented default is created on first run. Custom prompts have access to conte
 
 ### Colors & Theming
 
-Rush detects your terminal background at startup using environment hints (`COLORFGBG`, macOS appearance) and selects a contrast-aware color palette. For best results, set your exact background color with `set bg`. All Rush UI colors (prompt, syntax highlighting, file types) are validated against a WCAG 3:1 minimum contrast ratio.
+**Important:** Contrast-aware theming requires `set --save bg "#hex"` to be set to your terminal's background color. Without it, Rush cannot validate color contrast and text may be hard to read. Set it once and Rush handles the rest.
+
+All Rush UI colors (prompt, syntax highlighting, file types, `ls`, `grep`) are validated against a WCAG 3:1 minimum contrast ratio when `bg` is set.
 
 Rush also configures native command colors automatically:
 

@@ -227,12 +227,28 @@ if (config.IsFirstRun)
 }
 else if (config.ShowTips)
 {
-    var tip = GetStartupTip(config);
-    Console.WriteLine();
-    Console.ForegroundColor = Theme.Current.Muted;
-    Console.Write("Tip: ");
-    Console.ResetColor();
-    Console.WriteLine(tip);
+    // Warn if contrast-aware theming is disabled
+    bool bgOff = string.IsNullOrEmpty(config.Bg) || string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase);
+    if (bgOff && Theme.ActiveRushBgFile == null)
+    {
+        Console.WriteLine();
+        Console.ForegroundColor = ConsoleColor.Yellow;
+        Console.Write("  Note: ");
+        Console.ResetColor();
+        Console.WriteLine("Contrast-aware theming is disabled. Colors may be hard to read.");
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        Console.WriteLine("        Set your terminal background:  set --save bg \"#282828\"");
+        Console.ResetColor();
+    }
+    else
+    {
+        var tip = GetStartupTip(config);
+        Console.WriteLine();
+        Console.ForegroundColor = Theme.Current.Muted;
+        Console.Write("Tip: ");
+        Console.ResetColor();
+        Console.WriteLine(tip);
+    }
 }
 
 // ── Initialize PowerShell Engine ─────────────────────────────────────
