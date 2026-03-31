@@ -198,21 +198,8 @@ if (llmMode)
 // ── Load Config ──────────────────────────────────────────────────────
 var config = RushConfig.Load();
 
-// ── Theme (detect terminal background for contrast-aware colors) ─────
-Theme.MinContrast = config.GetContrastRatio();
-// Apply saved background color BEFORE Theme.Initialize so the banner prints
-// with correct colors — no visible glitch window.
-if (!string.IsNullOrEmpty(config.Bg) && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
-    Theme.SetBackground(config.Bg);
-// Check for .rushbg in current directory (overrides global config)
-ApplyDirBackground(Environment.CurrentDirectory);
-Theme.Initialize(config.GetThemeOverride());
-bool rootBgApplied = false;
-if (Prompt.IsRoot())
-{
-    rootBgApplied = Theme.ApplyRootBackground(config.RootBackground);
-}
-Theme.SetNativeColorEnvVars();
+// ── Theme (single path: .rushbg > config.Bg > auto-detect) ──────────
+ApplyTheme(config, Environment.CurrentDirectory);
 
 // ── Banner ───────────────────────────────────────────────────────────
 Console.ForegroundColor = Theme.Current.Banner;
@@ -1406,17 +1393,9 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                     var (reloadE, reloadX, reloadPf) = state.Config.Apply(null, state.Translator);
                     state.SetE = reloadE; state.SetX = reloadX; state.SetPipefail = reloadPf;
                 }
-                Theme.MinContrast = state.Config.GetContrastRatio();
-                if (!string.IsNullOrEmpty(state.Config.Bg) && !string.Equals(state.Config.Bg, "off", StringComparison.OrdinalIgnoreCase))
-                    Theme.SetBackground(state.Config.Bg);
-                else
-                    Theme.ResetBackground();
-                // Check for .rushbg in current directory (overrides global config)
-                // Clear tracking so we re-read the file even if the path hasn't changed
+                // Retheme — clear tracking so .rushbg is re-read
                 Theme.ActiveRushBgFile = null;
-                ApplyDirBackground(Environment.CurrentDirectory);
-                Theme.Initialize(state.Config.GetThemeOverride());
-                Theme.SetNativeColorEnvVars();
+                ApplyTheme(state.Config, Environment.CurrentDirectory);
                 // Re-check coreutils shimming (user may have installed it since startup)
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                     ShimCoreutilsIfNeeded(state.Runspace, quiet: true);
@@ -2911,8 +2890,8 @@ static void RunScriptFile(string path, string[] scriptArgs)
     try
     {
         // Initialize theme for output rendering
-        Theme.Initialize(null);
-        Theme.SetNativeColorEnvVars();
+        var scriptCfg = RushConfig.Load();
+        ApplyTheme(scriptCfg, Environment.CurrentDirectory, emitOsc: false);
 
         var source = File.ReadAllText(path);
         var iss = InitialSessionState.CreateDefault();
@@ -5086,7 +5065,7 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
         catch { /* ignore — Set-Location succeeded, this is best-effort */ }
 
         // Check for .rushbg in this directory or ancestors
-        ApplyDirBackground(resolvedDir);
+        ApplyThemeForCd(resolvedDir, RushConfig.Load());
 
         return (false, currentDir);
     }
@@ -5103,46 +5082,79 @@ static (bool failed, string? newPreviousDir) HandleCd(Runspace runspace, string 
 /// Walk up from dir looking for .rushbg. Apply if found and different from current.
 /// Reset to terminal default if no .rushbg found but one was previously active.
 /// </summary>
-static void ApplyDirBackground(string dir)
+/// <summary>
+/// Single unified function for all theme/color setup. Called from startup,
+/// reload, cd, set bg, set theme, setbg, non-interactive, and script mode.
+///
+/// Priority: .rushbg file > config.Bg > auto-detect.
+/// Key rule: SetBackground() creates the theme. Initialize() only runs
+/// when no explicit background is set (auto-detect path).
+/// </summary>
+static void ApplyTheme(RushConfig config, string? cwd = null, bool emitOsc = true)
+{
+    Theme.MinContrast = config.GetContrastRatio();
+
+    // 1. Determine background color: .rushbg > config.Bg > auto-detect
+    string? bgHex = null;
+    string? rushBgFile = null;
+
+    if (cwd != null)
+    {
+        rushBgFile = FindRushBgFile(cwd);
+        if (rushBgFile != null)
+        {
+            try { bgHex = File.ReadAllText(rushBgFile).Trim(); }
+            catch { rushBgFile = null; }
+            if (string.IsNullOrEmpty(bgHex)) { bgHex = null; rushBgFile = null; }
+        }
+    }
+
+    if (bgHex == null && !string.IsNullOrEmpty(config.Bg)
+        && !string.Equals(config.Bg, "off", StringComparison.OrdinalIgnoreCase))
+    {
+        bgHex = config.Bg;
+    }
+
+    // 2. Apply background or reset to auto-detect
+    if (bgHex != null)
+    {
+        // SetBackground creates the Theme with correct dark/light and RGB.
+        // Do NOT call Initialize() after this — it would overwrite the theme.
+        Theme.SetBackground(bgHex, emitOsc);
+    }
+    else
+    {
+        if (emitOsc) Theme.ResetBackground();
+        // No explicit background — auto-detect and create theme
+        Theme.Initialize(config.GetThemeOverride());
+    }
+
+    // Track active .rushbg file
+    Theme.ActiveRushBgFile = rushBgFile;
+
+    // 3. Root background (overrides for admin shells)
+    if (emitOsc && Prompt.IsRoot())
+        Theme.ApplyRootBackground(config.RootBackground);
+
+    // 4. Update native command colors (LS_COLORS, GREP_COLORS, etc.)
+    Theme.SetNativeColorEnvVars();
+}
+
+/// <summary>
+/// Lightweight version for cd — only updates if .rushbg state changed.
+/// Calls full ApplyTheme when background needs to change.
+/// </summary>
+static void ApplyThemeForCd(string dir, RushConfig config)
 {
     var rushBgFile = FindRushBgFile(dir);
+    var currentFile = Theme.ActiveRushBgFile;
 
-    if (rushBgFile != null)
-    {
-        // Found .rushbg — only apply if it's different from what's already active
-        if (!string.Equals(rushBgFile, Theme.ActiveRushBgFile, StringComparison.Ordinal))
-        {
-            try
-            {
-                var hex = File.ReadAllText(rushBgFile).Trim();
-                if (!string.IsNullOrEmpty(hex) && Theme.SetBackground(hex))
-                {
-                    Theme.ActiveRushBgFile = rushBgFile;
-                    // SetBackground already re-creates the Theme with correct
-                    // dark/light and RGB values — no Initialize() needed.
-                }
-            }
-            catch { /* file read error — silently ignore */ }
-        }
-    }
-    else if (Theme.ActiveRushBgFile != null)
-    {
-        // Left a .rushbg directory tree — restore original background.
-        // If config has a bg color, re-apply it (which rebuilds the theme).
-        // Otherwise reset to terminal default and re-detect.
-        Theme.ActiveRushBgFile = null;
-        var configBg = RushConfig.Load().Bg;
-        if (!string.IsNullOrEmpty(configBg) && !string.Equals(configBg, "off", StringComparison.OrdinalIgnoreCase))
-        {
-            Theme.SetBackground(configBg);
-        }
-        else
-        {
-            Theme.ResetBackground();
-            Theme.Initialize();
-            Theme.SetNativeColorEnvVars();
-        }
-    }
+    // No change — same .rushbg file (or still no .rushbg)
+    if (string.Equals(rushBgFile, currentFile, StringComparison.Ordinal))
+        return;
+
+    // Background changed — full retheme
+    ApplyTheme(config, dir);
 }
 
 /// <summary>
@@ -5431,16 +5443,9 @@ static void ApplySettingToRuntime(string key, ShellState state)
                 state.LineEditor.MaxHistory = state.Config.HistorySize;
             break;
         case "bg":
-            if (string.Equals(state.Config.Bg, "off", StringComparison.OrdinalIgnoreCase))
-                Theme.ResetBackground();
-            else
-                Theme.SetBackground(state.Config.Bg);
-            Theme.Initialize(state.Config.GetThemeOverride());
-            Theme.SetNativeColorEnvVars();
-            break;
         case "theme":
-            Theme.Initialize(state.Config.GetThemeOverride());
-            Theme.SetNativeColorEnvVars();
+        case "contrast":
+            ApplyTheme(state.Config, Environment.CurrentDirectory);
             break;
     }
 }
@@ -5624,11 +5629,7 @@ static void ShowHelp(LineEditor editor, CommandTranslator translator)
 static void RunNonInteractive(string command)
 {
     var cfg = RushConfig.Load();
-    Theme.MinContrast = cfg.GetContrastRatio();
-    if (!string.IsNullOrEmpty(cfg.Bg) && !string.Equals(cfg.Bg, "off", StringComparison.OrdinalIgnoreCase))
-        Theme.SetBackground(cfg.Bg, emitOsc: false);
-    Theme.Initialize(cfg.GetThemeOverride());
-    Theme.SetNativeColorEnvVars();
+    ApplyTheme(cfg, Environment.CurrentDirectory, emitOsc: false);
     var ui = new RushHostUI();
     var h = new RushHost(ui);
     var ss = InitialSessionState.CreateDefault();
