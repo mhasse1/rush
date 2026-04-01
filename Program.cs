@@ -465,6 +465,11 @@ while (true)
     input = input.Trim();
     if (string.IsNullOrEmpty(input)) continue;
 
+    // ── Inline env vars: VAR=value command (must be before triage) ────
+    // POSIX: VAR=value command sets VAR for the duration of command only.
+    // Extract and set them, run the command, then restore.
+    var inlineEnvSaved = ApplyInlineEnvVars(ref input);
+
     // ── --help flag (must be before Rush syntax triage — "for --help" etc.) ──
     if (input.EndsWith(" --help", StringComparison.OrdinalIgnoreCase)
         || input.Equals("--help", StringComparison.OrdinalIgnoreCase))
@@ -549,6 +554,7 @@ while (true)
         }
 
         lineEditor.SaveHistory();
+        RestoreInlineEnvVars(inlineEnvSaved);
         continue;
     }
 
@@ -581,6 +587,7 @@ while (true)
     prompt.SetLastCommandFailed(cmdFailed, cmdExitCode);
     TrainingHints.TryShowHint(input, cmdFailed, config);
     lineEditor.SaveHistory();
+    RestoreInlineEnvVars(inlineEnvSaved);
 }
 
 // ── Graceful Exit ────────────────────────────────────────────────────
@@ -5957,6 +5964,75 @@ static string? ExtractRushOutputRedirect(ref string input)
         }
     }
     return null;
+}
+
+/// <summary>
+/// Extract inline env vars (VAR=value VAR2=value2 command) from the front of input.
+/// Returns saved values for restoration, or null if no inline vars found.
+/// Modifies input to contain just the command portion.
+/// </summary>
+static Dictionary<string, string?>? ApplyInlineEnvVars(ref string input)
+{
+    if (string.IsNullOrEmpty(input)) return null;
+
+    // Pattern: one or more IDENTIFIER=VALUE (no spaces around =) followed by a command
+    // Stop when we hit a token that doesn't match IDENTIFIER=VALUE
+    var parts = input.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+    if (parts.Length < 2) return null; // Need at least VAR=value + command
+
+    var envVars = new List<(string key, string val)>();
+    int commandStart = 0;
+
+    for (int i = 0; i < parts.Length; i++)
+    {
+        var eqIdx = parts[i].IndexOf('=');
+        if (eqIdx <= 0) break; // Not a VAR=value token — this is the command
+
+        var key = parts[i][..eqIdx];
+        // Key must be a valid env var name (letters, digits, underscore, starts with letter/underscore)
+        if (!IsValidEnvVarName(key)) break;
+
+        var val = parts[i][(eqIdx + 1)..];
+        // Strip quotes from value
+        if (val.Length >= 2 &&
+            ((val[0] == '"' && val[^1] == '"') || (val[0] == '\'' && val[^1] == '\'')))
+            val = val[1..^1];
+
+        envVars.Add((key, val));
+        commandStart = i + 1;
+    }
+
+    if (envVars.Count == 0 || commandStart >= parts.Length) return null;
+
+    // Set env vars and save originals
+    var saved = new Dictionary<string, string?>();
+    foreach (var (key, val) in envVars)
+    {
+        saved[key] = Environment.GetEnvironmentVariable(key);
+        Environment.SetEnvironmentVariable(key, val);
+    }
+
+    // Remove the env var assignments from input, leaving just the command
+    input = string.Join(' ', parts[commandStart..]);
+    return saved;
+}
+
+static void RestoreInlineEnvVars(Dictionary<string, string?>? saved)
+{
+    if (saved == null) return;
+    foreach (var (key, val) in saved)
+        Environment.SetEnvironmentVariable(key, val);
+}
+
+static bool IsValidEnvVarName(string name)
+{
+    if (string.IsNullOrEmpty(name)) return false;
+    if (!char.IsLetter(name[0]) && name[0] != '_') return false;
+    for (int i = 1; i < name.Length; i++)
+    {
+        if (!char.IsLetterOrDigit(name[i]) && name[i] != '_') return false;
+    }
+    return true;
 }
 
 static bool OpenWithSystem(string target)
