@@ -417,13 +417,13 @@ public class RushTranspiler
             return sb.ToString();
         }
 
-        // ps5 block: raw PS 5.1 via __rush_win32 (Windows only)
+        // ps5 block: raw PS 5.1 via __rush_ps5 (Windows only, 64-bit PS 5.1)
         if (node.Platform == "ps5")
         {
             var encoded = Convert.ToBase64String(
                 System.Text.Encoding.UTF8.GetBytes(node.RawBody ?? ""));
             sb.AppendLine("if ($os -eq 'windows') {");
-            sb.AppendLine($"  __rush_win32 '{encoded}'");
+            sb.AppendLine($"  __rush_ps5 '{encoded}'");
             sb.Append('}');
             return sb.ToString();
         }

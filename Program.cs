@@ -2675,56 +2675,124 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
         winPs.Invoke();
     }
 
-    // Inject __rush_win32 helper function for win32 platform blocks
+    // Inject __rush_win32 and __rush_ps5 helper functions
+    // Both use JSON variable bridging to pass Rush variables into the child PS process.
+    // __rush_win32: targets 32-bit PS 5.1 (SysWOW64) for win32 platform blocks
+    // __rush_ps5:   targets 64-bit PS 5.1 (System32) for ps5 blocks
     using var ps2 = PowerShell.Create();
     ps2.Runspace = runspace;
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     {
         ps2.AddScript(@"
+function __rush_bridge_vars {
+    # Serialize current Rush variables to a JSON temp file for child PS processes.
+    # Returns the temp file path. Handles strings, numbers, bools, arrays, hashtables.
+    $exclude = @('PSCommandPath','PSScriptRoot','MyInvocation','_','args','input',
+                 'null','true','false','PSBoundParameters','PSDefaultParameterValues',
+                 'ErrorActionPreference','WarningPreference','InformationPreference',
+                 'DebugPreference','VerbosePreference','ConfirmPreference','WhatIfPreference',
+                 'EncodedBody','body','preamble','Host','HOME','PID','PWD','ShellId',
+                 'ExecutionContext','Error','NestedPromptLevel','LASTEXITCODE','PROFILE',
+                 'PSCulture','PSUICulture','PSVersionTable','StackTrace','switch','foreach',
+                 'Matches','ConsoleFileName','MaximumHistoryCount','OutputEncoding',
+                 'ProgressPreference','PSSessionApplicationName','PSSessionConfigurationName',
+                 'PSSessionOption','PSEmailServer','PSModuleAutoLoadingPreference')
+
+    $vars = @{}
+    Get-Variable -Scope 1 -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -notin $exclude -and -not $_.Name.StartsWith('__rush_')
+    } | ForEach-Object {
+        $val = $_.Value
+        if ($null -eq $val) { return }
+        $t = $val.GetType()
+        if ($t -eq [string] -or $t -eq [int] -or $t -eq [long] -or
+            $t -eq [double] -or $t -eq [bool] -or $t -eq [decimal]) {
+            $vars[$_.Name] = $val
+        }
+        elseif ($val -is [array]) {
+            # Only serialize arrays of simple types
+            $simple = $true
+            foreach ($item in $val) {
+                if ($null -ne $item -and $item.GetType() -notin @([string],[int],[long],[double],[bool])) {
+                    $simple = $false; break
+                }
+            }
+            if ($simple) { $vars[$_.Name] = $val }
+        }
+        elseif ($val -is [hashtable]) {
+            $vars[$_.Name] = $val
+        }
+    }
+
+    if ($vars.Count -eq 0) { return $null }
+
+    $jsonPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""rush_vars_$(New-Guid).json"")
+    $vars | ConvertTo-Json -Depth 4 -Compress | Set-Content -Path $jsonPath -Encoding UTF8
+    return $jsonPath
+}
+
+function __rush_var_preamble {
+    param([string]$JsonPath)
+    # Generate a PS preamble that reads the JSON vars file and creates local variables.
+    # Compatible with both PS 5.1 and PS 7.
+    if (-not $JsonPath) { return '' }
+    # The preamble is PS code that runs in the child process
+    return @""
+`$__rv = Get-Content '$JsonPath' -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+if (`$__rv) { `$__rv.PSObject.Properties | ForEach-Object { Set-Variable -Name `$_.Name -Value `$_.Value } }
+Remove-Item '$JsonPath' -Force -ErrorAction SilentlyContinue
+Remove-Variable __rv -ErrorAction SilentlyContinue
+
+""@
+}
+
 function __rush_win32 {
     param([string]$EncodedBody)
     $body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedBody))
 
-    # Inject current scope variables as a preamble
-    $preamble = ''
-    Get-Variable -Scope 1 -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -notin @('PSCommandPath','PSScriptRoot','MyInvocation','_','args','input',
-                         'null','true','false','PSBoundParameters','PSDefaultParameterValues',
-                         'ErrorActionPreference','WarningPreference','InformationPreference',
-                         'DebugPreference','VerbosePreference','ConfirmPreference','WhatIfPreference',
-                         'EncodedBody','body','preamble')
-    } | ForEach-Object {
-        $val = $_.Value
-        if ($null -ne $val -and $val -is [string]) {
-            $escaped = $val -replace ""'"", ""''""
-            $preamble += ""`$($_.Name) = '$escaped'`n""
-        }
-        elseif ($null -ne $val -and ($val -is [int] -or $val -is [long] -or $val -is [double])) {
-            $preamble += ""`$($_.Name) = $val`n""
-        }
-        elseif ($null -ne $val -and $val -is [bool]) {
-            $boolVal = if ($val) { '$true' } else { '$false' }
-            $preamble += ""`$($_.Name) = $boolVal`n""
-        }
-    }
-
+    $jsonPath = __rush_bridge_vars
+    $preamble = __rush_var_preamble $jsonPath
     $fullScript = $preamble + $body
+
     $ps32 = 'C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path $ps32)) {
         Write-Error 'win32: 32-bit PowerShell not found at SysWOW64 path'
+        if ($jsonPath) { Remove-Item $jsonPath -Force -ErrorAction SilentlyContinue }
         return
     }
 
     & $ps32 -NoProfile -NonInteractive -Command $fullScript 2>&1
 }
+
+function __rush_ps5 {
+    param([string]$EncodedBody)
+    $body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($EncodedBody))
+
+    $jsonPath = __rush_bridge_vars
+    $preamble = __rush_var_preamble $jsonPath
+    $fullScript = $preamble + $body
+
+    $ps51 = 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $ps51)) {
+        Write-Error 'ps5: PowerShell 5.1 not found'
+        if ($jsonPath) { Remove-Item $jsonPath -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    & $ps51 -NoProfile -NonInteractive -Command $fullScript 2>&1
+}
 ");
     }
     else
     {
-        // Non-Windows: no-op (win32 blocks are gated by $os check, but define
-        // the function anyway so TranspileFile output doesn't error)
+        // Non-Windows: no-op (win32/ps5 blocks are gated by $os check, but define
+        // the functions anyway so TranspileFile output doesn't error)
         ps2.AddScript(@"
 function __rush_win32 {
+    param([string]$EncodedBody)
+    # No-op on non-Windows platforms
+}
+function __rush_ps5 {
     param([string]$EncodedBody)
     # No-op on non-Windows platforms
 }
