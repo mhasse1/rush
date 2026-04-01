@@ -3,6 +3,7 @@ using System.Management.Automation;
 using System.Management.Automation.Runspaces;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
@@ -321,6 +322,14 @@ public class LlmMode
 
             if (string.IsNullOrWhiteSpace(raw)) continue;
 
+            // JSON envelope: structured command with optional cwd/timeout/env/transfer
+            if (raw.StartsWith('{'))
+            {
+                var result = HandleEnvelope(raw);
+                Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
+                continue;
+            }
+
             // JSON-quoted input: unwrap to get newlines. Plain text: use as-is.
             string input;
             if (raw.StartsWith('"') && raw.EndsWith('"'))
@@ -334,8 +343,8 @@ public class LlmMode
             }
 
             // Execute and emit result envelope
-            var result = ExecuteCommand(input);
-            Console.WriteLine(JsonSerializer.Serialize(result, JsonOpts));
+            var cmdResult = ExecuteCommand(input);
+            Console.WriteLine(JsonSerializer.Serialize(cmdResult, JsonOpts));
         }
     }
 
@@ -419,6 +428,366 @@ public class LlmMode
 
         // ── Shell command → translate and execute ─────────────────────
         return ExecuteShellCommand(input, cwd, sw);
+    }
+
+    // ── JSON Envelope Protocol ───────────────────────────────────────
+
+    /// <summary>
+    /// Handle a JSON envelope: {"cmd":"...", "cwd":"...", "timeout":N, "env":{...}}
+    /// or a transfer: {"transfer":"put|get|exec", ...}
+    /// </summary>
+    private LlmResult HandleEnvelope(string raw)
+    {
+        var cwd = GetCwd();
+        var sw = Stopwatch.StartNew();
+
+        JsonNode? envelope;
+        try
+        {
+            envelope = JsonNode.Parse(raw);
+        }
+        catch (Exception ex)
+        {
+            return new LlmResult
+            {
+                Status = "error", ExitCode = 1, Cwd = cwd,
+                Stderr = $"Invalid JSON envelope: {ex.Message}",
+                DurationMs = sw.ElapsedMilliseconds
+            };
+        }
+
+        if (envelope == null)
+            return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "Empty JSON envelope" };
+
+        // Transfer operations (put/get/exec)
+        var transfer = envelope["transfer"]?.GetValue<string>();
+        if (transfer != null)
+            return HandleTransfer(envelope, transfer, cwd, sw);
+
+        // Command execution with optional cwd/timeout/env
+        var cmd = envelope["cmd"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(cmd))
+            return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "Envelope missing required \"cmd\" field" };
+
+        // Apply optional cwd (must sync both .NET and PowerShell)
+        var reqCwd = envelope["cwd"]?.GetValue<string>();
+        if (reqCwd != null)
+        {
+            if (!Directory.Exists(reqCwd))
+                return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"Requested cwd does not exist: {reqCwd}" };
+            Directory.SetCurrentDirectory(reqCwd);
+            try
+            {
+                using var ps = PowerShell.Create();
+                ps.Runspace = _runspace;
+                ps.AddCommand("Set-Location").AddArgument(reqCwd);
+                ps.Invoke();
+            }
+            catch { /* best-effort */ }
+        }
+
+        // Apply optional env vars
+        var envNode = envelope["env"]?.AsObject();
+        if (envNode != null)
+        {
+            foreach (var kvp in envNode)
+                Environment.SetEnvironmentVariable(kvp.Key, kvp.Value?.GetValue<string>());
+        }
+
+        // Apply optional timeout
+        int? timeoutMs = null;
+        var timeoutSec = envelope["timeout"];
+        if (timeoutSec != null)
+            timeoutMs = timeoutSec.GetValue<int>() * 1000;
+
+        // Execute through the standard dispatch (builtins, Rush syntax, shell)
+        if (timeoutMs != null)
+        {
+            // With timeout: dispatch directly to Rush or shell execution
+            if (_scriptEngine.IsRushSyntax(cmd.Split('\n')[0].Trim()))
+                return ExecuteRushSyntax(cmd, GetCwd(), sw, timeoutMs);
+            return ExecuteShellCommand(cmd, GetCwd(), sw, timeoutMs);
+        }
+
+        return ExecuteCommand(cmd);
+    }
+
+    /// <summary>
+    /// Handle file transfer operations: put, get, exec.
+    /// </summary>
+    private LlmResult HandleTransfer(JsonNode envelope, string transfer, string cwd, Stopwatch sw)
+    {
+        switch (transfer)
+        {
+            case "get":
+            {
+                var path = envelope["path"]?.GetValue<string>();
+                if (string.IsNullOrEmpty(path))
+                    return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:get missing \"path\"" };
+                var result = LlmFileReader.ReadFile(path);
+                result.DurationMs = sw.ElapsedMilliseconds;
+                return result;
+            }
+
+            case "put":
+            {
+                var path = envelope["path"]?.GetValue<string>();
+                if (string.IsNullOrEmpty(path))
+                    return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:put missing \"path\"" };
+                var content = envelope["content"]?.GetValue<string>();
+                if (content == null)
+                    return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:put missing \"content\"" };
+
+                try
+                {
+                    byte[] bytes;
+                    try { bytes = Convert.FromBase64String(content); }
+                    catch { return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:put invalid base64 content" }; }
+
+                    var dir = Path.GetDirectoryName(path);
+                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                        return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"Directory does not exist: {dir}" };
+
+                    var append = envelope["append"]?.GetValue<bool>() ?? false;
+                    if (append)
+                    {
+                        using var fs = new FileStream(path, FileMode.Append);
+                        fs.Write(bytes, 0, bytes.Length);
+                    }
+                    else
+                    {
+                        System.IO.File.WriteAllBytes(path, bytes);
+                    }
+
+                    // Set permissions on Unix
+                    var mode = envelope["mode"]?.GetValue<string>();
+                    if (mode != null && !OperatingSystem.IsWindows())
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo("chmod", $"{mode} {path}")
+                            {
+                                UseShellExecute = false, RedirectStandardError = true, CreateNoWindow = true
+                            };
+                            using var proc = Process.Start(psi);
+                            proc?.WaitForExit(5000);
+                        }
+                        catch { /* chmod best-effort */ }
+                    }
+
+                    return new LlmResult
+                    {
+                        Status = "success", ExitCode = 0, Cwd = cwd,
+                        File = Path.GetFullPath(path),
+                        SizeBytes = bytes.Length,
+                        DurationMs = sw.ElapsedMilliseconds
+                    };
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"Permission denied: {path}", DurationMs = sw.ElapsedMilliseconds };
+                }
+                catch (IOException ex)
+                {
+                    return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"IO error writing {path}: {ex.Message}", DurationMs = sw.ElapsedMilliseconds };
+                }
+            }
+
+            case "exec":
+                return HandleTransferExec(envelope, cwd, sw);
+
+            default:
+                return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"Unknown transfer type: {transfer}" };
+        }
+    }
+
+    /// <summary>
+    /// Push a script to a temp file, execute it, return results, clean up.
+    /// </summary>
+    private LlmResult HandleTransferExec(JsonNode envelope, string cwd, Stopwatch sw)
+    {
+        var filename = envelope["filename"]?.GetValue<string>();
+        if (string.IsNullOrEmpty(filename))
+            return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:exec missing \"filename\"" };
+        var content = envelope["content"]?.GetValue<string>();
+        if (content == null)
+            return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:exec missing \"content\"" };
+
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(content); }
+        catch { return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = "transfer:exec invalid base64 content" }; }
+
+        // Write to temp file with correct extension
+        var ext = Path.GetExtension(filename);
+        var tempFile = Path.Combine(Path.GetTempPath(), $"rush_exec_{Guid.NewGuid():N}{ext}");
+        var cleanup = envelope["cleanup"]?.GetValue<bool>() ?? true;
+
+        try
+        {
+            System.IO.File.WriteAllBytes(tempFile, bytes);
+
+            // Determine shell from explicit field or extension
+            var shell = envelope["shell"]?.GetValue<string>()?.ToLowerInvariant();
+            if (shell == null)
+            {
+                shell = ext.ToLowerInvariant() switch
+                {
+                    ".ps1" => "powershell",
+                    ".rush" => "rush",
+                    ".sh" or ".bash" => "bash",
+                    ".py" => "python",
+                    ".rb" => "ruby",
+                    ".js" => "node",
+                    _ => "bash"
+                };
+            }
+
+            // Build args array
+            var argsNode = envelope["args"]?.AsArray();
+            var argsList = new List<string>();
+            if (argsNode != null)
+            {
+                foreach (var arg in argsNode)
+                {
+                    var val = arg?.GetValue<string>();
+                    if (val != null) argsList.Add(val);
+                }
+            }
+
+            // Build command
+            string exe;
+            string cmdArgs;
+            switch (shell)
+            {
+                case "powershell":
+                    exe = OperatingSystem.IsWindows() ? "powershell.exe" : "pwsh";
+                    cmdArgs = $"-NoProfile -ExecutionPolicy Bypass -File \"{tempFile}\"";
+                    if (argsList.Count > 0) cmdArgs += " " + string.Join(" ", argsList.Select(a => $"\"{a}\""));
+                    break;
+                case "rush":
+                    exe = "rush";
+                    cmdArgs = $"\"{tempFile}\"";
+                    if (argsList.Count > 0) cmdArgs += " " + string.Join(" ", argsList);
+                    break;
+                case "python":
+                    exe = "python3";
+                    cmdArgs = $"\"{tempFile}\"";
+                    if (argsList.Count > 0) cmdArgs += " " + string.Join(" ", argsList.Select(a => $"\"{a}\""));
+                    break;
+                default: // bash, node, ruby, etc.
+                    exe = shell;
+                    cmdArgs = $"\"{tempFile}\"";
+                    if (argsList.Count > 0) cmdArgs += " " + string.Join(" ", argsList.Select(a => $"\"{a}\""));
+                    break;
+            }
+
+            int? timeoutMs = null;
+            var timeoutSec = envelope["timeout"];
+            if (timeoutSec != null) timeoutMs = timeoutSec.GetValue<int>() * 1000;
+
+            var psi = new ProcessStartInfo(exe, cmdArgs)
+            {
+                WorkingDirectory = cwd,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+                return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"Failed to start: {exe}", DurationMs = sw.ElapsedMilliseconds };
+
+            string stdout, stderr;
+            if (timeoutMs.HasValue)
+            {
+                var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+                var stderrTask = proc.StandardError.ReadToEndAsync();
+                if (!proc.WaitForExit(timeoutMs.Value))
+                {
+                    try { proc.Kill(true); } catch { }
+                    return new LlmResult
+                    {
+                        Status = "error", ExitCode = 124, Cwd = cwd,
+                        Stdout = stdoutTask.IsCompleted ? stdoutTask.Result : null,
+                        Stderr = $"Command timed out after {timeoutMs.Value / 1000}s",
+                        DurationMs = sw.ElapsedMilliseconds
+                    };
+                }
+                stdout = stdoutTask.GetAwaiter().GetResult();
+                stderr = stderrTask.GetAwaiter().GetResult();
+            }
+            else
+            {
+                var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+                var stderrTask = proc.StandardError.ReadToEndAsync();
+                proc.WaitForExit();
+                stdout = stdoutTask.GetAwaiter().GetResult();
+                stderr = stderrTask.GetAwaiter().GetResult();
+            }
+
+            _lastExitCode = proc.ExitCode;
+            stderr = DeduplicateStderr(stderr);
+
+            // Apply output limit
+            var result = new LlmResult
+            {
+                Status = proc.ExitCode == 0 ? "success" : "error",
+                ExitCode = proc.ExitCode,
+                Stdout = string.IsNullOrEmpty(stdout) ? null : stdout.TrimEnd(),
+                Stderr = string.IsNullOrEmpty(stderr) ? null : stderr.TrimEnd(),
+                Cwd = GetCwd(),
+                DurationMs = sw.ElapsedMilliseconds
+            };
+
+            // Check output limit
+            const int OutputLimit = 4096;
+            if (result.Stdout is string stdoutStr && Encoding.UTF8.GetByteCount(stdoutStr) > OutputLimit)
+            {
+                _spool.Store(stdoutStr);
+                result.Status = "output_limit";
+                result.Stdout = null;
+                result.StdoutLines = _spool.TotalLines;
+                result.StdoutBytes = _spool.TotalBytes;
+                result.Preview = _spool.GetPreview(512);
+                result.PreviewBytes = Encoding.UTF8.GetByteCount(result.Preview ?? "");
+                result.Hint = $"Output spooled ({FormatBytes(_spool.TotalBytes)}, {_spool.TotalLines} lines). Use spool to retrieve.";
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return new LlmResult { Status = "error", ExitCode = 1, Cwd = cwd, Stderr = $"exec error: {ex.Message}", DurationMs = sw.ElapsedMilliseconds };
+        }
+        finally
+        {
+            if (cleanup)
+            {
+                try { System.IO.File.Delete(tempFile); } catch { }
+            }
+        }
+    }
+
+    // ── Stderr Deduplication ─────────────────────────────────────────
+
+    /// <summary>
+    /// Collapse repeated stderr lines to prevent error amplification.
+    /// e.g., 56 identical error messages become "message (repeated 56x)".
+    /// </summary>
+    private static string DeduplicateStderr(string stderr)
+    {
+        if (string.IsNullOrEmpty(stderr)) return stderr;
+
+        var lines = stderr.Split('\n');
+        if (lines.Length < 4) return stderr; // Not worth deduping tiny output
+
+        var distinct = lines.Distinct().Count();
+        if (distinct >= lines.Length * 0.5) return stderr; // Less than half are duplicates
+
+        var grouped = lines.GroupBy(l => l)
+            .Select(g => g.Count() > 1 ? $"{g.Key} (repeated {g.Count()}x)" : g.Key);
+        return string.Join("\n", grouped);
     }
 
     private LlmResult HandleTimeout(string input, string cwd, Stopwatch sw)
@@ -553,13 +922,9 @@ public class LlmMode
             }
 
             var stdout = stdoutTask.GetAwaiter().GetResult().TrimEnd('\n', '\r');
-            var stderr = stderrTask.GetAwaiter().GetResult().TrimEnd('\n', '\r');
+            var stderr = DeduplicateStderr(stderrTask.GetAwaiter().GetResult().TrimEnd('\n', '\r'));
             var exitCode = proc.ExitCode;
             _lastExitCode = exitCode;
-
-            // Sync CWD — if the command was cd-like, .NET dir doesn't change
-            // (Process.Start runs in a child process). This is fine — cd is
-            // translated by CommandTranslator and goes through PowerShell.
 
             // Check output limit (4KB)
             const int OutputLimit = 4096;
@@ -691,7 +1056,7 @@ public class LlmMode
 
             var stderr = "";
             if (ps.Streams.Error.Count > 0)
-                stderr = string.Join("\n", ps.Streams.Error.Select(e => e.ToString()));
+                stderr = DeduplicateStderr(string.Join("\n", ps.Streams.Error.Select(e => e.ToString())));
 
             // Get exit code from PowerShell
             int exitCode = 0;

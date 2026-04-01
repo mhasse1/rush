@@ -184,6 +184,176 @@ internal class SshLlmSession : IDisposable
         return Execute($"lcat {path}");
     }
 
+    // ── Envelope Protocol ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Execute a command using the JSON envelope protocol.
+    /// Supports optional cwd, timeout, and env vars.
+    /// Falls back to plain text if no optional params are set.
+    /// </summary>
+    internal LlmResult Execute(string command, string? cwd = null,
+        int? timeoutSeconds = null, Dictionary<string, string>? env = null)
+    {
+        // If no optional params, use the original plain text path
+        if (cwd == null && timeoutSeconds == null && env == null)
+            return Execute(command);
+
+        var envelope = new Dictionary<string, object> { ["cmd"] = command };
+        if (cwd != null) envelope["cwd"] = cwd;
+        if (timeoutSeconds != null) envelope["timeout"] = timeoutSeconds;
+        if (env != null) envelope["env"] = env;
+
+        return SendEnvelope(envelope);
+    }
+
+    /// <summary>
+    /// Write a file to the remote host via the JSON transfer protocol.
+    /// Content is base64-encoded and sent in-band (suitable for files under ~1MB).
+    /// For larger files, use PutFileViaScp().
+    /// </summary>
+    internal LlmResult PutFile(string remotePath, byte[] content, string? mode = null, bool append = false)
+    {
+        if (content.Length > 1_048_576)
+            return PutFileViaScp(remotePath, content, mode);
+
+        var envelope = new Dictionary<string, object>
+        {
+            ["transfer"] = "put",
+            ["path"] = remotePath,
+            ["content"] = Convert.ToBase64String(content)
+        };
+        if (mode != null) envelope["mode"] = mode;
+        if (append) envelope["append"] = true;
+
+        return SendEnvelope(envelope);
+    }
+
+    /// <summary>
+    /// Read a file from the remote host via the JSON transfer protocol.
+    /// Returns structured result with content (utf8 or base64), mime type, size.
+    /// </summary>
+    internal LlmResult GetFile(string remotePath)
+    {
+        var envelope = new Dictionary<string, object>
+        {
+            ["transfer"] = "get",
+            ["path"] = remotePath
+        };
+        return SendEnvelope(envelope);
+    }
+
+    /// <summary>
+    /// Push a script to the remote host, execute it, and return results.
+    /// Script content is base64-encoded and transferred via the JSON protocol.
+    /// The remote side writes it to a temp file, executes with the appropriate shell,
+    /// captures output, and cleans up.
+    /// </summary>
+    internal LlmResult ExecScript(string filename, byte[] content, string? shell = null,
+        string[]? args = null, int? timeoutSeconds = null, bool cleanup = true)
+    {
+        var envelope = new Dictionary<string, object>
+        {
+            ["transfer"] = "exec",
+            ["filename"] = filename,
+            ["content"] = Convert.ToBase64String(content)
+        };
+        if (shell != null) envelope["shell"] = shell;
+        if (args != null && args.Length > 0) envelope["args"] = args;
+        if (timeoutSeconds != null) envelope["timeout"] = timeoutSeconds;
+        if (!cleanup) envelope["cleanup"] = false;
+
+        return SendEnvelope(envelope);
+    }
+
+    /// <summary>
+    /// Send a JSON envelope to the remote Rush session and read the result.
+    /// </summary>
+    private LlmResult SendEnvelope(Dictionary<string, object> envelope)
+    {
+        var json = JsonSerializer.Serialize(envelope, JsonOpts);
+        lock (_lock)
+        {
+            if (!IsAlive)
+                throw new InvalidOperationException($"Session to {_host} is not alive");
+
+            try
+            {
+                _stdin!.WriteLine(json);
+            }
+            catch (Exception ex)
+            {
+                return new LlmResult
+                {
+                    Status = "error", ExitCode = 1,
+                    Stderr = $"Failed to send envelope to {_host}: {ex.Message}"
+                };
+            }
+
+            var result = ReadResultLine();
+            if (result == null)
+            {
+                return new LlmResult
+                {
+                    Status = "error", ExitCode = 1,
+                    Stderr = $"Lost connection to {_host}"
+                };
+            }
+
+            var ctx = ReadContextLine(ReadTimeoutMs);
+            if (ctx != null) _lastContext = ctx;
+
+            return result;
+        }
+    }
+
+    /// <summary>
+    /// Large file upload via SCP using the existing ControlMaster socket.
+    /// </summary>
+    private LlmResult PutFileViaScp(string remotePath, byte[] content, string? mode)
+    {
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllBytes(tempFile, content);
+
+            var psi = new ProcessStartInfo("scp")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            SshPool.Apply(psi);
+            psi.ArgumentList.Add(tempFile);
+            psi.ArgumentList.Add($"{_host}:{remotePath}");
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+                return new LlmResult { Status = "error", ExitCode = 1, Stderr = "Failed to start scp" };
+
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit(60_000);
+
+            if (proc.ExitCode != 0)
+                return new LlmResult { Status = "error", ExitCode = proc.ExitCode, Stderr = $"scp failed: {stderr}" };
+
+            // Set permissions if requested
+            if (mode != null)
+                Execute($"chmod {mode} {remotePath}");
+
+            return new LlmResult
+            {
+                Status = "success", ExitCode = 0,
+                File = remotePath,
+                SizeBytes = content.Length
+            };
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+        }
+    }
+
     /// <summary>
     /// Get the cached LlmContext from the last interaction.
     /// Zero latency — no SSH roundtrip needed.

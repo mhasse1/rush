@@ -113,8 +113,13 @@ public class McpSshMode
             ["instructions"] = "Rush SSH gateway. Execute commands on remote hosts via SSH. " +
                 "All tools require a 'host' parameter (hostname or SSH alias). " +
                 "If Rush is installed on the remote host, commands run in a persistent session " +
-                "(variables, cwd, and environment survive across calls). Falls back to stateless " +
-                "raw shell for hosts without Rush. Multiple hosts can be targeted in parallel. " +
+                "(variables, cwd, and environment survive across calls) using a JSON envelope protocol " +
+                "that preserves shell metacharacters ($_, semicolons, quotes, etc.). " +
+                "Falls back to stateless raw shell for hosts without Rush. " +
+                "Use rush_exec_script for complex multi-line scripts — it pushes the script to a temp file " +
+                "and executes it, avoiding all escaping issues. " +
+                "Use rush_write_file to upload files to remote hosts. " +
+                "Multiple hosts can be targeted in parallel. " +
                 McpResources.Instructions
         };
 
@@ -131,7 +136,8 @@ public class McpSshMode
                 "rush_execute",
                 "Execute a command on a remote host via SSH. If Rush is installed on the remote, " +
                 "commands run in a persistent session (variables, cwd, env persist across calls). " +
-                "Falls back to stateless raw shell if Rush is not available.",
+                "Falls back to stateless raw shell if Rush is not available. " +
+                "Uses a JSON envelope protocol that preserves $_ and other metacharacters.",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -146,6 +152,22 @@ public class McpSshMode
                         {
                             ["type"] = "string",
                             ["description"] = "The command to execute on the remote host"
+                        },
+                        ["cwd"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Working directory for this command (optional)"
+                        },
+                        ["timeout"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["description"] = "Timeout in seconds (optional)"
+                        },
+                        ["env"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["description"] = "Environment variables to set before execution (optional)",
+                            ["additionalProperties"] = new JsonObject { ["type"] = "string" }
                         }
                     },
                     ["required"] = new JsonArray { "host", "command" }
@@ -190,6 +212,95 @@ public class McpSshMode
                         }
                     },
                     ["required"] = new JsonArray { "host" }
+                }),
+
+            McpJsonRpc.MakeTool(
+                "rush_write_file",
+                "Write content to a file on a remote host via SSH. Content is sent via JSON envelope " +
+                "protocol (no shell escaping issues). Requires Rush on the remote host.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["host"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "SSH host (hostname, IP, or SSH config alias)"
+                        },
+                        ["path"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Remote file path to write"
+                        },
+                        ["content"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "File content (text). Will be base64-encoded for transport."
+                        },
+                        ["mode"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Unix file permissions, e.g. \"0644\" (optional)"
+                        },
+                        ["append"] = new JsonObject
+                        {
+                            ["type"] = "boolean",
+                            ["description"] = "Append to file instead of overwriting (default: false)"
+                        }
+                    },
+                    ["required"] = new JsonArray { "host", "path", "content" }
+                }),
+
+            McpJsonRpc.MakeTool(
+                "rush_exec_script",
+                "Push a script to a remote host, execute it, and return results — all in one call. " +
+                "The script is transferred via JSON (no shell escaping issues) and written to a temp file. " +
+                "Shell is auto-detected from filename extension (.ps1→PowerShell, .sh→bash, .py→python, .rush→rush). " +
+                "Requires Rush on the remote host. For hosts without Rush, falls back to SSH stdin piping.",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["host"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "SSH host (hostname, IP, or SSH config alias)"
+                        },
+                        ["filename"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Script filename with extension (e.g. 'audit.ps1', 'setup.sh')"
+                        },
+                        ["content"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Script content (text). Will be base64-encoded for transport."
+                        },
+                        ["shell"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["description"] = "Override shell: powershell, bash, rush, python, node, ruby (optional, inferred from extension)"
+                        },
+                        ["args"] = new JsonObject
+                        {
+                            ["type"] = "array",
+                            ["items"] = new JsonObject { ["type"] = "string" },
+                            ["description"] = "Command-line arguments to pass to the script (optional)"
+                        },
+                        ["timeout"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["description"] = "Timeout in seconds (optional)"
+                        },
+                        ["cleanup"] = new JsonObject
+                        {
+                            ["type"] = "boolean",
+                            ["description"] = "Delete temp file after execution (default: true)"
+                        }
+                    },
+                    ["required"] = new JsonArray { "host", "filename", "content" }
                 })
         };
 
@@ -218,19 +329,25 @@ public class McpSshMode
                 if (string.IsNullOrEmpty(host)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: host"); return; }
                 if (string.IsNullOrEmpty(command)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: command"); return; }
 
+                // Optional envelope parameters
+                var cwd = arguments?["cwd"]?.GetValue<string>();
+                int? timeout = arguments?["timeout"] != null ? arguments["timeout"]!.GetValue<int>() : null;
+                Dictionary<string, string>? env = null;
+                var envNode = arguments?["env"]?.AsObject();
+                if (envNode != null)
+                {
+                    env = new Dictionary<string, string>();
+                    foreach (var kvp in envNode)
+                        env[kvp.Key] = kvp.Value?.GetValue<string>() ?? "";
+                }
+
                 var session = GetOrCreateSession(host);
                 if (session != null)
                 {
                     try
                     {
-                        var result = session.Execute(command);
-                        var resultJson = JsonSerializer.Serialize(result, JsonOpts);
-                        var resultObj = JsonNode.Parse(resultJson)!.AsObject();
-                        resultObj["host"] = host;
-                        resultObj["shell"] = "rush";
-
-                        var isError = result.Status != "success" && result.Status != "output_limit";
-                        WriteToolResult(id, resultObj.ToJsonString(), isError);
+                        var result = session.Execute(command, cwd, timeout, env);
+                        EmitToolResult(id, host, "rush", result);
                     }
                     catch (Exception ex)
                     {
@@ -257,13 +374,8 @@ public class McpSshMode
                 {
                     try
                     {
-                        var result = session.ReadFile(path);
-                        var resultJson = JsonSerializer.Serialize(result, JsonOpts);
-                        var resultObj = JsonNode.Parse(resultJson)!.AsObject();
-                        resultObj["host"] = host;
-                        resultObj["shell"] = "rush";
-
-                        WriteToolResult(id, resultObj.ToJsonString(), result.Status != "success");
+                        var result = session.GetFile(path);
+                        EmitToolResult(id, host, "rush", result);
                     }
                     catch (Exception ex)
                     {
@@ -311,6 +423,80 @@ public class McpSshMode
 
                 // Fall back to raw shell context gathering
                 ExecuteRawContext(id, host);
+                break;
+            }
+            case "rush_write_file":
+            {
+                var host = arguments?["host"]?.GetValue<string>();
+                var path = arguments?["path"]?.GetValue<string>();
+                var content = arguments?["content"]?.GetValue<string>();
+                if (string.IsNullOrEmpty(host)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: host"); return; }
+                if (string.IsNullOrEmpty(path)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: path"); return; }
+                if (content == null) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: content"); return; }
+
+                var mode = arguments?["mode"]?.GetValue<string>();
+                var append = arguments?["append"]?.GetValue<bool>() ?? false;
+                var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+
+                var session = GetOrCreateSession(host);
+                if (session != null)
+                {
+                    try
+                    {
+                        var result = session.PutFile(path, bytes, mode, append);
+                        EmitToolResult(id, host, "rush", result);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[rush-ssh] Session error on {host}: {ex.Message}");
+                        RemoveSession(host);
+                        ExecuteRawWriteFile(id, host, path, content, append);
+                    }
+                }
+                else
+                {
+                    ExecuteRawWriteFile(id, host, path, content, append);
+                }
+                break;
+            }
+            case "rush_exec_script":
+            {
+                var host = arguments?["host"]?.GetValue<string>();
+                var filename = arguments?["filename"]?.GetValue<string>();
+                var content = arguments?["content"]?.GetValue<string>();
+                if (string.IsNullOrEmpty(host)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: host"); return; }
+                if (string.IsNullOrEmpty(filename)) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: filename"); return; }
+                if (content == null) { McpJsonRpc.WriteError(id, -32602, "Missing required parameter: content"); return; }
+
+                var shell = arguments?["shell"]?.GetValue<string>();
+                var timeout = arguments?["timeout"] != null ? (int?)arguments["timeout"]!.GetValue<int>() : null;
+                var cleanup = arguments?["cleanup"]?.GetValue<bool>() ?? true;
+                string[]? args = null;
+                var argsNode = arguments?["args"]?.AsArray();
+                if (argsNode != null)
+                    args = argsNode.Select(a => a?.GetValue<string>() ?? "").ToArray();
+
+                var bytes = System.Text.Encoding.UTF8.GetBytes(content);
+
+                var session = GetOrCreateSession(host);
+                if (session != null)
+                {
+                    try
+                    {
+                        var result = session.ExecScript(filename, bytes, shell, args, timeout, cleanup);
+                        EmitToolResult(id, host, "rush", result);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[rush-ssh] Session error on {host}: {ex.Message}");
+                        RemoveSession(host);
+                        ExecuteRawExecScript(id, host, filename, content, shell, args);
+                    }
+                }
+                else
+                {
+                    ExecuteRawExecScript(id, host, filename, content, shell, args);
+                }
                 break;
             }
             default:
@@ -417,6 +603,19 @@ public class McpSshMode
         }
     }
 
+    // ── Tool result helper ─────────────────────────────────────────────
+
+    private void EmitToolResult(JsonNode id, string host, string shell, LlmResult result)
+    {
+        var resultJson = JsonSerializer.Serialize(result, JsonOpts);
+        var resultObj = JsonNode.Parse(resultJson)!.AsObject();
+        resultObj["host"] = host;
+        resultObj["shell"] = shell;
+
+        var isError = result.Status != "success" && result.Status != "output_limit";
+        WriteToolResult(id, resultObj.ToJsonString(), isError);
+    }
+
     // ── Raw shell fallbacks ─────────────────────────────────────────────
 
     private void ExecuteRawSsh(JsonNode id, string host, string command)
@@ -502,6 +701,168 @@ public class McpSshMode
         }
 
         WriteToolResult(id, JsonSerializer.Serialize(resultObj, JsonOpts), exitCode != 0);
+    }
+
+    private void ExecuteRawWriteFile(JsonNode id, string host, string path, string content, bool append)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            // Pipe content via stdin to avoid shell escaping issues
+            var op = append ? ">>" : ">";
+            var psi = new ProcessStartInfo("ssh")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveInterval=15");
+            psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ServerAliveCountMax=3");
+            psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+            SshPool.Apply(psi);
+            psi.ArgumentList.Add(host);
+            psi.ArgumentList.Add($"cat {op} {ShellEscape(path)}");
+
+            using var proc = Process.Start(psi);
+            if (proc == null)
+            {
+                WriteToolResult(id, JsonSerializer.Serialize(new JsonObject
+                {
+                    ["status"] = "error", ["host"] = host, ["shell"] = "raw",
+                    ["stderr"] = "Failed to start ssh"
+                }, JsonOpts), true);
+                return;
+            }
+            SshPool.Track(host);
+
+            proc.StandardInput.Write(content);
+            proc.StandardInput.Close();
+
+            var stderr = proc.StandardError.ReadToEnd().TrimEnd('\n', '\r');
+            proc.WaitForExit(30_000);
+
+            var resultObj = new JsonObject
+            {
+                ["status"] = proc.ExitCode == 0 ? "success" : "error",
+                ["exit_code"] = proc.ExitCode,
+                ["host"] = host,
+                ["shell"] = "raw",
+                ["file"] = path,
+                ["duration_ms"] = sw.ElapsedMilliseconds
+            };
+            if (!string.IsNullOrEmpty(stderr)) resultObj["stderr"] = stderr;
+
+            WriteToolResult(id, JsonSerializer.Serialize(resultObj, JsonOpts), proc.ExitCode != 0);
+        }
+        catch (Exception ex)
+        {
+            WriteToolResult(id, JsonSerializer.Serialize(new JsonObject
+            {
+                ["status"] = "error", ["host"] = host, ["shell"] = "raw",
+                ["stderr"] = $"SSH error: {ex.Message}", ["duration_ms"] = sw.ElapsedMilliseconds
+            }, JsonOpts), true);
+        }
+    }
+
+    private void ExecuteRawExecScript(JsonNode id, string host, string filename, string content,
+        string? shell, string[]? args)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var ext = Path.GetExtension(filename);
+            var remoteTmp = $"/tmp/rush_exec_{Guid.NewGuid():N}{ext}";
+
+            // Step 1: Upload script via stdin
+            var uploadPsi = new ProcessStartInfo("ssh")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            uploadPsi.ArgumentList.Add("-o"); uploadPsi.ArgumentList.Add("BatchMode=yes");
+            SshPool.Apply(uploadPsi);
+            uploadPsi.ArgumentList.Add(host);
+            uploadPsi.ArgumentList.Add($"cat > {ShellEscape(remoteTmp)}");
+
+            using (var uploadProc = Process.Start(uploadPsi))
+            {
+                if (uploadProc == null)
+                {
+                    WriteToolResult(id, JsonSerializer.Serialize(new JsonObject
+                    {
+                        ["status"] = "error", ["host"] = host, ["shell"] = "raw",
+                        ["stderr"] = "Failed to start ssh for upload"
+                    }, JsonOpts), true);
+                    return;
+                }
+                SshPool.Track(host);
+                uploadProc.StandardInput.Write(content);
+                uploadProc.StandardInput.Close();
+                uploadProc.WaitForExit(30_000);
+                if (uploadProc.ExitCode != 0)
+                {
+                    var uploadErr = uploadProc.StandardError.ReadToEnd().TrimEnd();
+                    WriteToolResult(id, JsonSerializer.Serialize(new JsonObject
+                    {
+                        ["status"] = "error", ["host"] = host, ["shell"] = "raw",
+                        ["stderr"] = $"Upload failed: {uploadErr}"
+                    }, JsonOpts), true);
+                    return;
+                }
+            }
+
+            // Step 2: Execute + cleanup
+            var detectedShell = shell ?? ext.ToLowerInvariant() switch
+            {
+                ".ps1" => "powershell",
+                ".rush" => "rush",
+                ".sh" or ".bash" => "bash",
+                ".py" => "python",
+                _ => "bash"
+            };
+
+            string execCmd;
+            var argsStr = args != null && args.Length > 0
+                ? " " + string.Join(" ", args.Select(a => ShellEscape(a)))
+                : "";
+
+            switch (detectedShell)
+            {
+                case "powershell":
+                    execCmd = $"powershell -NoProfile -ExecutionPolicy Bypass -File {ShellEscape(remoteTmp)}{argsStr}; rm -f {ShellEscape(remoteTmp)}";
+                    break;
+                default:
+                    execCmd = $"{detectedShell} {ShellEscape(remoteTmp)}{argsStr}; rm -f {ShellEscape(remoteTmp)}";
+                    break;
+            }
+
+            var (stdout, stderr, exitCode, durationMs) = RunSsh(host, execCmd);
+            var resultObj = new JsonObject
+            {
+                ["status"] = exitCode == 0 ? "success" : "error",
+                ["exit_code"] = exitCode,
+                ["host"] = host,
+                ["shell"] = "raw",
+                ["duration_ms"] = sw.ElapsedMilliseconds
+            };
+            if (!string.IsNullOrEmpty(stdout)) resultObj["stdout"] = stdout;
+            if (!string.IsNullOrEmpty(stderr)) resultObj["stderr"] = stderr;
+
+            WriteToolResult(id, JsonSerializer.Serialize(resultObj, JsonOpts), exitCode != 0);
+        }
+        catch (Exception ex)
+        {
+            WriteToolResult(id, JsonSerializer.Serialize(new JsonObject
+            {
+                ["status"] = "error", ["host"] = host, ["shell"] = "raw",
+                ["stderr"] = $"SSH error: {ex.Message}", ["duration_ms"] = sw.ElapsedMilliseconds
+            }, JsonOpts), true);
+        }
     }
 
     /// <summary>
