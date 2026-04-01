@@ -235,9 +235,10 @@ else if (config.ShowTips)
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.Write("  Note: ");
         Console.ResetColor();
-        Console.WriteLine("Contrast-aware theming is disabled. Colors may be hard to read.");
+        Console.WriteLine("Contrast-aware theming is disabled.");
         Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("        Set your terminal background:  set --save bg \"#282828\"");
+        Console.WriteLine("        Enable: set --save bg \"#282828\"");
+        Console.WriteLine("        See: help config (or set --help)");
         Console.ResetColor();
     }
     else
