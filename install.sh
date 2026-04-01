@@ -84,7 +84,7 @@ if [[ "${1:-}" == "--full" ]]; then
         echo "  CI passed. Downloading artifacts..."
 
         # Download native binaries built on actual target platforms
-        rm -f "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush-linux-x64" "$STAGING_DIR/rush-osx-arm64"
+        rm -f "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush-linux-x64" "$STAGING_DIR/rush-osx-arm64"
 
         gh run download "$RUN_ID" -R mhasse1/rush -n rush-win-x64 -D "$STAGING_DIR" 2>/dev/null && \
             mv "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" && \
