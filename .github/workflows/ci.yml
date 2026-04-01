@@ -41,7 +41,7 @@ jobs:
 
       - name: Publish single-file binary
         if: success()
-        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:PublishSingleFile=true
+        run: dotnet publish -c Release -r ${{ matrix.rid }} -p:PublishSingleFile=true -p:SkipCleanCheck=true
 
       - name: Upload binary
         if: success()
