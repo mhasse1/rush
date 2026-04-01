@@ -235,10 +235,9 @@ else if (config.ShowTips)
         Console.ForegroundColor = ConsoleColor.Yellow;
         Console.Write("  Note: ");
         Console.ResetColor();
-        Console.WriteLine("Contrast-aware theming is disabled.");
+        Console.WriteLine("Contrast-aware theming disabled. Enable: set --save bg \"#282828\"");
         Console.ForegroundColor = ConsoleColor.DarkGray;
-        Console.WriteLine("        Enable: set --save bg \"#282828\"");
-        Console.WriteLine("        See: help config (or set --help)");
+        Console.WriteLine("  See help config or set --help for details.");
         Console.ResetColor();
     }
     else
