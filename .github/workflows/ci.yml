@@ -16,6 +16,9 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             artifact: rush
+          - os: ubuntu-latest
+            rid: linux-arm64
+            artifact: rush
           - os: macos-latest
             rid: osx-arm64
             artifact: rush

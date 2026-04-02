@@ -101,6 +101,11 @@ if [[ "${1:-}" == "--full" ]]; then
             echo "  → $STAGING_DIR/rush-linux-x64 (linux-x64, CI build)" || \
             echo "  ! Failed to download linux-x64 artifact"
 
+        gh run download "$RUN_ID" -R mhasse1/rush -n rush-linux-arm64 -D "$STAGING_DIR" 2>/dev/null && \
+            mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-linux-arm64" && \
+            echo "  → $STAGING_DIR/rush-linux-arm64 (linux-arm64, CI build)" || \
+            echo "  ! Failed to download linux-arm64 artifact"
+
         gh run download "$RUN_ID" -R mhasse1/rush -n rush-osx-arm64 -D "$STAGING_DIR" 2>/dev/null && \
             mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-osx-arm64" 2>/dev/null && \
             echo "  → $STAGING_DIR/rush-osx-arm64 (osx-arm64, CI build)" || \
