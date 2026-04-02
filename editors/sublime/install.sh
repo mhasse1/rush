@@ -18,6 +18,7 @@ if $LINK; then
     ln -sf "$SCRIPT_DIR/Rush.sublime-syntax" "$TARGET/Rush.sublime-syntax"
     echo "Rush syntax linked → $TARGET/"
 else
+    rm -f "$TARGET/Rush.sublime-syntax"
     cp "$SCRIPT_DIR/Rush.sublime-syntax" "$TARGET/Rush.sublime-syntax"
     echo "Rush syntax copied → $TARGET/"
 fi

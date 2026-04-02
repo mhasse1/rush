@@ -12,6 +12,7 @@ if $LINK; then
     ln -sf "$SCRIPT_DIR/rush-mode.el" "$TARGET/rush-mode.el"
     echo "Rush mode linked → $TARGET/rush-mode.el"
 else
+    rm -f "$TARGET/rush-mode.el"
     cp "$SCRIPT_DIR/rush-mode.el" "$TARGET/rush-mode.el"
     echo "Rush mode copied → $TARGET/rush-mode.el"
 fi

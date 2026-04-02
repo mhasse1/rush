@@ -14,6 +14,8 @@ if $LINK; then
     ln -sf "$SCRIPT_DIR" "$TARGET"
     echo "Rush extension linked → $TARGET"
 else
+    # Remove old symlink install if present (avoids cp same-file error)
+    [[ -L "$TARGET" ]] && rm -f "$TARGET"
     mkdir -p "$TARGET/syntaxes"
     cp "$SCRIPT_DIR/package.json"                  "$TARGET/"
     cp "$SCRIPT_DIR/language-configuration.json"    "$TARGET/"

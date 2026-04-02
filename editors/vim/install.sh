@@ -15,6 +15,7 @@ install_to() {
         ln -sf "$SCRIPT_DIR/ftdetect/rush.vim" "$base/ftdetect/rush.vim"
         ln -sf "$SCRIPT_DIR/syntax/rush.vim"   "$base/syntax/rush.vim"
     else
+        rm -f "$base/ftdetect/rush.vim" "$base/syntax/rush.vim"
         cp "$SCRIPT_DIR/ftdetect/rush.vim" "$base/ftdetect/rush.vim"
         cp "$SCRIPT_DIR/syntax/rush.vim"   "$base/syntax/rush.vim"
     fi
