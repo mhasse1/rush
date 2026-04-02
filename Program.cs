@@ -1494,6 +1494,30 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             continue;
         }
 
+        // ── mark: output demarcation line ───────────────────────────
+        if (segment.Equals("mark", StringComparison.OrdinalIgnoreCase) ||
+            segment.StartsWith("mark ", StringComparison.OrdinalIgnoreCase) ||
+            segment.Equals("---", StringComparison.Ordinal) ||
+            segment.StartsWith("---") && segment.All(c => c == '-'))
+        {
+            var label = segment.StartsWith("mark ", StringComparison.OrdinalIgnoreCase)
+                ? segment[5..].Trim().Trim('"', '\'') : null;
+            var width = 65;
+            try { width = Math.Max(40, Console.WindowWidth - 2); } catch { }
+            var line = new string('═', width);
+            if (!string.IsNullOrEmpty(label))
+            {
+                var prefix = "═══ ";
+                var suffix = " " + new string('═', Math.Max(3, width - prefix.Length - label.Length - 1));
+                line = prefix + label + suffix;
+            }
+            Console.ForegroundColor = Theme.Current.Muted;
+            Console.WriteLine(line);
+            Console.ResetColor();
+            lastSegmentFailed = false;
+            continue;
+        }
+
         // ── o: cross-platform open (file, URL, directory) ───────────
         if (segment.Equals("o", StringComparison.OrdinalIgnoreCase) ||
             segment.StartsWith("o ", StringComparison.OrdinalIgnoreCase))
@@ -6249,7 +6273,7 @@ static class RushConstants
         "exit", "quit", "help", "history", "alias", "unalias", "reload", "init",
         "clear", "cd", "export", "unset", "source", "jobs", "fg", "bg", "wait",
         "sync", "pushd", "popd", "dirs", "printf", "read", "exec", "trap",
-        "path", "ai", "sql", "set", "which", "type", "setbg", "o"
+        "path", "ai", "sql", "set", "which", "type", "setbg", "o", "mark"
     };
 }
 
