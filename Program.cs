@@ -160,9 +160,12 @@ if (llmMode)
     // Set Rush built-in variables ($os, $hostname, $rush_version, $is_login_shell)
     InjectRushEnvVars(rs, Version, isLoginShell);
 
-    // Windows: shim uutils coreutils if installed
+    // Windows: shim uutils if installed
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
         ShimCoreutilsIfNeeded(rs, quiet: true);
+        ShimDiffutilsIfNeeded(rs, quiet: true);
+    }
 
     // Run startup scripts (init.rush, secrets.rush) — user's PATH, exports, aliases
     RunStartupScripts(rs, se);
@@ -317,6 +320,7 @@ var state = new ShellState
 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 {
     ShimCoreutilsIfNeeded(runspace);
+    ShimDiffutilsIfNeeded(runspace);
     DetectWindowsCoreutils(runspace, config);
 }
 
@@ -1419,9 +1423,12 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 // Retheme — clear tracking so .rushbg is re-read
                 Theme.ActiveRushBgFile = null;
                 ApplyTheme(state.Config, Environment.CurrentDirectory);
-                // Re-check coreutils shimming (user may have installed it since startup)
+                // Re-check uutils shimming (user may have installed since startup)
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
                     ShimCoreutilsIfNeeded(state.Runspace, quiet: true);
+                    ShimDiffutilsIfNeeded(state.Runspace, quiet: true);
+                }
                 Console.ForegroundColor = Theme.Current.Muted;
                 Console.WriteLine("  config reloaded");
                 Console.ResetColor();
@@ -2909,6 +2916,73 @@ static void ShimCoreutilsIfNeeded(Runspace runspace, bool quiet = false)
 }
 
 /// <summary>
+/// On Windows, detect uutils diffutils (diff, cmp) and shim as PS functions.
+/// Same pattern as ShimCoreutilsIfNeeded but for diffutils.exe multi-call binary.
+/// </summary>
+static void ShimDiffutilsIfNeeded(Runspace runspace, bool quiet = false)
+{
+    try
+    {
+        var psi = new ProcessStartInfo("diffutils.exe")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var proc = Process.Start(psi);
+        if (proc == null) return;
+
+        // diffutils prints usage to stderr when called with no args
+        var stderr = proc.StandardError.ReadToEnd();
+        var stdout = proc.StandardOutput.ReadToEnd();
+        proc.WaitForExit(3000);
+
+        // Parse the command list from the help output
+        // Format: "Currently defined functions:\n\n    cmp, diff\n"
+        var output = stdout + stderr;
+        var commands = new List<string>();
+        var funcLine = output.Split('\n')
+            .Select(l => l.Trim())
+            .FirstOrDefault(l => l.Contains(',') && !l.Contains("Usage") && !l.Contains("Expected"));
+
+        if (funcLine != null)
+        {
+            commands = funcLine.Split(',')
+                .Select(c => c.Trim())
+                .Where(c => c.Length > 0 && !c.Contains(' '))
+                .ToList();
+        }
+
+        if (commands.Count == 0) return;
+
+        using var ps = PowerShell.Create();
+        ps.Runspace = runspace;
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var cmd in commands)
+        {
+            sb.AppendLine($"if (Test-Path \"Alias:{cmd}\") {{ Remove-Item \"Alias:{cmd}\" -Force }}");
+            sb.AppendLine($"Set-Item -Path \"Function:\\{cmd}\" -Value ([scriptblock]::Create(\"diffutils.exe {cmd} `$args\")).GetNewClosure()");
+        }
+
+        ps.AddScript(sb.ToString());
+        ps.Invoke();
+
+        if (!quiet)
+        {
+            Console.ForegroundColor = ConsoleColor.DarkGray;
+            Console.WriteLine($"  Using uutils diffutils ({string.Join(", ", commands)}).");
+            Console.ResetColor();
+        }
+    }
+    catch
+    {
+        // diffutils.exe not found — nothing to shim
+    }
+}
+
+/// <summary>
 /// On Windows, detect available coreutils and either add Git for Windows
 /// to PATH or show a one-time tip. Called after ShimCoreutilsIfNeeded.
 /// </summary>
@@ -2956,9 +3030,11 @@ static void DetectWindowsCoreutils(Runspace runspace, RushConfig config)
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.Write("  Tip: ");
             Console.ResetColor();
-            Console.WriteLine("Rush works best with GNU-compatible tools (ls, grep, find).");
+            Console.WriteLine("Rush works best with Unix-compatible tools.");
             Console.ForegroundColor = ConsoleColor.DarkGray;
-            Console.WriteLine("        Install uutils:  winget install uutils.coreutils");
+            Console.WriteLine("        winget install uutils.coreutils   # ls, grep, find, etc.");
+            Console.WriteLine("        winget install uutils.diffutils   # diff, cmp");
+            Console.WriteLine("        winget install Neovim.Neovim      # vi/vim editor");
             Console.ResetColor();
             config.CoreutilsTipShown = true;
             config.Save();
@@ -5728,7 +5804,10 @@ static void RunNonInteractive(string command)
     rs.Open();
     InjectRushEnvVars(rs, RushVersion.Full, false);
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
         ShimCoreutilsIfNeeded(rs, quiet: true);
+        ShimDiffutilsIfNeeded(rs, quiet: true);
+    }
     var objConfig = ObjectifyConfig.Load();
     var tr = new CommandTranslator(objConfig);
     var scriptEngine = new ScriptEngine(tr);
