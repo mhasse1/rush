@@ -12,6 +12,8 @@ publish/
 .env
 .env.*
 *.log
+*.trx
+TestResults/
 tmp/
 dist/
 .last-build-sha
