@@ -10,6 +10,9 @@
     <SelfContained>true</SelfContained>
     <!-- PublishSingleFile set per publish command, not globally. -->
     <PublishTrimmed>false</PublishTrimmed>
+    <!-- Required for Linux single-file: PS SDK resolves PSHOME via assembly location,
+         which is empty for single-file. This embeds all content for self-extraction. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
     <RushMajorMinor>0.9</RushMajorMinor>
