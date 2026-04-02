@@ -1664,8 +1664,15 @@ path dedupe --save       # remove and persist
 | Command | Description |
 |---------|-------------|
 | `alias` | List all aliases |
-| `alias name='cmd'` | Define alias (saved to config) |
+| `alias name='cmd'` | Define alias (session only) |
+| `alias --save name='cmd'` | Define and persist to config.json |
 | `unalias name` | Remove alias |
+| `unalias --save name` | Remove from config.json |
+
+**Windows paths with spaces:** wrap the exe path in inner double quotes:
+```
+alias --save vi='"C:/Program Files/Neovim/bin/nvim.exe"'
+```
 
 ### History
 

@@ -590,12 +590,14 @@ alias:
     - "alias g='git'"
     - "alias dc='docker compose'"
     - "alias --save k='kubectl'"
+    - "alias --save vi='\"C:/Program Files/Neovim/bin/nvim.exe\"'  # Windows: spaces in path"
 
   rules:
     - "Session-only aliases register in the command translator immediately"
     - "Saved aliases persist in config.json and survive restarts"
     - "Aliases expand before command execution — they work with pipes and flags"
     - "Don't put alias commands in init.rush — they belong in config.json via --save"
+    - "Windows paths with spaces: wrap the path in inner double quotes inside outer single quotes"
 
 path:
   summary: "PATH management — add, remove, check, dedupe, edit"
