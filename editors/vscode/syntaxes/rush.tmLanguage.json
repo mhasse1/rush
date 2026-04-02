@@ -197,7 +197,7 @@
       "patterns": [
         {
           "name": "support.class.rush",
-          "match": "\\b(?:File|Dir)\\b"
+          "match": "\\b(?:File|Dir|Time)\\b"
         }
       ]
     },
@@ -219,11 +219,11 @@
         },
         {
           "name": "keyword.control.loop.rush",
-          "match": "\\b(?:for|in|while|until|do|next|continue|break)\\b"
+          "match": "\\b(?:for|in|while|until|loop|do|next|continue|break)\\b"
         },
         {
           "name": "keyword.control.flow.rush",
-          "match": "\\b(?:return|begin)\\b"
+          "match": "\\b(?:return|begin|raise)\\b"
         },
         {
           "name": "keyword.control.exception.rush",
@@ -236,6 +236,14 @@
         {
           "name": "keyword.other.function-definition.rush",
           "match": "\\bdef\\b"
+        },
+        {
+          "name": "keyword.other.class.rush",
+          "match": "\\b(?:class|attr|self|super|enum)\\b"
+        },
+        {
+          "name": "keyword.control.platform.rush",
+          "match": "\\b(?:macos|linux|win64|win32|ps|ps5|isssh)\\b"
         },
         {
           "name": "keyword.operator.logical.rush",

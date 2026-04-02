@@ -1,7 +1,7 @@
 " Vim syntax file
 " Language:    Rush (shell scripting language transpiling to PowerShell 7)
 " Maintainer:  Rush Contributors
-" Last Change: 2026-03-01
+" Last Change: 2026-04-02
 " URL:         https://github.com/rush-lang/rush
 
 if exists("b:current_syntax")
@@ -24,12 +24,14 @@ syn keyword rushTodo          TODO FIXME XXX HACK NOTE BUG OPTIMIZE REVIEW conta
 " Keywords
 " --------------------------------------------------------------------------
 syn keyword rushConditional   if elsif else unless match
-syn keyword rushRepeat        for while until
+syn keyword rushRepeat        for while until loop
 syn keyword rushKeyword       end def return do begin
 syn keyword rushKeyword       case when in
 syn keyword rushKeyword       next continue break
-syn keyword rushException     try rescue ensure
+syn keyword rushKeyword       class attr self super enum
+syn keyword rushException     try rescue ensure raise
 syn keyword rushOperatorWord  and or not
+syn keyword rushPlatform      macos linux win64 win32 ps ps5 isssh
 
 " --------------------------------------------------------------------------
 " Constants
@@ -45,7 +47,7 @@ syn keyword rushBuiltin       puts print warn die ask sleep exit ping
 " --------------------------------------------------------------------------
 " Stdlib classes
 " --------------------------------------------------------------------------
-syn keyword rushType          File Dir
+syn keyword rushType          File Dir Time
 
 " --------------------------------------------------------------------------
 " Numbers
@@ -152,6 +154,7 @@ hi def link rushRepeat               Repeat
 hi def link rushKeyword              Keyword
 hi def link rushException            Exception
 hi def link rushOperatorWord         Keyword
+hi def link rushPlatform             PreProc
 
 hi def link rushBoolean              Boolean
 hi def link rushNil                  Constant

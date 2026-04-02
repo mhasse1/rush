@@ -150,16 +150,19 @@ contexts:
   # ──────────────────────────────────────────────
   keywords:
     # Control flow
-    - match: '\b(if|elsif|else|end|unless|for|in|while|until|match|case|when)\b'
+    - match: '\b(if|elsif|else|end|unless|for|in|while|until|loop|match|case|when)\b'
       scope: keyword.control.rush
-    # Functions
-    - match: '\b(def|return)\b'
+    # Functions and OOP
+    - match: '\b(def|return|class|attr|self|super|enum)\b'
       scope: keyword.control.rush
     # Error handling
-    - match: '\b(try|rescue|ensure|begin)\b'
+    - match: '\b(try|rescue|ensure|raise|begin)\b'
       scope: keyword.control.rush
     # Loop control
     - match: '\b(do|next|continue|break)\b'
+      scope: keyword.control.rush
+    # Platform blocks
+    - match: '\b(macos|linux|win64|win32|ps|ps5|isssh)\b'
       scope: keyword.control.rush
     # Logic keywords
     - match: '\b(and|or|not)\b'
@@ -179,7 +182,7 @@ contexts:
   # Standard Library Classes
   # ──────────────────────────────────────────────
   stdlib-classes:
-    - match: '\b(File|Dir)\b'
+    - match: '\b(File|Dir|Time)\b'
       scope: support.class.rush
 
   # ──────────────────────────────────────────────

@@ -166,11 +166,12 @@
 
 (defconst rush-keywords
   '("if" "elsif" "else" "end" "unless"
-    "for" "in" "while" "until"
+    "for" "in" "while" "until" "loop"
     "match" "case" "when"
     "def" "return"
-    "try" "rescue" "ensure" "begin"
+    "try" "rescue" "ensure" "raise" "begin"
     "do" "next" "continue" "break"
+    "class" "attr" "self" "super" "enum"
     "and" "or" "not")
   "Rush language keywords.")
 
@@ -183,8 +184,12 @@
   "Rush built-in functions.")
 
 (defconst rush-stdlib-classes
-  '("File" "Dir")
+  '("File" "Dir" "Time")
   "Rush standard library classes.")
+
+(defconst rush-platform-keywords
+  '("macos" "linux" "win64" "win32" "ps" "ps5" "isssh")
+  "Rush platform block keywords.")
 
 (defconst rush-dot-methods
   '("each" "select" "reject" "map" "flat_map" "sort_by"
@@ -220,6 +225,10 @@
   (concat "\\_<" (regexp-opt rush-stdlib-classes t) "\\_>")
   "Regexp matching Rush standard library classes.")
 
+(defconst rush-platform-keywords-regexp
+  (concat "\\_<" (regexp-opt rush-platform-keywords t) "\\_>")
+  "Regexp matching Rush platform block keywords.")
+
 (defconst rush-dot-methods-regexp
   (concat "\\." (regexp-opt rush-dot-methods t) "\\_>")
   "Regexp matching Rush dot-method calls.")
@@ -241,8 +250,11 @@
     ;; Built-in functions (when used as a call, not after a dot)
     (,(concat "\\(?:^\\|[^.]\\)" rush-builtin-functions-regexp) 1 font-lock-builtin-face)
 
-    ;; Standard library classes: File, Dir
+    ;; Standard library classes: File, Dir, Time
     (,rush-stdlib-classes-regexp 1 font-lock-type-face)
+
+    ;; Platform block keywords: macos, linux, win64, ps, ps5, etc.
+    (,rush-platform-keywords-regexp 1 font-lock-preprocessor-face)
 
     ;; Dot-method calls: .each, .select, .map, etc.
     (,rush-dot-methods-regexp 1 'rush-method-call-face)
@@ -312,9 +324,10 @@ and command substitution $(...) markers."
 
 (defconst rush-block-start-regexp
   (concat "\\_<"
-          (regexp-opt '("if" "unless" "for" "while" "until"
+          (regexp-opt '("if" "unless" "for" "while" "until" "loop"
                         "def" "begin" "case" "match" "do"
-                        "try")
+                        "try" "class"
+                        "macos" "linux" "win64" "win32" "ps" "ps5")
                       t)
           "\\_>")
   "Regexp matching keywords that open a new indentation block.")

@@ -8,7 +8,7 @@ installed=0
 echo "Installing Rush editor plugins..."
 echo ""
 
-# Vim / Neovim
+# Vim / Neovim (vim/install.sh handles both: ~/.vim and ~/.config/nvim)
 if command -v vim &>/dev/null || command -v nvim &>/dev/null; then
     bash "$SCRIPT_DIR/vim/install.sh" $FLAG
     installed=$((installed + 1))
@@ -37,7 +37,7 @@ if command -v subl &>/dev/null; then
 fi
 
 if [[ $installed -eq 0 ]]; then
-    echo "No supported editors found (vim, nvim, emacs, code, subl)."
+    echo "No supported editors found (vim, nvim/neovim, emacs, code, subl)."
     echo "Run individual scripts in editors/<editor>/install.sh directly."
     exit 1
 fi
