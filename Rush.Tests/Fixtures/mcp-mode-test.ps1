@@ -26,7 +26,8 @@ function Invoke-McpSession {
     [System.IO.File]::WriteAllText($tmpIn, $reqText, [System.Text.Encoding]::UTF8)
 
     try {
-        $stdout = & $Rush --mcp < $tmpIn 2>$null
+        $stdout = Get-Content $tmpIn -Raw | & $Rush --mcp 2>$null
+        if ($null -eq $stdout) { return @() }
         if ($stdout -is [string]) {
             return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
         } else {

@@ -27,8 +27,8 @@ function Invoke-LlmSession {
     [System.IO.File]::WriteAllText($tmpIn, $cmdText, [System.Text.Encoding]::UTF8)
 
     try {
-        $stdout = & $Rush --llm < $tmpIn 2>$null
-        # $stdout may be a string or array of strings depending on output
+        $stdout = Get-Content $tmpIn -Raw | & $Rush --llm 2>$null
+        if ($null -eq $stdout) { return @() }
         if ($stdout -is [string]) {
             return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
         } else {
