@@ -20,23 +20,21 @@ function Fail($msg, $detail) { Write-Host "FAIL: $msg — $detail"; $script:Fail
 # Send JSON-RPC requests to rush --mcp, return array of JSON lines
 function Invoke-McpSession {
     param([string[]]$Requests)
-    $input = ($Requests -join "`n") + "`n"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Rush
-    $psi.Arguments = "--mcp"
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
+    $reqText = ($Requests -join "`n") + "`n"
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.Write($input)
-    $proc.StandardInput.Close()
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $proc.WaitForExit(30000)
+    $tmpIn = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($tmpIn, $reqText, [System.Text.Encoding]::UTF8)
 
-    return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
+    try {
+        $stdout = & $Rush --mcp < $tmpIn 2>$null
+        if ($stdout -is [string]) {
+            return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
+        } else {
+            return $stdout | Where-Object { $_.Trim() -ne "" }
+        }
+    } finally {
+        Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Parse-Json($line) {

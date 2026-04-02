@@ -20,24 +20,23 @@ function Fail($msg, $detail) { Write-Host "FAIL: $msg — $detail"; $script:Fail
 # Send commands to rush --llm, return array of JSON lines
 function Invoke-LlmSession {
     param([string[]]$Commands)
-    $input = ($Commands -join "`n") + "`n"
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Rush
-    $psi.Arguments = "--llm"
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
+    $cmdText = ($Commands -join "`n") + "`n"
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
-    $proc.StandardInput.Write($input)
-    $proc.StandardInput.Close()
-    $stdout = $proc.StandardOutput.ReadToEnd()
-    $proc.WaitForExit(30000)
+    # Write commands to a temp file and pipe it in — more reliable than stdin redirection
+    $tmpIn = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($tmpIn, $cmdText, [System.Text.Encoding]::UTF8)
 
-    # Return non-empty lines
-    return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
+    try {
+        $stdout = & $Rush --llm < $tmpIn 2>$null
+        # $stdout may be a string or array of strings depending on output
+        if ($stdout -is [string]) {
+            return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
+        } else {
+            return $stdout | Where-Object { $_.Trim() -ne "" }
+        }
+    } finally {
+        Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Parse a JSON line
