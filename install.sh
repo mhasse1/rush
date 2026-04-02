@@ -84,21 +84,26 @@ if [[ "${1:-}" == "--full" ]]; then
         echo "  CI passed. Downloading artifacts..."
 
         # Download native binaries built on actual target platforms
-        rm -f "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush-linux-x64" "$STAGING_DIR/rush-osx-arm64"
+        rm -f "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush_arm64.exe" "$STAGING_DIR/rush-linux-x64" "$STAGING_DIR/rush-osx-arm64"
 
         gh run download "$RUN_ID" -R mhasse1/rush -n rush-win-x64 -D "$STAGING_DIR" 2>/dev/null && \
             mv "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" && \
-            echo "  → $STAGING_DIR/rush_x64.exe (win-x64, native CI build)" || \
+            echo "  → $STAGING_DIR/rush_x64.exe (win-x64, CI build)" || \
             echo "  ! Failed to download win-x64 artifact"
+
+        gh run download "$RUN_ID" -R mhasse1/rush -n rush-win-arm64 -D "$STAGING_DIR" 2>/dev/null && \
+            mv "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_arm64.exe" && \
+            echo "  → $STAGING_DIR/rush_arm64.exe (win-arm64, CI build)" || \
+            echo "  ! Failed to download win-arm64 artifact"
 
         gh run download "$RUN_ID" -R mhasse1/rush -n rush-linux-x64 -D "$STAGING_DIR" 2>/dev/null && \
             mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-linux-x64" && \
-            echo "  → $STAGING_DIR/rush-linux-x64 (linux-x64, native CI build)" || \
+            echo "  → $STAGING_DIR/rush-linux-x64 (linux-x64, CI build)" || \
             echo "  ! Failed to download linux-x64 artifact"
 
         gh run download "$RUN_ID" -R mhasse1/rush -n rush-osx-arm64 -D "$STAGING_DIR" 2>/dev/null && \
             mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-osx-arm64" 2>/dev/null && \
-            echo "  → $STAGING_DIR/rush-osx-arm64 (osx-arm64, native CI build)" || \
+            echo "  → $STAGING_DIR/rush-osx-arm64 (osx-arm64, CI build)" || \
             echo "  ! Failed to download osx-arm64 artifact"
     fi
 
