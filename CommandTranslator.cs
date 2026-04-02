@@ -247,14 +247,6 @@ public class CommandTranslator
                 var op = TranslateWhereOperator(args[1]);
                 var val = string.Join(' ', args[2..]);
 
-                // Auto-promote == / != to -like / -notlike when value contains wildcards
-                var rawVal = val.Trim('\'', '"');
-                if ((rawVal.Contains('*') || rawVal.Contains('?')) && !rawVal.StartsWith('/'))
-                {
-                    if (op == "-eq") op = "-like";
-                    else if (op == "-ne") op = "-notlike";
-                }
-
                 // Don't quote if already quoted or numeric/PS literal
                 if (!val.StartsWith('\'') && !val.StartsWith('"') && !IsNumericOrPsLiteral(val))
                     val = $"'{val}'";
