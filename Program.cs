@@ -6234,20 +6234,22 @@ static bool OpenWithSystem(string target)
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            psi = new ProcessStartInfo("/usr/bin/open", target)
+            psi = new ProcessStartInfo("/usr/bin/open")
             {
                 UseShellExecute = false,
                 RedirectStandardError = true,
             };
+            psi.ArgumentList.Add(target);
         }
         else
         {
             // Linux: xdg-open, suppress stderr (it's noisy)
-            psi = new ProcessStartInfo("xdg-open", target)
+            psi = new ProcessStartInfo("xdg-open")
             {
                 UseShellExecute = false,
                 RedirectStandardError = true,
             };
+            psi.ArgumentList.Add(target);
         }
 
         var proc = Process.Start(psi);
