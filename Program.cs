@@ -1495,27 +1495,38 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         }
 
         // ── mark: output demarcation line ───────────────────────────
+        // mark, mark "label", mark 'label', or --- (all dashes)
+        // Does NOT match mark | ... (pipe) — only bare mark or mark with quoted label
         if (segment.Equals("mark", StringComparison.OrdinalIgnoreCase) ||
-            segment.StartsWith("mark ", StringComparison.OrdinalIgnoreCase) ||
             segment.Equals("---", StringComparison.Ordinal) ||
-            segment.StartsWith("---") && segment.All(c => c == '-'))
+            (segment.StartsWith("---") && segment.All(c => c == '-')))
         {
-            var label = segment.StartsWith("mark ", StringComparison.OrdinalIgnoreCase)
-                ? segment[5..].Trim().Trim('"', '\'') : null;
-            var width = 65;
-            try { width = Math.Max(40, Console.WindowWidth - 2); } catch { }
-            var line = new string('═', width);
-            if (!string.IsNullOrEmpty(label))
-            {
-                var prefix = "═══ ";
-                var suffix = " " + new string('═', Math.Max(3, width - prefix.Length - label.Length - 1));
-                line = prefix + label + suffix;
-            }
-            Console.ForegroundColor = Theme.Current.Muted;
-            Console.WriteLine(line);
-            Console.ResetColor();
+            EmitMark(null);
             lastSegmentFailed = false;
             continue;
+        }
+        if (segment.StartsWith("mark ", StringComparison.OrdinalIgnoreCase))
+        {
+            var labelArg = segment[5..].Trim();
+            // Only treat as mark label if quoted — otherwise fall through to normal execution
+            // This allows mark | times 2 to work as a pipe
+            if ((labelArg.StartsWith('"') && labelArg.EndsWith('"')) ||
+                (labelArg.StartsWith('\'') && labelArg.EndsWith('\'')))
+            {
+                EmitMark(labelArg[1..^1]);
+                lastSegmentFailed = false;
+                continue;
+            }
+            else
+            {
+                // Unquoted label (may contain pipes — ignore them for mark)
+                // mark | times 2 → just emit a plain mark (pipes don't apply to builtins)
+                var pipeIdx = labelArg.IndexOf('|');
+                var cleanLabel = pipeIdx >= 0 ? labelArg[..pipeIdx].Trim() : labelArg;
+                EmitMark(string.IsNullOrEmpty(cleanLabel) ? null : cleanLabel);
+                lastSegmentFailed = false;
+                continue;
+            }
         }
 
         // ── o: cross-platform open (file, URL, directory) ───────────
@@ -6214,6 +6225,22 @@ static bool IsValidEnvVarName(string name)
         if (!char.IsLetterOrDigit(name[i]) && name[i] != '_') return false;
     }
     return true;
+}
+
+static void EmitMark(string? label)
+{
+    var width = 65;
+    try { width = Math.Max(40, Console.WindowWidth - 2); } catch { }
+    var line = new string('═', width);
+    if (!string.IsNullOrEmpty(label))
+    {
+        var prefix = "═══ ";
+        var suffix = " " + new string('═', Math.Max(3, width - prefix.Length - label.Length - 1));
+        line = prefix + label + suffix;
+    }
+    Console.ForegroundColor = Theme.Current.Muted;
+    Console.WriteLine(line);
+    Console.ResetColor();
 }
 
 static bool OpenWithSystem(string target)
