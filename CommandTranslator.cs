@@ -195,6 +195,14 @@ public class CommandTranslator
             return $"Select-Object -Last {count}";
         }
 
+        // Special: times after a pipe → repeat input N times
+        // Syntax: echo "hi" | times 3  →  outputs "hi" three times
+        if (isAfterPipe && command.Equals("times", StringComparison.OrdinalIgnoreCase))
+        {
+            var count = args.Length > 0 ? args[0] : "2";
+            return $"ForEach-Object {{ $line = $_; 1..{count} | ForEach-Object {{ $line }} }}";
+        }
+
         // Special: skip after a pipe → Select-Object -Skip N
         if (isAfterPipe && command.Equals("skip", StringComparison.OrdinalIgnoreCase))
         {
@@ -387,6 +395,7 @@ public class CommandTranslator
         Register("count", null); // Special handling in TranslateSegment
         Register("first", null); // Special handling
         Register("last", null);  // Special handling
+        Register("times", null); // Special handling
         Register("skip", null);  // Special handling
         Register("tee", null);   // Special handling
         Register("distinct", null); // Special handling
