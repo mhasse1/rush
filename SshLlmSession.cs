@@ -48,14 +48,21 @@ internal class SshLlmSession : IDisposable
     /// </summary>
     internal static SshLlmSession? TryCreate(string host)
     {
-        // Try rush in PATH, then common install locations
-        string[] commands = new[]
+        // Try rush in PATH, then common install locations.
+        // Windows OpenSSH doesn't load the user's PATH profile for ssh host 'command',
+        // so we try several common locations including where.exe discovery.
+        var commands = new List<string>
         {
             "rush --llm",
             "rush.exe --llm",
-            "C:\\bin\\rush.exe --llm",
             "/usr/local/bin/rush --llm",
+            "C:\\bin\\rush.exe --llm",
         };
+
+        // On any host, try to discover rush via where/which and use the full path
+        var discoveredPath = DiscoverRushPath(host);
+        if (discoveredPath != null)
+            commands.Insert(0, $"{discoveredPath} --llm");
 
         foreach (var cmd in commands)
         {
@@ -78,6 +85,57 @@ internal class SshLlmSession : IDisposable
         }
 
         Console.Error.WriteLine($"[rush-ssh] Rush not available on {host}, using raw shell");
+        return null;
+    }
+
+    /// <summary>
+    /// Try to discover Rush's full path on a remote host using where.exe (Windows)
+    /// or which (Unix). Returns the path or null if not found.
+    /// Uses a short SSH call — not a persistent session.
+    /// </summary>
+    private static string? DiscoverRushPath(string host)
+    {
+        // Try where.exe (Windows) then which (Unix)
+        string[] probes = new[] { "where.exe rush", "which rush" };
+
+        foreach (var probe in probes)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("ssh")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ConnectTimeout=5");
+                SshPool.Apply(psi);
+                psi.ArgumentList.Add(host);
+                psi.ArgumentList.Add(probe);
+
+                using var proc = Process.Start(psi);
+                if (proc == null) continue;
+                SshPool.Track(host);
+
+                var stdout = proc.StandardOutput.ReadToEnd().Trim();
+                proc.WaitForExit(5000);
+
+                if (proc.ExitCode == 0 && !string.IsNullOrEmpty(stdout))
+                {
+                    // where.exe may return multiple lines — take the first
+                    var path = stdout.Split('\n')[0].Trim().TrimEnd('\r');
+                    if (path.Length > 0)
+                    {
+                        Console.Error.WriteLine($"[rush-ssh] Discovered rush on {host}: {path}");
+                        return path;
+                    }
+                }
+            }
+            catch { }
+        }
+
         return null;
     }
 
