@@ -22,20 +22,29 @@ function Invoke-McpSession {
     param([string[]]$Requests)
     $reqText = ($Requests -join "`n") + "`n"
 
-    $tmpIn = [System.IO.Path]::GetTempFileName()
-    [System.IO.File]::WriteAllText($tmpIn, $reqText, [System.Text.Encoding]::UTF8)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Rush
+    $psi.Arguments = "--mcp"
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
 
-    try {
-        $stdout = Get-Content $tmpIn -Raw | & $Rush --mcp 2>$null
-        if ($null -eq $stdout) { return @() }
-        if ($stdout -is [string]) {
-            return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
-        } else {
-            return $stdout | Where-Object { $_.Trim() -ne "" }
-        }
-    } finally {
-        Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    # Write each request as a separate line (JSON-RPC requires line-delimited input)
+    foreach ($req in $Requests) {
+        $proc.StandardInput.WriteLine($req)
     }
+    $proc.StandardInput.Close()
+
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    if (-not $proc.WaitForExit(30000)) {
+        try { $proc.Kill() } catch {}
+    }
+
+    if ([string]::IsNullOrEmpty($stdout)) { return @() }
+    return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
 }
 
 function Parse-Json($line) {

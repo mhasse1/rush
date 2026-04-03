@@ -20,23 +20,29 @@ function Fail($msg, $detail) { Write-Host "FAIL: $msg — $detail"; $script:Fail
 # Send commands to rush --llm, return array of JSON lines
 function Invoke-LlmSession {
     param([string[]]$Commands)
-    $cmdText = ($Commands -join "`n") + "`n"
 
-    # Write commands to a temp file and pipe it in — more reliable than stdin redirection
-    $tmpIn = [System.IO.Path]::GetTempFileName()
-    [System.IO.File]::WriteAllText($tmpIn, $cmdText, [System.Text.Encoding]::UTF8)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $Rush
+    $psi.Arguments = "--llm"
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
 
-    try {
-        $stdout = Get-Content $tmpIn -Raw | & $Rush --llm 2>$null
-        if ($null -eq $stdout) { return @() }
-        if ($stdout -is [string]) {
-            return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
-        } else {
-            return $stdout | Where-Object { $_.Trim() -ne "" }
-        }
-    } finally {
-        Remove-Item $tmpIn -Force -ErrorAction SilentlyContinue
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    foreach ($cmd in $Commands) {
+        $proc.StandardInput.WriteLine($cmd)
     }
+    $proc.StandardInput.Close()
+
+    $stdout = $proc.StandardOutput.ReadToEnd()
+    if (-not $proc.WaitForExit(30000)) {
+        try { $proc.Kill() } catch {}
+    }
+
+    if ([string]::IsNullOrEmpty($stdout)) { return @() }
+    return $stdout -split "`n" | Where-Object { $_.Trim() -ne "" }
 }
 
 # Parse a JSON line
@@ -209,11 +215,12 @@ if ($result.error_type -eq "tty_required") { Pass "tty blocklist: vim blocked" }
 Write-Host ""
 Write-Host "## 11. Exit Code Tracking"
 
-$lines = Invoke-LlmSession @("exit 1")
+# Use a command that fails but doesn't kill the process (exit 1 terminates rush)
+$lines = Invoke-LlmSession @("command_that_fails_for_exit_test_xyz")
 $result = Parse-Json $lines[1]
 $ctx2 = Parse-Json $lines[2]
 
-if ($result.exit_code -ne 0) { Pass "exit code: non-zero after exit 1" } else { Fail "exit code" "got 0" }
+if ($result.exit_code -ne 0) { Pass "exit code: non-zero after failed command" } else { Fail "exit code" "got 0" }
 if ($ctx2.last_exit_code -ne 0) { Pass "context: last_exit_code tracks failure" } else { Fail "context: last_exit_code" "got $($ctx2.last_exit_code)" }
 
 # ── 12. Backward Compatibility ──────────────────────────────────────
@@ -236,10 +243,11 @@ if ("$($result.stdout)" -match "json_envelope") { Pass "compat: JSON envelope" }
 Write-Host ""
 Write-Host "## 13. Windows-Specific"
 
-# PowerShell cmdlet via ps block
-$lines = Invoke-LlmSession @('ps
-  $env:RUSH_TEST_WIN13 = (Get-Process | Measure-Object).Count.ToString()
-end', 'puts env.RUSH_TEST_WIN13')
+# PowerShell cmdlet via ps block (use JSON-quoted multi-line + second command)
+$lines = Invoke-LlmSession @(
+    '"ps\n  $env:RUSH_TEST_WIN13 = (Get-Process | Measure-Object).Count.ToString()\nend"',
+    'puts env.RUSH_TEST_WIN13'
+)
 $result = Parse-Json $lines[3]
 
 if ("$($result.stdout)" -match "^\d+$") { Pass "ps block: Get-Process count ($($result.stdout))" } else { Fail "ps block: Get-Process" "got $($result.stdout)" }
