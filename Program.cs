@@ -5836,6 +5836,16 @@ static void RunNonInteractive(string command)
     var tr = new CommandTranslator(objConfig);
     var scriptEngine = new ScriptEngine(tr);
 
+    // Handle builtins that need to work in -c mode
+    var firstWord = command.Trim().Split(' ', 2)[0].ToLowerInvariant();
+    if (firstWord == "help")
+    {
+        var helpArg = command.Trim().Length > 5 ? command.Trim()[5..].Trim() : null;
+        var output = HelpCommand.Execute(helpArg);
+        Console.WriteLine(output);
+        return;
+    }
+
     // Check if the command contains Rush scripting syntax (multi-line blocks,
     // method chaining, assignments, etc.). If so, route through the transpiler
     // instead of the shell command path.
