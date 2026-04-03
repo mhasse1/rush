@@ -195,6 +195,23 @@ public class CommandTranslator
             return $"Select-Object -Last {count}";
         }
 
+        // Special: each after a pipe → ForEach-Object with body
+        // Syntax: ls | each { Write-Host "file: $it" }
+        // $it is automatically replaced with $_ (current pipeline item)
+        // Note: |var| block parameter syntax can't be used here because
+        // pipes are split before translation. Use $it or $_ directly.
+        if (isAfterPipe && command.Equals("each", StringComparison.OrdinalIgnoreCase))
+        {
+            var body = string.Join(' ', args);
+            if (body.StartsWith('{') && body.EndsWith('}'))
+                body = body[1..^1].Trim();
+
+            // Replace $it with $_ for PowerShell pipeline variable
+            body = body.Replace("$it", "$_");
+
+            return $"ForEach-Object {{ {body} }}";
+        }
+
         // Special: times after a pipe → repeat input N times
         // Syntax: echo "hi" | times 3  →  outputs "hi" three times
         if (isAfterPipe && command.Equals("times", StringComparison.OrdinalIgnoreCase))
@@ -396,6 +413,7 @@ public class CommandTranslator
         Register("first", null); // Special handling
         Register("last", null);  // Special handling
         Register("times", null); // Special handling
+        Register("each", null);  // Special handling
         Register("skip", null);  // Special handling
         Register("tee", null);   // Special handling
         Register("distinct", null); // Special handling
