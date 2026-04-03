@@ -101,9 +101,9 @@ public class TabCompleter
 
         // Strip leading quote from token for matching purposes
         // (ApplyCompletion handles re-quoting the result)
-        // Also unescape backslash-spaces for filesystem matching
+        // Unescape backslash-escaped characters for filesystem matching
         var matchToken = token.StartsWith('"') ? token[1..] : token;
-        matchToken = matchToken.Replace("\\ ", " ");
+        matchToken = UnescapeToken(matchToken);
 
         // Determine context
         var beforeToken = input[..tokenStart].TrimEnd();
@@ -222,14 +222,15 @@ public class TabCompleter
         var afterTokenEnd = FindTokenEnd(originalInput, _completionStart);
         var after = originalInput[afterTokenEnd..];
 
-        // Handle spaces in completions:
+        // Handle special characters in completions:
         // If user started with a quote ("Computer...), complete inside quotes.
-        // Otherwise, escape spaces with backslash (bash-style: Computer\ Setup)
+        // Otherwise, escape shell-special characters with backslash (bash-style)
         var quoted = completion;
         bool alreadyQuoted = _completionStart > 0
             && _completionStart <= originalInput.Length
             && originalInput[_completionStart - 1] == '"';
-        if (completion.Contains(' '))
+        bool hasSpecialChars = completion.IndexOfAny(new[] { ' ', '(', ')', '[', ']', '{', '}', '\'', '!', '&', ';', '$', '#' }) >= 0;
+        if (hasSpecialChars)
         {
             if (alreadyQuoted)
             {
@@ -238,8 +239,15 @@ public class TabCompleter
             }
             else
             {
-                // No quote — escape spaces with backslash
-                quoted = completion.Replace(" ", "\\ ");
+                // No quote — escape special characters with backslash
+                var sb = new System.Text.StringBuilder(completion.Length + 8);
+                foreach (var ch in completion)
+                {
+                    if (ch is ' ' or '(' or ')' or '[' or ']' or '{' or '}' or '\'' or '!' or '&' or ';' or '$' or '#')
+                        sb.Append('\\');
+                    sb.Append(ch);
+                }
+                quoted = sb.ToString();
             }
         }
 
@@ -834,6 +842,29 @@ public class TabCompleter
         return (tok, start);
     }
 
+    /// <summary>
+    /// Remove backslash escapes from a token for filesystem matching.
+    /// e.g., "file\ \(1\).csv" → "file (1).csv"
+    /// </summary>
+    private static string UnescapeToken(string token)
+    {
+        if (!token.Contains('\\')) return token;
+        var sb = new System.Text.StringBuilder(token.Length);
+        for (int i = 0; i < token.Length; i++)
+        {
+            if (token[i] == '\\' && i + 1 < token.Length)
+            {
+                sb.Append(token[i + 1]);
+                i++; // skip next char
+            }
+            else
+            {
+                sb.Append(token[i]);
+            }
+        }
+        return sb.ToString();
+    }
+
     internal static int FindTokenEnd(string input, int tokenStart)
     {
         int pos = tokenStart;
@@ -845,7 +876,17 @@ public class TabCompleter
             if (pos < input.Length) pos++; // skip closing quote
             return pos;
         }
-        while (pos < input.Length && input[pos] != ' ') pos++;
+        // Skip backslash-escaped characters (e.g., Microsoft\ Outlook.app, file\ \(1\).csv)
+        while (pos < input.Length)
+        {
+            if (input[pos] == '\\' && pos + 1 < input.Length)
+            {
+                pos += 2; // skip escaped char
+                continue;
+            }
+            if (input[pos] == ' ') break;
+            pos++;
+        }
         return pos;
     }
 }
