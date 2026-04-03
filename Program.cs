@@ -434,6 +434,13 @@ if (!OperatingSystem.IsWindows())
     {
         ctx.Cancel = true;
         lineEditor.NotifyResize();
+        // Update COLUMNS/LINES for native commands
+        try
+        {
+            Environment.SetEnvironmentVariable("COLUMNS", Console.WindowWidth.ToString());
+            Environment.SetEnvironmentVariable("LINES", Console.WindowHeight.ToString());
+        }
+        catch { }
     });
 }
 
@@ -2700,6 +2707,17 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     var osVersion = Environment.OSVersion.Version.ToString();
     ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
     ps.Invoke();
+
+    // Set COLUMNS/LINES env vars so native commands (ls, etc.) know the terminal size.
+    // Process.Start children don't inherit console dimensions on Windows.
+    try
+    {
+        var cols = Console.WindowWidth.ToString();
+        var lines = Console.WindowHeight.ToString();
+        Environment.SetEnvironmentVariable("COLUMNS", cols);
+        Environment.SetEnvironmentVariable("LINES", lines);
+    }
+    catch { /* non-interactive — skip */ }
 
     // Windows-specific runspace setup
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))

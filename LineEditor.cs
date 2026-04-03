@@ -1471,9 +1471,10 @@ public class LineEditor
         UpdateSuggestion();
         Console.SetCursorPosition(_startLeft, _startTop);
 
-        // Erase from cursor to end of display — clears all old content including
-        // wrapped lines and stale ghost text from previous renders
-        Console.Write("\x1b[J");
+        // Clear from cursor to end of visible area. Use \x1b[J on Unix,
+        // but fall back to space-clearing on Windows where legacy console
+        // hosts may not support ANSI erase sequences.
+        ClearToEnd();
 
         var text = new string(_buffer.ToArray());
 
@@ -1515,6 +1516,49 @@ public class LineEditor
         catch { }
 
         SetCursorPos();
+    }
+
+    /// <summary>
+    /// Clear from the current cursor position to the end of the visible area.
+    /// Uses ANSI \x1b[J on Unix. On Windows, uses a space-fill fallback
+    /// because legacy console hosts (Server 2019) may not support ANSI erase.
+    /// </summary>
+    private void ClearToEnd()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Console.Write("\x1b[J");
+            return;
+        }
+
+        // Windows fallback: clear with spaces from current position
+        try
+        {
+            int width = Console.WindowWidth;
+            int curRow = Console.CursorTop;
+            int curCol = Console.CursorLeft;
+            int bufHeight = Console.BufferHeight;
+
+            // Clear rest of current line
+            if (curCol < width)
+                Console.Write(new string(' ', width - curCol));
+
+            // Clear subsequent lines that might have old content (up to 3 extra rows)
+            int maxClearRows = Math.Min(curRow + 4, bufHeight);
+            for (int r = curRow + 1; r < maxClearRows; r++)
+            {
+                Console.SetCursorPosition(0, r);
+                Console.Write(new string(' ', width));
+            }
+
+            // Restore cursor to original position
+            Console.SetCursorPosition(curCol, curRow);
+        }
+        catch
+        {
+            // Fallback to ANSI if Console API fails
+            Console.Write("\x1b[J");
+        }
     }
 
     private void SetCursorPos()
