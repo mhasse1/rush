@@ -114,10 +114,12 @@ public static class ColorPicker
         // Save original bg for cancel/restore
         var originalBg = Environment.GetEnvironmentVariable("RUSH_BG");
         var originalCursorVisible = true;
+#pragma warning disable CA1416 // CursorVisible works on all platforms via terminal escapes
         try { originalCursorVisible = Console.CursorVisible; } catch { }
 
         // Enter raw mode
         try { Console.CursorVisible = false; } catch { }
+#pragma warning restore CA1416
 
         // Hex input mode state
         bool hexInputMode = false;
@@ -256,7 +258,9 @@ public static class ColorPicker
         {
             // Clear picker display
             ClearRender(cells, sectionStarts);
+#pragma warning disable CA1416
             try { Console.CursorVisible = originalCursorVisible; } catch { }
+#pragma warning restore CA1416
         }
     }
 

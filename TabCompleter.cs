@@ -412,12 +412,10 @@ public class TabCompleter
             }
 
             // Windows UNC: //server/share → \\server\share for OS APIs
-            bool isUnc = false;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
                 && expandedPrefix.StartsWith("//") && expandedPrefix.Length > 2 && expandedPrefix[2] != '/')
             {
                 expandedPrefix = "\\\\" + expandedPrefix[2..].Replace('/', '\\');
-                isUnc = true;
             }
 
             if (expandedPrefix.Contains('/') || expandedPrefix.Contains(Path.DirectorySeparatorChar))

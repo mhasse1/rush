@@ -166,11 +166,12 @@ public class OllamaProvider : IAiProvider
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (string.IsNullOrEmpty(line)) continue;
+            if (line == null) break;
+            if (line.Length == 0) continue;
 
             string? text = null;
             bool isDone = false;
@@ -359,11 +360,12 @@ internal static class SseParser
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (line == null || !line.StartsWith("data: ")) continue;
+            if (line == null) break;
+            if (!line.StartsWith("data: ")) continue;
 
             var json = line[6..];
             if (json == "[DONE]") yield break;
@@ -397,11 +399,12 @@ internal static class SseParser
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (line == null || !line.StartsWith("data: ")) continue;
+            if (line == null) break;
+            if (!line.StartsWith("data: ")) continue;
 
             var json = line[6..];
             if (json == "[DONE]") yield break;
@@ -434,11 +437,12 @@ internal static class SseParser
         await using var stream = await resp.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream);
 
-        while (!reader.EndOfStream)
+        while (true)
         {
             ct.ThrowIfCancellationRequested();
             var line = await reader.ReadLineAsync(ct);
-            if (line == null || !line.StartsWith("data: ")) continue;
+            if (line == null) break;
+            if (!line.StartsWith("data: ")) continue;
 
             var json = line[6..];
             if (json == "[DONE]") yield break;
