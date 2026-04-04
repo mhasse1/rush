@@ -20,3 +20,4 @@ dist/
 .publish-tmp*
 internal/
 .claude/
+*.btskey
