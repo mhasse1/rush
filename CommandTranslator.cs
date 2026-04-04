@@ -748,8 +748,9 @@ public class CommandTranslator
         bool inSingleQuote = false;
         bool inDoubleQuote = false;
 
-        foreach (var ch in input)
+        for (int i = 0; i < input.Length; i++)
         {
+            var ch = input[i];
             if (ch == '\'' && !inDoubleQuote)
             {
                 inSingleQuote = !inSingleQuote;
@@ -759,6 +760,21 @@ public class CommandTranslator
             {
                 inDoubleQuote = !inDoubleQuote;
                 current.Append(ch);
+            }
+            else if (ch == '\\' && i + 1 < input.Length && !inSingleQuote && !inDoubleQuote)
+            {
+                // Backslash escape: \<space> → literal space (not a separator)
+                // Other \X → keep literal (path separators on Windows, etc.)
+                var next = input[i + 1];
+                if (next == ' ')
+                {
+                    current.Append(' '); // unescape: \<space> → space
+                    i++; // skip next char
+                }
+                else
+                {
+                    current.Append(ch); // keep the backslash
+                }
             }
             else if (ch == ' ' && !inSingleQuote && !inDoubleQuote)
             {
