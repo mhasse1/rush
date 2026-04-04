@@ -51,6 +51,15 @@ function Parse-Json($line) {
     try { return $line | ConvertFrom-Json } catch { return $null }
 }
 
+# Find a JSON-RPC response by id from an array of output lines
+function Find-Response($lines, [int]$id) {
+    foreach ($l in $lines) {
+        $parsed = Parse-Json $l
+        if ($parsed -and $parsed.id -eq $id) { return $parsed }
+    }
+    return $null
+}
+
 # Extract the text content from an MCP tool result (nested JSON in content[0].text)
 function Get-ToolResult($response) {
     $text = $response.result.content[0].text
@@ -68,7 +77,7 @@ Write-Host ""
 Write-Host "## 1. Initialize"
 
 $lines = Invoke-McpSession @($InitReq)
-$init = Parse-Json $lines[0]
+$init = Find-Response $lines 1
 
 if ($init.result.protocolVersion -eq "2024-11-05") { Pass "init: protocolVersion" } else { Fail "init: protocolVersion" "got $($init.result.protocolVersion)" }
 if ($init.result.serverInfo.name -eq "rush-local") { Pass "init: server name=rush-local" } else { Fail "init: server name" "got $($init.result.serverInfo.name)" }
@@ -85,7 +94,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 )
-$tools = Parse-Json $lines[1]
+$tools = Find-Response $lines 2
 
 $toolCount = $tools.result.tools.Count
 if ($toolCount -ge 3) { Pass "tools/list: $toolCount tools" } else { Fail "tools/list" "got $toolCount, expected >= 3" }
@@ -107,7 +116,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"echo mcp hello"}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.status -eq "success") { Pass "rush_execute: status=success" } else { Fail "rush_execute: status" "got $($tr.status) — $($tr.stderr)" }
@@ -119,7 +128,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"puts \"rush syntax via mcp\""}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ("$($tr.stdout)" -match "rush syntax via mcp") { Pass "rush_execute: Rush syntax works" } else { Fail "rush_execute: Rush syntax" "got $($tr.stdout)" }
@@ -129,7 +138,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"nonexistent_cmd_xyz_123"}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.status -eq "error") { Pass "rush_execute: error status" } else { Fail "rush_execute: error" "got $($tr.status)" }
@@ -146,7 +155,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     "{`"jsonrpc`":`"2.0`",`"id`":2,`"method`":`"tools/call`",`"params`":{`"name`":`"rush_read_file`",`"arguments`":{`"path`":`"$testFile`"}}}"
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.status -eq "success") { Pass "rush_read_file: status=success" } else { Fail "rush_read_file: status" "got $($tr.status)" }
@@ -159,7 +168,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_read_file","arguments":{"path":"C:/nonexistent/file.txt"}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.status -eq "error") { Pass "rush_read_file: missing file returns error" } else { Fail "rush_read_file: missing" "got $($tr.status)" }
@@ -172,7 +181,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_context","arguments":{}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.ready -eq $true) { Pass "rush_context: ready=true" } else { Fail "rush_context: ready" "got $($tr.ready)" }
@@ -188,7 +197,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"resources/list"}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 
 $resCount = $resp.result.resources.Count
 if ($resCount -ge 1) { Pass "resources/list: $resCount resources" } else { Fail "resources/list" "got $resCount" }
@@ -201,7 +210,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":"rush://lang-spec"}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 
 if ("$($resp.result.contents[0].text)" -match "Rush Language") { Pass "resources/read: lang-spec has content" } else { Fail "resources/read" "no content" }
 if ($resp.result.contents[0].mimeType -eq "text/yaml") { Pass "resources/read: mimeType=text/yaml" } else { Fail "resources/read: mime" "got $($resp.result.contents[0].mimeType)" }
@@ -215,7 +224,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"nonexistent/method"}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 
 if ($resp.error.code -eq -32601) { Pass "error: unknown method returns -32601" } else { Fail "error: unknown method" "got code $($resp.error.code)" }
 
@@ -224,7 +233,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 
 if ($resp.error.code -eq -32602) { Pass "error: unknown tool returns -32602" } else { Fail "error: unknown tool" "got code $($resp.error.code)" }
 
@@ -233,7 +242,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 
 if ($resp.error.code -eq -32602) { Pass "error: missing param returns -32602" } else { Fail "error: missing param" "got code $($resp.error.code)" }
 
@@ -246,7 +255,7 @@ $lines = Invoke-McpSession @(
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"x = 99"}}}',
     '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"puts x"}}}'
 )
-$resp = Parse-Json $lines[2]
+$resp = Find-Response $lines 3
 $tr = Get-ToolResult $resp
 
 if ("$($tr.stdout)" -match "99") { Pass "state: variables persist across calls" } else { Fail "state: persistence" "got $($tr.stdout)" }
@@ -260,7 +269,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"hostname"}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ($tr.status -eq "success" -and $tr.stdout) { Pass "windows: hostname returns $($tr.stdout.Trim())" } else { Fail "windows: hostname" "got $($tr.status)" }
@@ -270,7 +279,7 @@ $lines = Invoke-McpSession @(
     $InitReq,
     '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"ps\n  $env:RUSH_MCP_WIN = $PSVersionTable.PSVersion.ToString()\nend\nputs env.RUSH_MCP_WIN"}}}'
 )
-$resp = Parse-Json $lines[1]
+$resp = Find-Response $lines 2
 $tr = Get-ToolResult $resp
 
 if ("$($tr.stdout)" -match "^\d+\.") { Pass "windows: PSVersion via ps block ($($tr.stdout))" } else { Fail "windows: PSVersion" "got $($tr.stdout)" }
