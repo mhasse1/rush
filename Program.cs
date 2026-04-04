@@ -2060,7 +2060,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             segment.StartsWith("path ", StringComparison.OrdinalIgnoreCase))
         {
             var pathArgs = segment.Length > 4 ? segment[4..].Trim() : "";
-            lastSegmentFailed = HandlePathCommand(pathArgs, state.Runspace);
+            lastSegmentFailed = HandlePathCommand(pathArgs, state.Runspace, quiet: state.IsStartupScript);
             continue;
         }
 
@@ -2568,6 +2568,9 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
         if (state != null)
         {
             // New path: line-by-line processing with full builtin support
+            // Mark as startup script so path add silently skips non-existent dirs
+            var wasStartup = state.IsStartupScript;
+            state.IsStartupScript = true;
             var lines = File.ReadAllLines(path);
             var accumulated = new System.Text.StringBuilder();
             System.Text.StringBuilder? pathBlock = null; // accumulates path add...end / path rm...end
@@ -2593,8 +2596,10 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
                         var fullCmd = pathBlock.ToString();
                         pathBlock = null;
                         // Strip "path " prefix for HandlePathCommand
+                        // quiet: true — init.rush commonly has cross-platform paths
+                        // that only exist on one OS; silently skip missing ones
                         var pathArgs = fullCmd.Length > 5 ? fullCmd[5..] : "";
-                        HandlePathCommand(pathArgs, state.Runspace);
+                        HandlePathCommand(pathArgs, state.Runspace, quiet: true);
                     }
                     continue;
                 }
@@ -2639,6 +2644,8 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
                 if (psCode != null)
                     ExecuteTranspiledBlock(psCode, state);
             }
+
+            state.IsStartupScript = wasStartup;
         }
         else
         {
@@ -3779,7 +3786,7 @@ static bool IsPathBlock(string input)
 /// Supports --name=VARNAME to target any colon-separated env var (default: PATH).
 /// Returns true if the command failed.
 /// </summary>
-static bool HandlePathCommand(string args, Runspace runspace)
+static bool HandlePathCommand(string args, Runspace runspace, bool quiet = false)
 {
     // Extract --name=VARNAME flag from anywhere in args
     string varName = "PATH";
@@ -3942,9 +3949,12 @@ static bool HandlePathCommand(string args, Runspace runspace)
                 if (entries.Contains(dExpanded)) continue;
                 if (!Directory.Exists(dExpanded))
                 {
+                    if (quiet)
+                        continue; // Silently skip in init.rush
                     Console.ForegroundColor = Theme.Current.Warning;
-                    Console.WriteLine($"  note: {dExpanded} does not exist (adding anyway)");
+                    Console.Error.WriteLine($"  path add: {dExpanded} does not exist");
                     Console.ResetColor();
+                    continue; // Skip non-existent paths
                 }
                 if (front)
                     entries.Insert(0, dExpanded);
@@ -3983,9 +3993,12 @@ static bool HandlePathCommand(string args, Runspace runspace)
         // Check existence
         if (!Directory.Exists(expandedDir))
         {
+            if (quiet)
+                return false; // Silently skip in init.rush — common for cross-platform configs
             Console.ForegroundColor = Theme.Current.Warning;
-            Console.WriteLine($"  note: {expandedDir} does not exist (adding anyway)");
+            Console.Error.WriteLine($"  path add: {expandedDir} does not exist");
             Console.ResetColor();
+            return true; // Signal failure
         }
 
         // Add to variable
@@ -6359,4 +6372,10 @@ class ShellState
     public System.Management.Automation.PowerShell? RunningPs { get; set; }
 
     public bool IsInteractive => LineEditor != null;
+
+    /// <summary>
+    /// True when running init.rush / startup scripts. Causes path add to silently
+    /// skip non-existent directories (common for cross-platform configs).
+    /// </summary>
+    public bool IsStartupScript { get; set; }
 }
