@@ -462,6 +462,29 @@ else
   puts "FAIL: Dir.list — got #{entries.count}"
 end
 
+# ── 7b. Paths with Spaces ────────────────────────────────────────────
+puts ""
+puts "## 7b. Paths with Spaces"
+
+space_dir = "#{test_dir}/rush test space"
+Dir.mkdir(space_dir)
+File.write("#{space_dir}/hello.txt", "space works")
+
+if Dir.exist?(space_dir)
+  puts "PASS: Dir.mkdir with space in name"
+else
+  puts "FAIL: Dir.mkdir with space in name"
+end
+
+space_content = File.read("#{space_dir}/hello.txt")
+if space_content.strip == "space works"
+  puts "PASS: File.read from spaced path"
+else
+  puts "FAIL: File.read from spaced path"
+end
+
+File.delete("#{space_dir}/hello.txt")
+
 # ── 8. Platform Detection ────────────────────────────────────────────
 puts ""
 puts "## 8. Platform Detection"
