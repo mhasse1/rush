@@ -1201,24 +1201,22 @@ public class BashToRushDocTests
 
     [Fact]
     [Trait("Category", "Unix")]
-    public void Config_PathShow_IsReplOnly()
+    public void Config_PathShow_WorksInDashC()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
-        // "path" is a REPL-only builtin — not available via rush -c
-        var (_, stderr, exitCode) = TestHelper.RunRush("path");
-        Assert.Equal(1, exitCode);
-        Assert.Contains("not found", stderr);
+        // "path" now works in rush -c mode (routed in RunNonInteractive)
+        var (stdout, _, exitCode) = TestHelper.RunRush("path");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("PATH entries", stdout);
     }
 
     [Fact]
     [Trait("Category", "Unix")]
-    public void Config_PathCheck_IsReplOnly()
+    public void Config_PathCheck_WorksInDashC()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
-        // "path check" is a REPL-only builtin — not available via rush -c
-        var (_, stderr, exitCode) = TestHelper.RunRush("path check");
-        Assert.Equal(1, exitCode);
-        Assert.Contains("not found", stderr);
+        // "path check" now works in rush -c mode
+        var (stdout, _, exitCode) = TestHelper.RunRush("path check");
+        Assert.Equal(0, exitCode);
+        Assert.Contains("PATH entries", stdout);
     }
 
     // ══════════════════════════════════════════════════════════════════
