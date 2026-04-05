@@ -5945,25 +5945,79 @@ static void RunNonInteractive(string command)
     var tr = new CommandTranslator(objConfig);
     var scriptEngine = new ScriptEngine(tr);
 
-    // Handle builtins that need to work in -c mode
-    var firstWord = command.Trim().Split(' ', 2)[0].ToLowerInvariant();
-    if (firstWord == "help")
+    // Handle builtins that need to work in -c mode.
+    // These are REPL builtins that don't go through the transpiler.
+    // ProcessCommand can't be used wholesale because it assumes interactive
+    // stdio (native commands inherit the terminal). The -c path needs
+    // captured output via PowerShell Invoke().
+    var trimmedCommand = command.Trim();
+    var firstWord = trimmedCommand.Split(' ', 2)[0].ToLowerInvariant();
+    // Only intercept builtins for standalone commands (no chain operators).
+    // Chained commands (export FOO=bar; puts FOO) go through the normal path.
+    bool isStandalone = !command.Contains(';') && !command.Contains("&&") && !command.Contains("||");
+
+    if (isStandalone && firstWord == "help")
     {
-        var helpArg = command.Trim().Length > 5 ? command.Trim()[5..].Trim() : null;
-        var output = HelpCommand.Execute(helpArg);
-        Console.WriteLine(output);
+        var helpArg = trimmedCommand.Length > 5 ? trimmedCommand[5..].Trim() : null;
+        Console.WriteLine(HelpCommand.Execute(helpArg));
         return;
     }
-    // Only intercept printf when standalone (not piped) — piped printf needs
-    // to flow through the pipeline via native command or PowerShell
-    if (firstWord == "printf" && !CommandTranslator.HasUnquotedPipe(command))
+    if (isStandalone && firstWord == "printf" && !CommandTranslator.HasUnquotedPipe(command))
     {
-        var printfArgs = CommandTranslator.SplitCommandLine(command.Trim()[7..]);
+        var printfArgs = CommandTranslator.SplitCommandLine(trimmedCommand[7..]);
         if (printfArgs.Length >= 1)
         {
             var fmt = StripQuotes(printfArgs[0]);
             var fmtArgs = printfArgs.Skip(1).Select(StripQuotes).ToArray();
             Console.Write(PrintfFormat(fmt, fmtArgs));
+        }
+        return;
+    }
+    if (isStandalone && firstWord == "export" && trimmedCommand.Length > 7)
+    {
+        // export VAR=value → set in both PS and .NET env
+        var exportBody = trimmedCommand[7..].Trim();
+        var eqIdx = exportBody.IndexOf('=');
+        if (eqIdx > 0)
+        {
+            var varName = exportBody[..eqIdx].Trim();
+            var varValue = StripQuotes(exportBody[(eqIdx + 1)..].Trim());
+            Environment.SetEnvironmentVariable(varName, varValue);
+            using var ps = PowerShell.Create();
+            ps.Runspace = rs;
+            ps.AddScript($"$env:{varName} = '{varValue.Replace("'", "''")}'");
+            ps.Invoke();
+        }
+        return;
+    }
+    if (isStandalone && firstWord == "mark")
+    {
+        var label = trimmedCommand.Length > 5 ? trimmedCommand[5..].Trim() : null;
+        if (!string.IsNullOrEmpty(label))
+            label = StripQuotes(label);
+        EmitMark(string.IsNullOrEmpty(label) ? null : label);
+        return;
+    }
+    if (isStandalone && (trimmedCommand == "---" || (trimmedCommand.StartsWith("---") && trimmedCommand.All(c => c == '-'))))
+    {
+        EmitMark(null);
+        return;
+    }
+    if (isStandalone && firstWord == "path")
+    {
+        var pathArgs = trimmedCommand.Length > 4 ? trimmedCommand[4..].Trim() : "";
+        HandlePathCommand(pathArgs, rs);
+        return;
+    }
+    if (isStandalone && firstWord == "alias" && trimmedCommand.Length > 6)
+    {
+        var aliasBody = trimmedCommand[6..].Trim();
+        var eqPos = aliasBody.IndexOf('=');
+        if (eqPos > 0)
+        {
+            var aliasName = aliasBody[..eqPos].Trim();
+            var aliasValue = StripQuotes(aliasBody[(eqPos + 1)..].Trim());
+            tr.RegisterAlias(aliasName, aliasValue);
         }
         return;
     }
