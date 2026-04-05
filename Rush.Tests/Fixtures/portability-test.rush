@@ -634,6 +634,62 @@ else
   puts "FAIL: env var set + access"
 end
 
+# ── 13. Type Conversions ─────────────────────────────────────────────
+puts ""
+puts "## 13. Type Conversions"
+
+if "42".to_i == 42
+  puts "PASS: to_i"
+else
+  puts "FAIL: to_i"
+end
+
+if "3.14".to_f > 3.0
+  puts "PASS: to_f"
+else
+  puts "FAIL: to_f"
+end
+
+if 42.to_s == "42"
+  puts "PASS: to_s"
+else
+  puts "FAIL: to_s"
+end
+
+# ── 14. Additional String Methods ────────────────────────────────────
+puts ""
+puts "## 14. String Methods"
+
+if "hello world".start_with?("hello")
+  puts "PASS: start_with?"
+else
+  puts "FAIL: start_with?"
+end
+
+if "hello world".end_with?("world")
+  puts "PASS: end_with?"
+else
+  puts "FAIL: end_with?"
+end
+
+if "".empty?
+  puts "PASS: empty? true"
+else
+  puts "FAIL: empty? true"
+end
+
+unless "hello".empty?
+  puts "PASS: empty? false"
+else
+  puts "FAIL: empty? false"
+end
+
+if "hello".length == 5
+  puts "PASS: string length"
+else
+  puts "FAIL: string length"
+end
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 ps
   @('RUSH_PT_1','RUSH_PT_2','RUSH_PT_3','RUSH_PT_4','RUSH_PT_ENV_TEST') | ForEach-Object {

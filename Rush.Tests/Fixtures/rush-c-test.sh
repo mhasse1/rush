@@ -253,6 +253,100 @@ else
     fail "path: list" "got $out"
 fi
 
+# ── cd ────────────────────────────────────────────────────────────────
+echo ""
+echo "## cd"
+
+# cd is handled by the chain path, not the standalone builtin intercept
+# Test via chain: cd + pwd in one -c call
+out=$(rc 'cd /tmp && pwd')
+if echo "$out" | grep -q "tmp"; then
+    pass "cd: changes directory"
+else
+    fail "cd: dir" "got $out"
+fi
+
+# cd ~ (home directory)
+out=$(rc 'cd ~ && pwd')
+home_dir=$(eval echo ~)
+if echo "$out" | grep -q "$(basename "$home_dir")"; then
+    pass "cd: ~ expands to home"
+else
+    fail "cd: ~" "got $out"
+fi
+
+# ── alias ─────────────────────────────────────────────────────────────
+echo ""
+echo "## alias"
+
+# Standalone alias creation (no error)
+out=$(rc 'alias g="git"' 2>&1)
+exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "alias: create (no error)"
+else
+    fail "alias: create" "exit $exit_code: $out"
+fi
+
+# ── export + env access ──────────────────────────────────────────────
+echo ""
+echo "## export"
+
+# Export sets env var (standalone)
+out=$(rc 'export RUSH_EXPORT_C_TEST=hello' 2>&1)
+exit_code=$?
+if [[ $exit_code -eq 0 ]]; then
+    pass "export: standalone (no error)"
+else
+    fail "export: standalone" "exit $exit_code: $out"
+fi
+
+# Export + use in chain
+out=$(rc 'export RUSH_CHAIN_TEST=works && echo $env:RUSH_CHAIN_TEST')
+if echo "$out" | grep -q "works"; then
+    pass "export: chain + access"
+else
+    fail "export: chain" "got $out"
+fi
+
+# ── unset ─────────────────────────────────────────────────────────────
+echo ""
+echo "## unset"
+
+out=$(rc 'export RUSH_UNSET_TEST=exists && unset RUSH_UNSET_TEST && echo $env:RUSH_UNSET_TEST' 2>&1)
+# After unset, the var should be empty
+if [[ -z "$out" ]] || echo "$out" | grep -qv "exists"; then
+    pass "unset: removes env var"
+else
+    fail "unset" "got $out"
+fi
+
+# ── set ───────────────────────────────────────────────────────────────
+echo ""
+echo "## set"
+
+# set with no args shows settings (goes through chain path)
+out=$(rc 'set' 2>&1)
+if echo "$out" | grep -qi "edit_mode\|theme\|timing"; then
+    pass "set: shows settings"
+else
+    fail "set: show" "got $(echo "$out" | head -1)"
+fi
+
+# ── sync ──────────────────────────────────────────────────────────────
+echo ""
+echo "## sync"
+
+# sync status should not crash (may show "not configured")
+out=$(rc 'sync status' 2>&1)
+exit_code=$?
+# Accept both success (configured) and error (not configured) — just shouldn't crash
+if [[ $exit_code -le 1 ]]; then
+    pass "sync: status doesn't crash"
+else
+    fail "sync: status" "exit $exit_code"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 rm -f "$TMPFILE"
 

@@ -484,6 +484,50 @@ else
     fail "error: begin/rescue" "got $stdout — $(jf "$result" '.stderr')"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════
+# 14. ENUMS
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 14. Enums"
+
+output=$(llm_session '"enum Color\n  Red\n  Green\n  Blue\nend\nc = Color.Green\nputs c"')
+result=$(json_line "$output" 1)
+stdout=$(jf "$result" '.stdout')
+
+if echo "$stdout" | grep -qi "green"; then
+    pass "enum: definition + access"
+else
+    fail "enum" "got $stdout — $(jf "$result" '.stderr')"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+# 15. PATH-LIKE ENV VAR HANDLING
+# Verify env vars with special characters survive through the pipeline
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 15. Environment Variables"
+
+output=$(llm_session '{"cmd":"$env:RUSH_LLM_TEST = \"hello from llm\"; Write-Output $env:RUSH_LLM_TEST"}')
+result=$(json_line "$output" 1)
+stdout=$(jf "$result" '.stdout')
+
+if [[ "$stdout" == "hello from llm" ]]; then
+    pass "env: set + read via envelope"
+else
+    fail "env" "got $stdout"
+fi
+
+# Env var with special chars
+output=$(llm_session '{"cmd":"$env:RUSH_SPECIAL = \"path/to/file with spaces\"; Write-Output $env:RUSH_SPECIAL"}')
+result=$(json_line "$output" 1)
+stdout=$(jf "$result" '.stdout')
+
+if [[ "$stdout" == "path/to/file with spaces" ]]; then
+    pass "env: special chars in value"
+else
+    fail "env: special" "got $stdout"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 rm -rf "$TEST_DIR"
 
