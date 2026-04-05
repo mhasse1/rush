@@ -46,6 +46,8 @@ BUSTER_SRC='cd C:\src\rush'
 BUSTER_GIT='"C:\Program Files\Git\cmd\git.exe"'
 BUSTER_RUSH='C:/bin/rush.exe'
 
+OCI_RUSH='/usr/local/bin/rush'
+
 STAGING="$SCRIPT_DIR/bin"
 COI_RUSH="$HOME/Resilio/coi/_rush"
 
@@ -225,29 +227,58 @@ phase3_host() {
 
     log "$host: integration tests..."
 
+    local fixtures="$LOCAL_SRC/Rush.Tests/Fixtures"
+
     if [[ "$os" == "linux" ]]; then
-        scp -q "$LOCAL_SRC/Rush.Tests/Fixtures/portability-test.rush" \
-               "$LOCAL_SRC/Rush.Tests/Fixtures/llm-mode-test.sh" \
-               "$LOCAL_SRC/Rush.Tests/Fixtures/mcp-mode-test.sh" \
+        local rush_bin="${OCI_RUSH:-$TRINITY_RUSH}"
+        [[ "$host" == "trinity" ]] && rush_bin="$TRINITY_RUSH"
+        [[ "$host" == "oci" ]] && rush_bin="$OCI_RUSH"
+        scp -q "$fixtures/portability-test.rush" \
+               "$fixtures/pipeline-ops-test.rush" \
+               "$fixtures/builtins-test.rush" \
+               "$fixtures/llm-mode-test.sh" \
+               "$fixtures/mcp-mode-test.sh" \
                "$host:/tmp/" 2>/dev/null
-        ssh "$host" "$TRINITY_RUSH /tmp/portability-test.rush 2>&1; echo '---'; bash /tmp/llm-mode-test.sh $TRINITY_RUSH 2>&1; echo '---'; bash /tmp/mcp-mode-test.sh $TRINITY_RUSH 2>&1" \
+        ssh "$host" "$rush_bin /tmp/portability-test.rush 2>&1
+echo '---'
+$rush_bin /tmp/pipeline-ops-test.rush 2>&1
+echo '---'
+$rush_bin /tmp/builtins-test.rush 2>&1
+echo '---'
+bash /tmp/llm-mode-test.sh $rush_bin 2>&1
+echo '---'
+bash /tmp/mcp-mode-test.sh $rush_bin 2>&1" \
             > "$log_file" 2>&1
     elif [[ "$os" == "windows" ]]; then
         ssh "$host" 'if (-not (Test-Path C:\temp)) { New-Item -ItemType Directory C:\temp -Force | Out-Null }' 2>/dev/null
-        scp -q "$LOCAL_SRC/Rush.Tests/Fixtures/portability-test.rush" \
-               "$LOCAL_SRC/Rush.Tests/Fixtures/llm-mode-test.ps1" \
-               "$LOCAL_SRC/Rush.Tests/Fixtures/mcp-mode-test.ps1" \
+        scp -q "$fixtures/portability-test.rush" \
+               "$fixtures/pipeline-ops-test.rush" \
+               "$fixtures/builtins-test.rush" \
+               "$fixtures/llm-mode-test.ps1" \
+               "$fixtures/mcp-mode-test.ps1" \
                "$host:C:/temp/" 2>/dev/null
-        ssh "$host" "$BUSTER_RUSH C:/temp/portability-test.rush 2>&1; Write-Host '---'; pwsh -ExecutionPolicy Bypass -File C:/temp/llm-mode-test.ps1 -Rush $BUSTER_RUSH 2>&1; Write-Host '---'; pwsh -ExecutionPolicy Bypass -File C:/temp/mcp-mode-test.ps1 -Rush $BUSTER_RUSH 2>&1" \
+        ssh "$host" "$BUSTER_RUSH C:/temp/portability-test.rush 2>&1
+Write-Host '---'
+$BUSTER_RUSH C:/temp/pipeline-ops-test.rush 2>&1
+Write-Host '---'
+$BUSTER_RUSH C:/temp/builtins-test.rush 2>&1
+Write-Host '---'
+pwsh -ExecutionPolicy Bypass -File C:/temp/llm-mode-test.ps1 -Rush $BUSTER_RUSH 2>&1
+Write-Host '---'
+pwsh -ExecutionPolicy Bypass -File C:/temp/mcp-mode-test.ps1 -Rush $BUSTER_RUSH 2>&1" \
             > "$log_file" 2>&1
     elif [[ "$os" == "macos" ]]; then
         (
             cd "$LOCAL_SRC"
-            rush Rush.Tests/Fixtures/portability-test.rush 2>&1
+            rush "$fixtures/portability-test.rush" 2>&1
             echo '---'
-            bash Rush.Tests/Fixtures/llm-mode-test.sh 2>&1
+            rush "$fixtures/pipeline-ops-test.rush" 2>&1
             echo '---'
-            bash Rush.Tests/Fixtures/mcp-mode-test.sh 2>&1
+            rush "$fixtures/builtins-test.rush" 2>&1
+            echo '---'
+            bash "$fixtures/llm-mode-test.sh" 2>&1
+            echo '---'
+            bash "$fixtures/mcp-mode-test.sh" 2>&1
         ) > "$log_file" 2>&1
     fi
 
@@ -272,10 +303,13 @@ phase3() {
     local pid_lin=$!
     phase3_host buster windows &
     local pid_win=$!
+    phase3_host oci linux &
+    local pid_oci=$!
 
     wait $pid_mac
     wait $pid_lin
     wait $pid_win
+    wait $pid_oci
 }
 
 # ── Phase 4: Cross-Platform MCP-SSH ──────────────────────────────────
@@ -287,6 +321,7 @@ phase4() {
     local hosts=()
     check_host trinity && hosts+=(trinity)
     check_host buster && hosts+=(buster)
+    check_host oci && hosts+=(oci)
 
     if [[ ${#hosts[@]} -eq 0 ]]; then
         fail "mcp-ssh" "no remote hosts reachable"
