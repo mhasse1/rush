@@ -119,8 +119,10 @@ for HOST in "${HOSTS[@]}"; do
     resp=$(find_resp "$output" 2)
 
     shell=$(tool_field "$resp" '.shell')
+    is_rush=false
     if [[ "$shell" == "rush" ]]; then
         pass "$HOST context: shell=rush (persistent session)"
+        is_rush=true
     elif [[ "$shell" == "raw" ]]; then
         pass "$HOST context: shell=raw (fallback mode)"
     else
@@ -161,7 +163,9 @@ for HOST in "${HOSTS[@]}"; do
         fail "$HOST execute: stdout" "got $(tool_field "$resp" '.stdout')"
     fi
 
-    # ── 5. Rush syntax ───────────────────────────────────────────
+    # ── Rush-only tests (require persistent session) ────────────
+    if [[ "$is_rush" == true ]]; then
+
     echo ""
     echo "### Rush syntax"
 
@@ -246,6 +250,10 @@ for HOST in "${HOSTS[@]}"; do
         fail "$HOST persistence: cwd" "got $(tool_field "$resp" '.stdout')"
     fi
 
+    fi # end rush-only tests
+
+    # ── Tests that work in both rush and raw-shell modes ─────────
+
     # ── 10. File write + read round-trip ─────────────────────────
     echo ""
     echo "### File transfer: write + read"
@@ -271,10 +279,12 @@ for HOST in "${HOSTS[@]}"; do
         fail "$HOST read_file: content" "got $(tool_field "$resp" '.content')"
     fi
 
-    if [[ "$(tool_field "$resp" '.mime')" == "application/json" ]]; then
-        pass "$HOST read_file: mime=application/json"
-    else
-        fail "$HOST read_file: mime" "got $(tool_field "$resp" '.mime')"
+    if [[ "$is_rush" == true ]]; then
+        if [[ "$(tool_field "$resp" '.mime')" == "application/json" ]]; then
+            pass "$HOST read_file: mime=application/json"
+        else
+            fail "$HOST read_file: mime" "got $(tool_field "$resp" '.mime')"
+        fi
     fi
 
     # ── 11. File append ──────────────────────────────────────────
@@ -320,10 +330,10 @@ for HOST in "${HOSTS[@]}"; do
     fi
 
     # ── 13. exec_script: Rush ────────────────────────────────────
+    if [[ "$is_rush" == true ]]; then
     echo ""
     echo "### exec_script: Rush script"
 
-    # Real-world: push a Rush script that gathers system info
     output=$(mcp_ssh "$INIT_REQ" \
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_exec_script\",\"arguments\":{\"host\":\"$HOST\",\"filename\":\"sysinfo.rush\",\"content\":\"puts \\\"host: #{os}/#{__rush_arch}\\\"\\nputs \\\"version: #{rush_version}\\\"\"}}}")
     resp=$(find_resp "$output" 2)
@@ -332,6 +342,7 @@ for HOST in "${HOSTS[@]}"; do
         pass "$HOST exec_script: Rush sysinfo"
     else
         fail "$HOST exec_script: Rush" "got $(tool_field "$resp" '.stdout') — $(tool_field "$resp" '.stderr')"
+    fi
     fi
 
     # ── 14. exec_script: native script ──────────────────────────
@@ -405,7 +416,9 @@ for HOST in "${HOSTS[@]}"; do
         fail "$HOST error: exit_code" "got 0"
     fi
 
-    # ── 17. PowerShell via ps block ──────────────────────────────
+    # ── Rush-only: ps block and workflow ─────────────────────────
+    if [[ "$is_rush" == true ]]; then
+
     echo ""
     echo "### PowerShell via ps block"
 
@@ -439,6 +452,8 @@ for HOST in "${HOSTS[@]}"; do
     else
         fail "$HOST workflow" "got $stdout — $(tool_field "$resp" '.stderr')"
     fi
+
+    fi # end rush-only ps block + workflow
 
     # ── Cleanup ──────────────────────────────────────────────────
     mcp_ssh "$INIT_REQ" \
