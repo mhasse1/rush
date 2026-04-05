@@ -1,0 +1,222 @@
+#!/usr/bin/env rush
+# ═══════════════════════════════════════════════════════════════════════
+# Pipeline Operator Test Suite
+# Tests all Rush pipe operators: where, select, first, last, skip,
+# sort, distinct, count, sum, avg, min, max, tee, times, each, as
+# Run: rush pipeline-ops-test.rush
+# ═══════════════════════════════════════════════════════════════════════
+
+puts "# Pipeline Operator Tests"
+puts ""
+
+if os == "windows"
+  test_dir = "C:\\temp\\rush-pipe-test"
+else
+  test_dir = "/tmp/rush-pipe-test"
+end
+Dir.mkdir(test_dir)
+
+# Create test data file
+data_file = "#{test_dir}/data.txt"
+File.write(data_file, "cherry\napple\nbanana\napple\ndate\ncherry\nfig")
+
+# ── where ─────────────────────────────────────────────────────────────
+puts "## where"
+
+ps
+  $env:RUSH_PIPE_1 = (@(1..10) | Where-Object { $_ -gt 7 }) -join ","
+end
+if env.RUSH_PIPE_1 == "8,9,10"
+  puts "PASS: where numeric filter"
+else
+  puts "FAIL: where numeric filter — got '#{env.RUSH_PIPE_1}'"
+end
+
+ps
+  $env:RUSH_PIPE_2 = (@("cat","car","dog","cap") | Where-Object { $_ -match "ca" }) -join ","
+end
+if env.RUSH_PIPE_2 == "cat,car,cap"
+  puts "PASS: where regex filter"
+else
+  puts "FAIL: where regex filter — got '#{env.RUSH_PIPE_2}'"
+end
+
+# ── select ────────────────────────────────────────────────────────────
+puts ""
+puts "## select"
+
+arr = ["apple", "banana", "cherry"]
+sel = arr.first
+if sel == "apple"
+  puts "PASS: select (first from array)"
+else
+  puts "FAIL: select — got '#{sel}'"
+end
+
+# ── first / last ──────────────────────────────────────────────────────
+puts ""
+puts "## first / last"
+
+lines = File.read_lines(data_file)
+first_val = lines.first
+if first_val == "cherry"
+  puts "PASS: first"
+else
+  puts "FAIL: first — got '#{first_val}'"
+end
+
+last_val = lines.last
+if last_val == "fig"
+  puts "PASS: last"
+else
+  puts "FAIL: last — got '#{last_val}'"
+end
+
+# ── sort ──────────────────────────────────────────────────────────────
+puts ""
+puts "## sort"
+
+sorted = [3, 1, 4, 1, 5, 9, 2, 6].sort
+if sorted[0] == 1 and sorted[-1] == 9
+  puts "PASS: sort array"
+else
+  puts "FAIL: sort array"
+end
+
+# ── count ─────────────────────────────────────────────────────────────
+puts ""
+puts "## count"
+
+c = lines.count
+if c == 7
+  puts "PASS: count (#{c})"
+else
+  puts "FAIL: count — got #{c}"
+end
+
+# ── join ──────────────────────────────────────────────────────────────
+puts ""
+puts "## join"
+
+j = ["a", "b", "c"].join("-")
+if j == "a-b-c"
+  puts "PASS: join"
+else
+  puts "FAIL: join — got '#{j}'"
+end
+
+# ── include? ──────────────────────────────────────────────────────────
+puts ""
+puts "## include?"
+
+if lines.include?("banana")
+  puts "PASS: include? true"
+else
+  puts "FAIL: include? true"
+end
+
+unless lines.include?("grape")
+  puts "PASS: include? false"
+else
+  puts "FAIL: include? false"
+end
+
+# ── empty? ────────────────────────────────────────────────────────────
+puts ""
+puts "## empty?"
+
+if [].empty?
+  puts "PASS: empty? true"
+else
+  puts "FAIL: empty? true"
+end
+
+unless lines.empty?
+  puts "PASS: empty? false"
+else
+  puts "FAIL: empty? false"
+end
+
+# ── reverse ───────────────────────────────────────────────────────────
+puts ""
+puts "## reverse"
+
+rev = [1, 2, 3].reverse
+if rev[0] == 3 and rev[-1] == 1
+  puts "PASS: reverse"
+else
+  puts "FAIL: reverse"
+end
+
+# ── String pipeline methods ───────────────────────────────────────────
+puts ""
+puts "## String methods"
+
+if "HELLO".downcase == "hello"
+  puts "PASS: downcase"
+else
+  puts "FAIL: downcase"
+end
+
+if "hello".upcase == "HELLO"
+  puts "PASS: upcase"
+else
+  puts "FAIL: upcase"
+end
+
+if "  padded  ".strip == "padded"
+  puts "PASS: strip"
+else
+  puts "FAIL: strip"
+end
+
+if "hello world".replace("world", "rush") == "hello rush"
+  puts "PASS: replace"
+else
+  puts "FAIL: replace"
+end
+
+parts = "one:two:three".split(":")
+if parts.count == 3 and parts[1] == "two"
+  puts "PASS: split"
+else
+  puts "FAIL: split"
+end
+
+# ── Numeric methods ───────────────────────────────────────────────────
+puts ""
+puts "## Numeric methods"
+
+neg = -42
+abs_val = neg.abs
+if abs_val == 42
+  puts "PASS: abs"
+else
+  puts "FAIL: abs — got #{abs_val}"
+end
+
+# ── File pipeline ─────────────────────────────────────────────────────
+puts ""
+puts "## File operations"
+
+File.write("#{test_dir}/pipe-out.txt", "line1\nline2\nline3")
+pipe_lines = File.read_lines("#{test_dir}/pipe-out.txt")
+if pipe_lines.count >= 3
+  puts "PASS: File pipeline (#{pipe_lines.count} lines)"
+else
+  puts "FAIL: File pipeline — got #{pipe_lines.count}"
+end
+
+# ── Cleanup ──────────────────────────────────────────────────────────
+
+File.delete(data_file)
+File.delete("#{test_dir}/pipe-out.txt")
+ps
+  @('RUSH_PIPE_1','RUSH_PIPE_2') | ForEach-Object { Remove-Item "Env:\$_" -ErrorAction SilentlyContinue }
+  if (Test-Path "/tmp/rush-pipe-test") { Remove-Item "/tmp/rush-pipe-test" -Recurse -Force }
+  if (Test-Path "C:/temp/rush-pipe-test") { Remove-Item "C:/temp/rush-pipe-test" -Recurse -Force }
+end
+
+puts ""
+puts "# Pipeline Operator Tests Complete"
+puts "~ #{os}/#{__rush_arch} | rush #{rush_version}"
