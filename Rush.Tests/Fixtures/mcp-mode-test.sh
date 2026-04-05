@@ -365,6 +365,120 @@ else
     fail "state: variable persistence" "got $(tool_field "$persist_resp" '.stdout')"
 fi
 
+# ── 9. Real-world: multi-step file workflow ──────────────────────────
+echo ""
+echo "## 9. File workflow"
+
+# Write a JSON config, read it back, execute Rush code that uses it
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"command\":\"File.write(\\\"$TEST_DIR/app.json\\\", '{\\\"name\\\":\\\"myapp\\\",\\\"port\\\":3000}')\"}}}")
+resp=$(json_line "$output" 2)
+
+if [ "$(tool_field "$resp" '.status')" = "success" ]; then
+    pass "workflow: write config"
+else
+    fail "workflow: write config" "$(tool_field "$resp" '.stderr')"
+fi
+
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_read_file\",\"arguments\":{\"path\":\"$TEST_DIR/app.json\"}}}")
+resp=$(json_line "$output" 2)
+
+if tool_field "$resp" '.content' | grep -q "myapp"; then
+    pass "workflow: read config back"
+else
+    fail "workflow: read config" "got $(tool_field "$resp" '.content')"
+fi
+
+# ── 10. Rush syntax: loops and functions ─────────────────────────────
+echo ""
+echo "## 10. Rush syntax via MCP"
+
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"total = 0\nfor i in [10, 20, 30]\n  total = total + i\nend\nputs total"}}}')
+resp=$(json_line "$output" 2)
+
+if [ "$(tool_field "$resp" '.stdout')" = "60" ]; then
+    pass "Rush: for loop via MCP"
+else
+    fail "Rush: for loop" "got $(tool_field "$resp" '.stdout')"
+fi
+
+# Array operations
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"names = [\"charlie\", \"alice\", \"bob\"]\nputs names.sort.join(\", \")"}}}')
+resp=$(json_line "$output" 2)
+
+if tool_field "$resp" '.stdout' | grep -q "alice, bob, charlie"; then
+    pass "Rush: array sort + join via MCP"
+else
+    fail "Rush: array sort" "got $(tool_field "$resp" '.stdout')"
+fi
+
+# ── 11. CWD persistence ─────────────────────────────────────────────
+echo ""
+echo "## 11. CWD Persistence"
+
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"command\":\"cd $TEST_DIR\"}}}" \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"puts Dir.exist?(\".\")"}}}')
+resp=$(json_line "$output" 3)
+
+if [ "$(tool_field "$resp" '.status')" = "success" ]; then
+    pass "cwd: persists across calls"
+else
+    fail "cwd: persistence" "$(tool_field "$resp" '.stderr')"
+fi
+
+# ── 12. Error details ───────────────────────────────────────────────
+echo ""
+echo "## 12. Error details"
+
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"nonexistent_command_xyz"}}}')
+resp=$(json_line "$output" 2)
+
+if [ "$(tool_field "$resp" '.exit_code')" != "0" ]; then
+    pass "error: exit_code != 0"
+else
+    fail "error: exit_code" "got 0"
+fi
+
+if [ "$(jf "$resp" '.result.isError')" = "true" ]; then
+    pass "error: isError=true"
+else
+    fail "error: isError" "got $(jf "$resp" '.result.isError')"
+fi
+
+stderr=$(tool_field "$resp" '.stderr')
+if [ -n "$stderr" ] && [ "$stderr" != "null" ]; then
+    pass "error: stderr has message"
+else
+    fail "error: stderr" "empty"
+fi
+
+# ── 13. Platform detection via MCP ───────────────────────────────────
+echo ""
+echo "## 13. Platform detection"
+
+output=$(mcp_session \
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}' \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"puts \"#{os}/#{__rush_arch}\""}}}')
+resp=$(json_line "$output" 2)
+platform=$(tool_field "$resp" '.stdout')
+
+if echo "$platform" | grep -qE "^(macos|linux|windows)/(x64|arm64)$"; then
+    pass "platform: $platform"
+else
+    fail "platform" "got $platform"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 rm -rf "$TEST_DIR"
 
