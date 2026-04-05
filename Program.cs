@@ -2575,6 +2575,13 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
             var accumulated = new System.Text.StringBuilder();
             System.Text.StringBuilder? pathBlock = null; // accumulates path add...end / path rm...end
 
+            // Platform block state: when inside a win64/macos/linux/isssh block in init.rush,
+            // we process the body lines through ProcessCommand (not the transpiler) so that
+            // builtins like path, export, alias, cd work correctly.
+            bool inPlatformBlock = false;
+            bool platformActive = false; // true if the platform matches this OS
+            int platformDepth = 0;
+
             foreach (var rawLine in lines)
             {
                 var trimmed = rawLine.TrimStart();
@@ -2586,18 +2593,78 @@ static void RunStartupRushFile(Runspace runspace, ScriptEngine engine, string fi
                     continue;
                 }
 
+                // ── Platform block handling (win64/macos/linux/isssh...end) ──
+                if (inPlatformBlock)
+                {
+                    if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+                    {
+                        platformDepth--;
+                        if (platformDepth <= 0)
+                        {
+                            inPlatformBlock = false;
+                            platformActive = false;
+                            continue;
+                        }
+                    }
+                    // Track nested blocks inside platform blocks
+                    if (engine.IsRushSyntax(trimmed) && engine.IsIncomplete(trimmed))
+                        platformDepth++;
+
+                    if (platformActive)
+                    {
+                        // Execute the line through ProcessCommand so builtins work
+                        if (IsPathBlock(trimmed))
+                        {
+                            pathBlock = new System.Text.StringBuilder(trimmed);
+                        }
+                        else if (pathBlock != null)
+                        {
+                            pathBlock.AppendLine().Append(trimmed);
+                            if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var fullCmd = pathBlock.ToString();
+                                pathBlock = null;
+                                var pathArgs = fullCmd.Length > 5 ? fullCmd[5..] : "";
+                                HandlePathCommand(pathArgs, state.Runspace, quiet: true);
+                            }
+                        }
+                        else
+                        {
+                            ProcessCommand(trimmed, state);
+                        }
+                    }
+                    continue;
+                }
+
+                // Detect platform block start
+                var platformKeyword = trimmed.ToLowerInvariant();
+                if (platformKeyword is "win64" or "macos" or "linux" or "isssh" or "win32")
+                {
+                    inPlatformBlock = true;
+                    platformDepth = 1;
+                    var currentOs = RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? "macos" :
+                        RuntimeInformation.IsOSPlatform(OSPlatform.Linux) ? "linux" : "windows";
+                    platformActive = platformKeyword switch
+                    {
+                        "win64" => currentOs == "windows",
+                        "win32" => currentOs == "windows",
+                        "macos" => currentOs == "macos",
+                        "linux" => currentOs == "linux",
+                        "isssh" => !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SSH_CLIENT"))
+                            || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("SSH_TTY")),
+                        _ => false
+                    };
+                    continue;
+                }
+
                 // ── Path block accumulation ──────────────────────────
                 if (pathBlock != null)
                 {
                     pathBlock.AppendLine().Append(trimmed);
                     if (trimmed.Equals("end", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Dispatch the complete path block
                         var fullCmd = pathBlock.ToString();
                         pathBlock = null;
-                        // Strip "path " prefix for HandlePathCommand
-                        // quiet: true — init.rush commonly has cross-platform paths
-                        // that only exist on one OS; silently skip missing ones
                         var pathArgs = fullCmd.Length > 5 ? fullCmd[5..] : "";
                         HandlePathCommand(pathArgs, state.Runspace, quiet: true);
                     }
