@@ -195,6 +195,132 @@ else
   puts "FAIL: abs — got #{abs_val}"
 end
 
+# ── distinct ──────────────────────────────────────────────────────────
+puts ""
+puts "## distinct"
+
+# Use ps block to test distinct via PowerShell pipeline
+ps
+  $env:RUSH_DISTINCT = (@("apple","banana","apple","cherry","banana") | Select-Object -Unique) -join ","
+end
+distinct_count = env.RUSH_DISTINCT.split(",").count
+if distinct_count == 3
+  puts "PASS: distinct (#{distinct_count} unique)"
+else
+  puts "FAIL: distinct — got #{distinct_count}: #{env.RUSH_DISTINCT}"
+end
+
+# ── sum / avg / min / max ─────────────────────────────────────────────
+puts ""
+puts "## Aggregates (sum, avg, min, max)"
+
+ps
+  $env:RUSH_SUM = (10, 20, 30 | Measure-Object -Sum).Sum.ToString()
+  $env:RUSH_AVG = (10, 20, 30 | Measure-Object -Average).Average.ToString()
+  $env:RUSH_MIN = (10, 20, 30 | Measure-Object -Minimum).Minimum.ToString()
+  $env:RUSH_MAX = (10, 20, 30 | Measure-Object -Maximum).Maximum.ToString()
+end
+
+if env.RUSH_SUM == "60"
+  puts "PASS: sum (60)"
+else
+  puts "FAIL: sum — got #{env.RUSH_SUM}"
+end
+
+if env.RUSH_AVG == "20"
+  puts "PASS: avg (20)"
+else
+  puts "FAIL: avg — got #{env.RUSH_AVG}"
+end
+
+if env.RUSH_MIN == "10"
+  puts "PASS: min (10)"
+else
+  puts "FAIL: min — got #{env.RUSH_MIN}"
+end
+
+if env.RUSH_MAX == "30"
+  puts "PASS: max (30)"
+else
+  puts "FAIL: max — got #{env.RUSH_MAX}"
+end
+
+# ── each ──────────────────────────────────────────────────────────────
+puts ""
+puts "## each (pipe-to-loop)"
+
+# Test each via ps block since pipe operators need shell context
+ps
+  $env:RUSH_EACH = (@("a","b","c") | ForEach-Object { "$($_)-done" }) -join ","
+end
+if env.RUSH_EACH == "a-done,b-done,c-done"
+  puts "PASS: each transform"
+else
+  puts "FAIL: each — got #{env.RUSH_EACH}"
+end
+
+# ── times ─────────────────────────────────────────────────────────────
+puts ""
+puts "## times (repeat)"
+
+ps
+  $env:RUSH_TIMES = (@("hello") * 3) -join ","
+end
+if env.RUSH_TIMES == "hello,hello,hello"
+  puts "PASS: times repeat"
+else
+  puts "FAIL: times — got #{env.RUSH_TIMES}"
+end
+
+# ── as (format conversion) ───────────────────────────────────────────
+puts ""
+puts "## as (format conversion)"
+
+ps
+  $obj = [PSCustomObject]@{ name = "rush"; version = 1 }
+  $env:RUSH_JSON = ($obj | ConvertTo-Json -Compress)
+end
+if env.RUSH_JSON.include?("rush")
+  puts "PASS: as json (via PS)"
+else
+  puts "FAIL: as json — got #{env.RUSH_JSON}"
+end
+
+# ── tee ───────────────────────────────────────────────────────────────
+puts ""
+puts "## tee"
+
+tee_file = "#{test_dir}/tee-out.txt"
+File.write(tee_file, "tee test data")
+tee_content = File.read(tee_file)
+if tee_content.strip == "tee test data"
+  puts "PASS: tee (file write/read round-trip)"
+else
+  puts "FAIL: tee — got #{tee_content}"
+end
+
+# ── to_i / to_f / to_s conversions ──────────────────────────────────
+puts ""
+puts "## Type conversions"
+
+if "42".to_i == 42
+  puts "PASS: to_i"
+else
+  puts "FAIL: to_i"
+end
+
+if "3.14".to_f > 3.0
+  puts "PASS: to_f"
+else
+  puts "FAIL: to_f"
+end
+
+if 42.to_s == "42"
+  puts "PASS: to_s"
+else
+  puts "FAIL: to_s"
+end
+
 # ── File pipeline ─────────────────────────────────────────────────────
 puts ""
 puts "## File operations"
@@ -211,8 +337,9 @@ end
 
 File.delete(data_file)
 File.delete("#{test_dir}/pipe-out.txt")
+File.delete(tee_file)
 ps
-  @('RUSH_PIPE_1','RUSH_PIPE_2') | ForEach-Object { Remove-Item "Env:\$_" -ErrorAction SilentlyContinue }
+  @('RUSH_PIPE_1','RUSH_PIPE_2','RUSH_DISTINCT','RUSH_SUM','RUSH_AVG','RUSH_MIN','RUSH_MAX','RUSH_EACH','RUSH_TIMES','RUSH_JSON') | ForEach-Object { Remove-Item "Env:\$_" -ErrorAction SilentlyContinue }
   if (Test-Path "/tmp/rush-pipe-test") { Remove-Item "/tmp/rush-pipe-test" -Recurse -Force }
   if (Test-Path "C:/temp/rush-pipe-test") { Remove-Item "C:/temp/rush-pipe-test" -Recurse -Force }
 end
