@@ -5954,6 +5954,17 @@ static void RunNonInteractive(string command)
         Console.WriteLine(output);
         return;
     }
+    if (firstWord == "printf")
+    {
+        var printfArgs = CommandTranslator.SplitCommandLine(command.Trim()[7..]);
+        if (printfArgs.Length >= 1)
+        {
+            var fmt = StripQuotes(printfArgs[0]);
+            var fmtArgs = printfArgs.Skip(1).Select(StripQuotes).ToArray();
+            Console.Write(PrintfFormat(fmt, fmtArgs));
+        }
+        return;
+    }
 
     // Check if the command contains Rush scripting syntax (multi-line blocks,
     // method chaining, assignments, etc.). If so, route through the transpiler

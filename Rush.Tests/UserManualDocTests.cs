@@ -298,7 +298,8 @@ public class UserManualDocTests
     [Fact]
     public void Shell_Chain_AndAnd()
     {
-        var (stdout, _, exitCode) = TestHelper.RunRush("true && echo ok");
+        // Use echo (works everywhere) instead of true (not on Windows without coreutils)
+        var (stdout, _, exitCode) = TestHelper.RunRush("echo first && echo ok");
         Assert.Equal(0, exitCode);
         Assert.Contains("ok", stdout);
     }
@@ -306,7 +307,8 @@ public class UserManualDocTests
     [Fact]
     public void Shell_Chain_OrOr()
     {
-        var (stdout, _, _) = TestHelper.RunRush("false || echo failed");
+        // Use a command that fails cross-platform
+        var (stdout, _, _) = TestHelper.RunRush("command_nonexistent_xyz 2>/dev/null || echo failed");
         Assert.Contains("failed", stdout);
     }
 
