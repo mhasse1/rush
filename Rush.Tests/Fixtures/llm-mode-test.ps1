@@ -258,6 +258,55 @@ $result = Parse-Json $lines[1]
 
 if ("$($result.stdout)" -match "windows") { Pass "platform: os=windows" } else { Fail "platform: os" "got $($result.stdout)" }
 
+# ── 14. ps5 Variable Bridging (#132) ──────────────────────���──────────
+Write-Host ""
+Write-Host "## 14. ps5 Variable Bridging"
+
+# Set a Rush variable, then verify it's accessible inside a ps5 block
+# The ps5 block runs in a separate powershell.exe process — variables
+# are bridged via JSON temp file (db8f783)
+$lines = Invoke-LlmSession @(
+    'test_bridge = "bridged_value"',
+    '"ps5\n  $env:RUSH_PS5_BRIDGE = $test_bridge\nend"',
+    'puts env.RUSH_PS5_BRIDGE'
+)
+$result = Parse-Json $lines[5]
+
+if ("$($result.stdout)" -match "bridged_value") {
+    Pass "ps5 bridge: Rush var accessible in ps5 block"
+} else {
+    Fail "ps5 bridge" "got $($result.stdout)"
+}
+
+# Bridge numeric value
+$lines = Invoke-LlmSession @(
+    'num_val = 42',
+    '"ps5\n  $env:RUSH_PS5_NUM = $num_val.ToString()\nend"',
+    'puts env.RUSH_PS5_NUM'
+)
+$result = Parse-Json $lines[5]
+
+if ("$($result.stdout)" -eq "42") {
+    Pass "ps5 bridge: numeric value"
+} else {
+    Fail "ps5 bridge: numeric" "got $($result.stdout)"
+}
+
+# ── 15. UNC Path Translation (#133) ──────────────────────────────────
+Write-Host ""
+Write-Host "## 15. UNC Path Translation"
+
+# Test that //server/share syntax is understood
+# We can't test with a real share, but we can verify the path doesn't crash
+$lines = Invoke-LlmSession @('puts "//server/share/path"')
+$result = Parse-Json $lines[1]
+
+if ("$($result.stdout)" -match "//server/share/path") {
+    Pass "UNC: string with // path"
+} else {
+    Fail "UNC: string" "got $($result.stdout)"
+}
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 Remove-Item -Recurse -Force $TestDir -ErrorAction SilentlyContinue
 
