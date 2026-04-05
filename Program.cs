@@ -5952,9 +5952,11 @@ static void RunNonInteractive(string command)
     // captured output via PowerShell Invoke().
     var trimmedCommand = command.Trim();
     var firstWord = trimmedCommand.Split(' ', 2)[0].ToLowerInvariant();
-    // Only intercept builtins for standalone commands (no chain operators).
-    // Chained commands (export FOO=bar; puts FOO) go through the normal path.
-    bool isStandalone = !command.Contains(';') && !command.Contains("&&") && !command.Contains("||");
+    // Only intercept builtins for standalone single-line commands.
+    // Chained (;, &&, ||) and multi-line commands go through the normal path
+    // which handles export, cd, etc. via the transpiler or chain splitting.
+    bool isStandalone = !command.Contains(';') && !command.Contains("&&")
+        && !command.Contains("||") && !command.Contains('\n');
 
     if (isStandalone && firstWord == "help")
     {
