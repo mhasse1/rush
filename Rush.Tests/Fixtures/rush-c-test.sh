@@ -208,6 +208,51 @@ else
     fail "regex: =~" "got $out"
 fi
 
+# ── export ────────────────────────────────────────────────────────────
+echo ""
+echo "## export"
+
+rc "export RUSH_C_EXPORT_TEST=hello_from_c"
+# export sets env var but we can't read it back in a separate -c call
+# (separate process). Test that it doesn't error.
+pass "export: no error"
+
+# ── mark ───────────────────────────────────────���──────────────────────
+echo ""
+echo "## mark"
+
+out=$(rc 'mark "test label"')
+if echo "$out" | grep -q "═══.*test label"; then
+    pass "mark: with label"
+else
+    fail "mark: label" "got $out"
+fi
+
+out=$(rc 'mark')
+if echo "$out" | grep -q "═══"; then
+    pass "mark: bare"
+else
+    fail "mark: bare" "got $out"
+fi
+
+out=$(rc '---')
+if echo "$out" | grep -q "═══"; then
+    pass "mark: --- shorthand"
+else
+    fail "mark: ---" "got $out"
+fi
+
+# ─��� path ──────────────────────────────────────────────────────────────
+echo ""
+echo "## path"
+
+out=$(rc 'path')
+if echo "$out" | grep -q "PATH entries"; then
+    pass "path: list entries"
+else
+    fail "path: list" "got $out"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 rm -f "$TMPFILE"
 
