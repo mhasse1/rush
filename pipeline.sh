@@ -21,6 +21,7 @@
 #   rocinante  macOS/arm64   ~/src/rush           local
 #   trinity    Linux/x64     ~/src/rush            ssh
 #   buster     Windows/x64   C:\src\rush           ssh
+#   oci        Linux/arm64   (deploy only)         ssh (humanfirsttalent.com)
 # ═══════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -420,10 +421,20 @@ phase6() {
             || fail "buster" "install failed"
     fi
 
+    # OCI (Oracle Cloud — Linux ARM64)
+    if check_host oci && [[ -f "$STAGING/rush-linux-arm64" ]]; then
+        log "Deploying to oci (prod01)..."
+        scp -q "$STAGING/rush-linux-arm64" oci:/tmp/rush-new
+        ssh oci "sudo cp /tmp/rush-new /usr/local/bin/rush && sudo chmod +x /usr/local/bin/rush" 2>/dev/null \
+            && pass "oci: deployed ($(ssh oci '/usr/local/bin/rush --version' 2>/dev/null))" \
+            || fail "oci" "install failed"
+    fi
+
     # COI Resilio staging
     if [[ -d "$COI_RUSH" ]]; then
         log "Updating COI Resilio staging..."
         cp "$STAGING/rush-linux-x64" "$COI_RUSH/" 2>/dev/null
+        cp "$STAGING/rush-linux-arm64" "$COI_RUSH/" 2>/dev/null
         cp "$STAGING/rush-osx-arm64" "$COI_RUSH/rush_arm64" 2>/dev/null
         cp "$STAGING/rush-win-x64.exe" "$COI_RUSH/rush_x64.exe" "$COI_RUSH/rush.exe" 2>/dev/null
         cp "$STAGING/rush-win-arm64.exe" "$COI_RUSH/rush_arm64.exe" 2>/dev/null
