@@ -5954,7 +5954,9 @@ static void RunNonInteractive(string command)
         Console.WriteLine(output);
         return;
     }
-    if (firstWord == "printf")
+    // Only intercept printf when standalone (not piped) — piped printf needs
+    // to flow through the pipeline via native command or PowerShell
+    if (firstWord == "printf" && !CommandTranslator.HasUnquotedPipe(command))
     {
         var printfArgs = CommandTranslator.SplitCommandLine(command.Trim()[7..]);
         if (printfArgs.Length >= 1)
