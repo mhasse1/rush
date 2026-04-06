@@ -236,7 +236,19 @@ public class RushTranspiler
         // named parameters and assigns them to properties.
         if (node.Constructor == null && node.Attributes.Count > 0)
         {
-            // Auto-generate constructor from attr declarations
+            // Auto-generate constructor(s) from attr declarations.
+            // If any attrs have defaults, generate both a parameterless constructor
+            // (uses defaults) and a full-params constructor (overrides defaults).
+            var hasDefaults = node.Attributes.Any(a => a.DefaultValue != null);
+
+            if (hasDefaults)
+            {
+                // Parameterless constructor — uses attr default values (already set in property declarations)
+                sb.AppendLine();
+                sb.AppendLine($"  {node.Name}() {{}}");
+            }
+
+            // Full-params constructor — takes all attrs
             var paramList = string.Join(", ",
                 node.Attributes.Select(a => $"[object]${CapitalizeProperty(a.Name)}"));
             sb.AppendLine();
