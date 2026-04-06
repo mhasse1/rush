@@ -239,6 +239,10 @@ phase3_host() {
                "$fixtures/llm-mode-test.sh" \
                "$fixtures/mcp-mode-test.sh" \
                "$host:/tmp/" 2>/dev/null
+        scp -q "$fixtures/llm-advanced-test.sh" \
+               "$fixtures/advanced-features-test.sh" \
+               "$fixtures/rush-c-test.sh" \
+               "$host:/tmp/" 2>/dev/null
         ssh "$host" "$rush_bin /tmp/portability-test.rush 2>&1
 echo '---'
 $rush_bin /tmp/pipeline-ops-test.rush 2>&1
@@ -247,7 +251,13 @@ $rush_bin /tmp/builtins-test.rush 2>&1
 echo '---'
 bash /tmp/llm-mode-test.sh $rush_bin 2>&1
 echo '---'
-bash /tmp/mcp-mode-test.sh $rush_bin 2>&1" \
+bash /tmp/llm-advanced-test.sh $rush_bin 2>&1
+echo '---'
+bash /tmp/mcp-mode-test.sh $rush_bin 2>&1
+echo '---'
+bash /tmp/advanced-features-test.sh $rush_bin 2>&1
+echo '---'
+bash /tmp/rush-c-test.sh $rush_bin 2>&1" \
             > "$log_file" 2>&1
     elif [[ "$os" == "windows" ]]; then
         ssh "$host" 'if (-not (Test-Path C:\temp)) { New-Item -ItemType Directory C:\temp -Force | Out-Null }' 2>/dev/null
@@ -267,6 +277,11 @@ pwsh -ExecutionPolicy Bypass -File C:/temp/llm-mode-test.ps1 -Rush $BUSTER_RUSH 
 Write-Host '---'
 pwsh -ExecutionPolicy Bypass -File C:/temp/mcp-mode-test.ps1 -Rush $BUSTER_RUSH 2>&1" \
             > "$log_file" 2>&1
+
+        # Windows-specific verification tests (run from local via MCP-SSH)
+        log "$host: Windows verification tests..."
+        bash "$fixtures/windows-verify-test.sh" "$host" >> "$log_file" 2>&1
+        bash "$fixtures/ps5-bridge-test.sh" "$host" >> "$log_file" 2>&1
     elif [[ "$os" == "macos" ]]; then
         (
             cd "$LOCAL_SRC"
@@ -278,7 +293,13 @@ pwsh -ExecutionPolicy Bypass -File C:/temp/mcp-mode-test.ps1 -Rush $BUSTER_RUSH 
             echo '---'
             bash "$fixtures/llm-mode-test.sh" 2>&1
             echo '---'
+            bash "$fixtures/llm-advanced-test.sh" 2>&1
+            echo '---'
             bash "$fixtures/mcp-mode-test.sh" 2>&1
+            echo '---'
+            bash "$fixtures/advanced-features-test.sh" 2>&1
+            echo '---'
+            bash "$fixtures/rush-c-test.sh" 2>&1
         ) > "$log_file" 2>&1
     fi
 
