@@ -2818,10 +2818,18 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
         winPs.Invoke();
     }
 
-    // Inject __rush_win32 and __rush_ps5 helper functions
-    // Both use JSON variable bridging to pass Rush variables into the child PS process.
-    // __rush_win32: targets 32-bit PS 5.1 (SysWOW64) for win32 platform blocks
-    // __rush_ps5:   targets 64-bit PS 5.1 (System32) for ps5 blocks
+    // Inject __rush_win32, __rush_ps5, __rush_puts helper functions
+    InjectPsHelpers(runspace);
+}
+
+/// <summary>
+/// Inject __rush_win32, __rush_ps5, and __rush_puts helper functions.
+/// Called from both interactive startup and RunScriptFile.
+/// </summary>
+static void InjectPsHelpers(Runspace runspace)
+{
+    // __rush_win32: 32-bit PS 5.1 (SysWOW64) for win32 platform blocks
+    // __rush_ps5:   64-bit PS 5.1 (System32) for ps5 blocks
     using var ps2 = PowerShell.Create();
     ps2.Runspace = runspace;
     if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -3205,6 +3213,13 @@ static void RunScriptFile(string path, string[] scriptArgs)
 
         // Inject Rush environment variables and helper functions
         InjectRushEnvVars(runspace, RushVersion.Full, false);
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            ShimCoreutilsIfNeeded(runspace, quiet: true);
+            ShimDiffutilsIfNeeded(runspace, quiet: true);
+        }
+        // Inject __rush_win32, __rush_ps5, __rush_puts (same as interactive startup)
+        InjectPsHelpers(runspace);
 
         // Inject script-specific variables: ARGV, __FILE__, __DIR__
         {
