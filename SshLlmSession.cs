@@ -64,7 +64,14 @@ internal class SshLlmSession : IDisposable
         // On any host, try to discover rush via where/which and use the full path
         var discoveredPath = DiscoverRushPath(host);
         if (discoveredPath != null)
-            commands.Insert(0, $"{discoveredPath} --llm");
+        {
+            // Wrap in PS single quotes if path has backslashes (Windows) —
+            // prevents PS 5.1 from interpreting \b \n etc. as escape sequences
+            if (discoveredPath.Contains('\\'))
+                commands.Insert(0, $"& '{discoveredPath}' --llm");
+            else
+                commands.Insert(0, $"{discoveredPath} --llm");
+        }
 
         foreach (var cmd in commands)
         {
