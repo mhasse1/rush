@@ -660,11 +660,12 @@ if os == "windows"
     puts "FAIL: $PATH missing colon separators"
   end
 
-  # Should NOT contain backslashes (those are native, not Rush)
-  unless $PATH.include?("\\")
-    puts "PASS: $PATH has no backslashes"
+  # Should NOT contain path-separator backslashes like C:\Windows
+  # Escaped spaces (\ ) are expected and correct
+  if $PATH =~ /\\[A-Za-z0-9]/
+    puts "FAIL: $PATH contains path-separator backslashes"
   else
-    puts "FAIL: $PATH contains backslashes"
+    puts "PASS: $PATH no path-separator backslashes"
   end
 else
   # Unix: $PATH should contain colon separators
