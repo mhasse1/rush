@@ -2816,12 +2816,24 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
         {
             try
             {
-                Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.User);
+                // Set as Machine (system-wide) so all users + SSH sessions see it
+                Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.Machine);
                 Console.ForegroundColor = ConsoleColor.DarkGray;
                 Console.WriteLine($"  RUSHPATH set to {exePath}");
                 Console.ResetColor();
             }
-            catch { /* best effort — may not have permission */ }
+            catch
+            {
+                // Machine scope requires admin — fall back to User scope
+                try
+                {
+                    Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.User);
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.WriteLine($"  RUSHPATH set to {exePath} (user scope)");
+                    Console.ResetColor();
+                }
+                catch { /* best effort */ }
+            }
         }
     }
 
