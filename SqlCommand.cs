@@ -43,6 +43,44 @@ public static class SqlCommand
             // Strip "sql " prefix
             var argsStr = input.Length > 3 ? input[3..].TrimStart() : "";
 
+            // Handle subcommands (add, list, test, remove) — same as interactive
+            var firstWord = argsStr.Split(' ', 2)[0].ToLowerInvariant();
+            switch (firstWord)
+            {
+                case "add":
+                {
+                    var ok = HandleAdd(argsStr.Length > 3 ? argsStr[3..].TrimStart() : "");
+                    return new LlmResult
+                    {
+                        Status = ok ? "success" : "error",
+                        ExitCode = ok ? 0 : 1,
+                        Cwd = cwd,
+                        Stdout = ok ? "connection added" : null,
+                        DurationMs = sw.ElapsedMilliseconds
+                    };
+                }
+                case "list":
+                {
+                    var config = SqlConnectionConfig.Load();
+                    var connections = config.Connections;
+                    if (connections.Count == 0)
+                        return new LlmResult { Status = "success", ExitCode = 0, Cwd = cwd,
+                            Stdout = "no connections configured", DurationMs = sw.ElapsedMilliseconds };
+                    var list = connections.Select(c => new { name = c.Key, driver = c.Value.Driver, path = c.Value.Path, host = c.Value.Host }).ToList();
+                    return new LlmResult { Status = "success", ExitCode = 0, Cwd = cwd,
+                        Stdout = list, StdoutType = "json/rows", DurationMs = sw.ElapsedMilliseconds };
+                }
+                case "test":
+                case "remove":
+                {
+                    // Route through the interactive handler (uses Console output)
+                    var ok = ExecuteInternal(argsStr, forLlm: false);
+                    return new LlmResult { Status = ok ? "success" : "error",
+                        ExitCode = ok ? 0 : 1, Cwd = cwd, DurationMs = sw.ElapsedMilliseconds };
+                }
+            }
+
+            // Query execution
             var (opts, remaining) = ParseOptions(argsStr);
             opts.OutputFormat = OutputFormat.Json; // force JSON in LLM mode
 

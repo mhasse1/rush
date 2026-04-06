@@ -48,16 +48,16 @@ else
     fail "sql: database" "file not created"
 fi
 
-# Test sql command via LLM mode (add + query in same session)
-output=$(llm "sql add test sqlite://$DB_FILE" 'sql @test "SELECT name FROM users WHERE id = 2"' 'sql @test "SELECT COUNT(*) as total FROM users"')
+# Test sql command via LLM mode
+# Use named connection with proper --driver --path syntax
+output=$(llm "sql add @test --driver sqlite --path $DB_FILE" 'sql @test "SELECT name FROM users WHERE id = 2"' 'sql @test "SELECT COUNT(*) as total FROM users"')
 # Line 0: context, 1: add result, 2: context, 3: select result, 4: context, 5: count result
 result_select=$(json_line "$output" 3)
 stdout_select=$(jf "$result_select" '.stdout')
 
 if echo "$stdout_select" | grep -q "Bob"; then
-    pass "sql: SELECT query returns Bob"
+    pass "sql: SELECT returns Bob"
 else
-    # Known issue: sql add may not persist across LLM commands
     fail "sql: SELECT" "got $stdout_select — $(jf "$result_select" '.stderr')"
 fi
 
@@ -68,6 +68,17 @@ if echo "$stdout_count" | grep -q "3"; then
     pass "sql: COUNT returns 3"
 else
     fail "sql: COUNT" "got $stdout_count"
+fi
+
+# Also test inline URI (no add required)
+output=$(llm "sql sqlite://$DB_FILE \"SELECT name FROM users ORDER BY name LIMIT 1\"")
+result=$(json_line "$output" 1)
+stdout=$(jf "$result" '.stdout')
+
+if echo "$stdout" | grep -q "Alice"; then
+    pass "sql: inline URI query"
+else
+    fail "sql: inline URI" "got $stdout — $(jf "$result" '.stderr')"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
