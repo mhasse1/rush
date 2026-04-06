@@ -2342,8 +2342,29 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
             // PS functions, system path aliases that .NET Process.Start doesn't search).
             if (nativeExitCode == 127)
             {
+                // Try Start-Process first for GUI apps (odbcad32, mmc, etc.)
+                // that fail with captured stdout/stderr
+                try
+                {
+                    var cmdParts2 = CommandTranslator.SplitCommandLine(commandToRun);
+                    var psi2 = new ProcessStartInfo(cmdParts2[0])
+                    {
+                        UseShellExecute = true,
+                    };
+                    for (int j = 1; j < cmdParts2.Length; j++)
+                        psi2.ArgumentList.Add(cmdParts2[j]);
+                    var proc2 = Process.Start(psi2);
+                    if (proc2 != null)
+                    {
+                        lastSegmentFailed = false;
+                        lastExitCode = 0;
+                        continue;
+                    }
+                }
+                catch { }
+
+                // UseShellExecute also failed — try PowerShell as final fallback
                 needsPowerShell = true;
-                // Fall through to PowerShell execution below
             }
             else
             {
