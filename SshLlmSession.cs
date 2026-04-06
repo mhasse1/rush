@@ -57,6 +57,8 @@ internal class SshLlmSession : IDisposable
             "rush.exe --llm",
             "/usr/local/bin/rush --llm",
             "C:\\bin\\rush.exe --llm",
+            "C:/bin/rush.exe --llm",
+            "& 'C:\\bin\\rush.exe' --llm",  // PowerShell invoke syntax
         };
 
         // On any host, try to discover rush via where/which and use the full path
@@ -66,9 +68,11 @@ internal class SshLlmSession : IDisposable
 
         foreach (var cmd in commands)
         {
+            Console.Error.WriteLine($"[rush-ssh] Trying: ssh {host} '{cmd}'");
             var session = new SshLlmSession(host);
             if (!session.StartProcessWith(cmd))
             {
+                Console.Error.WriteLine($"[rush-ssh]   → process start failed");
                 session.Dispose();
                 continue;
             }
@@ -76,11 +80,12 @@ internal class SshLlmSession : IDisposable
             var ctx = session.ReadContextLine(ConnectTimeoutMs);
             if (ctx != null && ctx.Ready)
             {
-                Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version})");
+                Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version}) via: {cmd}");
                 session._lastContext = ctx;
                 return session;
             }
 
+            Console.Error.WriteLine($"[rush-ssh]   → no valid context (timeout or bad response)");
             session.Dispose();
         }
 
