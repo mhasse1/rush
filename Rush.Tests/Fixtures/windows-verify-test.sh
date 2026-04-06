@@ -173,6 +173,42 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════
 echo ""
+echo "## 4b. RUSHPATH Environment Variable (#149)"
+# ═══════════════════════════════════════════════════════════════════════
+
+# RUSHPATH should be set as a system env var pointing to rush.exe
+output=$(mcp_ssh "$INIT" \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps\\n  \$env:RUSH_RPATH = \$env:RUSHPATH\\nend\\nputs env.RUSH_RPATH\"}}}")
+resp=$(find_resp "$output" 2)
+rushpath_val=$(tool_field "$resp" '.stdout')
+
+if [[ -n "$rushpath_val" && "$rushpath_val" != "null" ]]; then
+    pass "RUSHPATH: set ($rushpath_val)"
+else
+    fail "RUSHPATH" "not set or empty"
+fi
+
+# RUSHPATH should point to an actual file
+if echo "$rushpath_val" | grep -qi "rush"; then
+    pass "RUSHPATH: contains 'rush'"
+else
+    fail "RUSHPATH: value" "doesn't look like a rush path: $rushpath_val"
+fi
+
+# RUSHPATH should be discoverable via MCP-SSH (the detection mechanism)
+output=$(mcp_ssh "$INIT" \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps\\n  \$env:RUSH_RPATH2 = (Test-Path \$env:RUSHPATH).ToString()\\nend\\nputs env.RUSH_RPATH2\"}}}")
+resp=$(find_resp "$output" 2)
+exists=$(tool_field "$resp" '.stdout')
+
+if echo "$exists" | grep -qi "true"; then
+    pass "RUSHPATH: file exists on disk"
+else
+    fail "RUSHPATH: file" "doesn't exist ($exists)"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
 echo "## 5. path Display Normalization (#111)"
 # ═══════════════════════════════════════════════════════════════════════
 
