@@ -48,30 +48,47 @@ internal class SshLlmSession : IDisposable
     /// </summary>
     internal static SshLlmSession? TryCreate(string host)
     {
-        // Try rush in PATH, then common install locations.
-        // Windows OpenSSH doesn't load the user's PATH profile for ssh host 'command',
-        // so we try several common locations including where.exe discovery.
-        var commands = new List<string>
+        // Detection strategy:
+        // 1. Check RUSHPATH env var on remote (set by Rush on first run)
+        // 2. Try rush in PATH
+        // 3. Try common install locations
+        // 4. Try where.exe/which discovery
+        //
+        // RUSHPATH is the reliable path — it's set once and works regardless
+        // of which shell SSH uses (cmd, PS 5.1, PS 7, bash).
+
+        var commands = new List<string>();
+
+        // First: check RUSHPATH env var (most reliable on Windows)
+        var rushPath = DiscoverRushPathVar(host);
+        if (rushPath != null)
+        {
+            Console.Error.WriteLine($"[rush-ssh] RUSHPATH on {host}: {rushPath}");
+            // Quote for PS safety
+            if (rushPath.Contains('\\'))
+                commands.Add($"& '{rushPath}' --llm");
+            else
+                commands.Add($"{rushPath} --llm");
+        }
+
+        // Second: try where.exe/which discovery
+        var discoveredPath = DiscoverRushPath(host);
+        if (discoveredPath != null)
+        {
+            if (discoveredPath.Contains('\\'))
+                commands.Add($"& '{discoveredPath}' --llm");
+            else
+                commands.Add($"{discoveredPath} --llm");
+        }
+
+        // Third: standard paths
+        commands.AddRange(new[]
         {
             "rush --llm",
             "rush.exe --llm",
             "/usr/local/bin/rush --llm",
-            "C:\\bin\\rush.exe --llm",
-            "C:/bin/rush.exe --llm",
-            "& 'C:\\bin\\rush.exe' --llm",  // PowerShell invoke syntax
-        };
-
-        // On any host, try to discover rush via where/which and use the full path
-        var discoveredPath = DiscoverRushPath(host);
-        if (discoveredPath != null)
-        {
-            // Wrap in PS single quotes if path has backslashes (Windows) —
-            // prevents PS 5.1 from interpreting \b \n etc. as escape sequences
-            if (discoveredPath.Contains('\\'))
-                commands.Insert(0, $"& '{discoveredPath}' --llm");
-            else
-                commands.Insert(0, $"{discoveredPath} --llm");
-        }
+            "& 'C:\\bin\\rush.exe' --llm",
+        });
 
         foreach (var cmd in commands)
         {
@@ -87,16 +104,70 @@ internal class SshLlmSession : IDisposable
             var ctx = session.ReadContextLine(ConnectTimeoutMs);
             if (ctx != null && ctx.Ready)
             {
-                Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version}) via: {cmd}");
+                Console.Error.WriteLine($"[rush-ssh] Persistent Rush session on {host} (v{ctx.Version})");
                 session._lastContext = ctx;
                 return session;
             }
 
-            Console.Error.WriteLine($"[rush-ssh]   → no valid context (timeout or bad response)");
+            Console.Error.WriteLine($"[rush-ssh]   → no valid context");
             session.Dispose();
         }
 
         Console.Error.WriteLine($"[rush-ssh] Rush not available on {host}, using raw shell");
+        Console.Error.WriteLine($"[rush-ssh] Hint: set RUSHPATH environment variable on {host} to the full path of rush.exe");
+        return null;
+    }
+
+    /// <summary>
+    /// Read the RUSHPATH environment variable from a remote host.
+    /// This is the most reliable detection method — set by Rush on first install.
+    /// Works regardless of SSH default shell (cmd, PS 5.1, PS 7, bash).
+    /// </summary>
+    private static string? DiscoverRushPathVar(string host)
+    {
+        // echo %RUSHPATH% works in cmd, echo $env:RUSHPATH works in PS
+        // Try both — one will return the value, the other will echo the literal
+        string[] probes = new[] {
+            "echo $env:RUSHPATH",   // PowerShell
+            "echo $RUSHPATH",       // bash/zsh
+        };
+
+        foreach (var probe in probes)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("ssh")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("BatchMode=yes");
+                psi.ArgumentList.Add("-o"); psi.ArgumentList.Add("ConnectTimeout=5");
+                SshPool.Apply(psi);
+                psi.ArgumentList.Add(host);
+                psi.ArgumentList.Add(probe);
+
+                using var proc = Process.Start(psi);
+                if (proc == null) continue;
+                SshPool.Track(host);
+
+                var stdout = proc.StandardOutput.ReadToEnd().Trim().TrimEnd('\r', '\n');
+                proc.WaitForExit(5000);
+
+                // Valid if non-empty, not the literal probe text, and looks like a path
+                if (proc.ExitCode == 0 && !string.IsNullOrEmpty(stdout)
+                    && !stdout.Contains("RUSHPATH")  // not the literal echo
+                    && !stdout.Contains("$env:")      // not the literal PS syntax
+                    && stdout.Length > 3)              // at least "rush" or a path
+                {
+                    return stdout;
+                }
+            }
+            catch { }
+        }
+
         return null;
     }
 

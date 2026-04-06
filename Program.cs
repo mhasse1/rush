@@ -2803,6 +2803,36 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     pathPs.AddScript($"$PATH = '{rushPath.Replace("'", "''")}'");
     pathPs.Invoke();
 
+    // Set RUSHPATH env var — used by MCP-SSH to find Rush on remote hosts.
+    // Set once, persists for child processes (including SSH sessions).
+    var currentRushPath = Environment.GetEnvironmentVariable("RUSHPATH");
+    if (string.IsNullOrEmpty(currentRushPath))
+    {
+        // Find our own executable path
+        var exePath = Environment.ProcessPath;
+        if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+        {
+            Environment.SetEnvironmentVariable("RUSHPATH", exePath);
+            // Also set as persistent user env var on Windows so SSH picks it up
+            if (OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.User);
+                    Console.ForegroundColor = ConsoleColor.DarkGray;
+                    Console.WriteLine($"  RUSHPATH set to {exePath}");
+                    Console.ResetColor();
+                }
+                catch { /* best effort — may not have permission */ }
+            }
+            else
+            {
+                // On Unix, set in process env (persists via profile for SSH)
+                Environment.SetEnvironmentVariable("RUSHPATH", exePath);
+            }
+        }
+    }
+
     // Set COLUMNS/LINES env vars so native commands (ls, etc.) know the terminal size.
     // Process.Start children don't inherit console dimensions on Windows.
     try
