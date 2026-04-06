@@ -1080,8 +1080,25 @@ public class RushTranspiler
             "ok?" => $"({receiver} -eq 0)",
             "failed?" => $"({receiver} -ne 0)",
             "message" => $"{receiver}.Message",
-            _ => $"{receiver}.{CapitalizeProperty(prop)}"
+            _ => TranspileDefaultPropertyAccess(receiver, prop)
         };
+    }
+
+    /// <summary>
+    /// Default property access: check if the property name matches a known class method.
+    /// If so, emit as a method call with () — PowerShell needs parens to invoke methods.
+    /// Otherwise emit as a property access.
+    /// </summary>
+    private string TranspileDefaultPropertyAccess(string receiver, string prop)
+    {
+        var capitalized = CapitalizeProperty(prop);
+        // Check if any registered class has a method with this name
+        foreach (var cls in _classDefinitions.Values)
+        {
+            if (cls.Methods.Any(m => CapitalizeProperty(m.Name) == capitalized))
+                return $"{receiver}.{capitalized}()";
+        }
+        return $"{receiver}.{capitalized}";
     }
 
     private string TranspileInterpolatedString(InterpolatedStringNode node)
