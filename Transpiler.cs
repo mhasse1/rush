@@ -231,7 +231,24 @@ public class RushTranspiler
         // Emit constructor (initialize → ClassName constructor)
         // PowerShell constructors don't support default parameter values like functions do.
         // When defaults exist, we generate constructor overloads + a hidden _Init method.
-        if (node.Constructor != null)
+        //
+        // If no explicit constructor but attrs exist, auto-generate one that takes
+        // named parameters and assigns them to properties.
+        if (node.Constructor == null && node.Attributes.Count > 0)
+        {
+            // Auto-generate constructor from attr declarations
+            var paramList = string.Join(", ",
+                node.Attributes.Select(a => $"[object]${CapitalizeProperty(a.Name)}"));
+            sb.AppendLine();
+            sb.AppendLine($"  {node.Name}({paramList}) {{");
+            foreach (var attr in node.Attributes)
+            {
+                var cap = CapitalizeProperty(attr.Name);
+                sb.AppendLine($"    $this.{cap} = ${cap}");
+            }
+            sb.AppendLine("  }");
+        }
+        else if (node.Constructor != null)
         {
             var ctor = node.Constructor;
             var hasDefaults = ctor.Params.Any(p => p.DefaultValue != null);
@@ -1758,10 +1775,25 @@ public class RushTranspiler
 
         // Named args on .new() — look up constructor params and reorder
         if (method.Equals("new", StringComparison.OrdinalIgnoreCase)
-            && _classDefinitions.TryGetValue(className, out var classDef)
-            && classDef.Constructor != null)
+            && _classDefinitions.TryGetValue(className, out var classDef))
         {
-            var ctorParams = classDef.Constructor.Params;
+            // Use explicit constructor params if available, otherwise use attr names
+            List<ParamDef> ctorParams;
+            if (classDef.Constructor != null)
+            {
+                ctorParams = classDef.Constructor.Params;
+            }
+            else if (classDef.Attributes.Count > 0)
+            {
+                // Auto-generated constructor uses attr names as params
+                ctorParams = classDef.Attributes
+                    .Select(a => new ParamDef(a.Name, a.DefaultValue))
+                    .ToList();
+            }
+            else
+            {
+                return string.Join(", ", args.Where(a => a is not NamedArgNode).Select(TranspileExpression));
+            }
             var positionalArgs = args.Where(a => a is not NamedArgNode).ToList();
             var namedArgs = args.OfType<NamedArgNode>().ToDictionary(a => a.Name, a => a.Value);
 
