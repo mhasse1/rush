@@ -2336,16 +2336,28 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         {
             var sw2 = Stopwatch.StartNew();
             var nativeExitCode = RunInteractive(commandToRun, state.Translator, state.BuiltinCts.Token, stderrRedirect);
-            lastSegmentFailed = nativeExitCode != 0;
-            lastExitCode = nativeExitCode;
-            sw2.Stop();
-            if (state.Config.ShowTiming && sw2.Elapsed.TotalSeconds >= 0.5)
+
+            // If native execution returned 127 (command not found), fall back to
+            // PowerShell which has broader command resolution (App Paths registry,
+            // PS functions, system path aliases that .NET Process.Start doesn't search).
+            if (nativeExitCode == 127)
             {
-                Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
-                Console.ResetColor();
+                needsPowerShell = true;
+                // Fall through to PowerShell execution below
             }
-            continue;
+            else
+            {
+                lastSegmentFailed = nativeExitCode != 0;
+                lastExitCode = nativeExitCode;
+                sw2.Stop();
+                if (state.Config.ShowTiming && sw2.Elapsed.TotalSeconds >= 0.5)
+                {
+                    Console.ForegroundColor = Theme.Current.Muted;
+                    Console.WriteLine($"  took {FormatDuration(sw2.Elapsed)}");
+                    Console.ResetColor();
+                }
+                continue;
+            }
         }
 
         var sw = Stopwatch.StartNew();
