@@ -298,9 +298,87 @@ else
     fail "ps5 interleaved" "got $stdout"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 12. Session persistence: repeated ps5 blocks (#144)"
+# ═══════════════════════════════════════════════════════════════════════
+
+# Run 5 sequential ps5 blocks in the same session — verify state doesn't degrade
+output=$(mcp_ssh "$INIT" \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps5\\n  \$env:PS5_SEQ1 = 'seq1'\\nend\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps5\\n  \$env:PS5_SEQ2 = 'seq2'\\nend\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps5\\n  \$env:PS5_SEQ3 = 'seq3'\\nend\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps5\\n  \$env:PS5_SEQ4 = 'seq4'\\nend\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"puts \\\"#{env.PS5_SEQ1},#{env.PS5_SEQ2},#{env.PS5_SEQ3},#{env.PS5_SEQ4}\\\"\"}}}")
+resp=$(find_resp "$output" 6)
+stdout=$(tool_field "$resp" '.stdout')
+
+if [[ "$stdout" == "seq1,seq2,seq3,seq4" ]]; then
+    pass "session persistence: 4 sequential ps5 blocks"
+else
+    fail "session persistence" "got $stdout"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 13. Rush vars survive ps5 block (#144)"
+# ═══════════════════════════════════════════════════════════════════════
+
+output=$(mcp_ssh "$INIT" \
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"before_ps5 = \\\"still here\\\"\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps5\\n  \$env:PS5_MIDDLE = 'middle'\\nend\"}}}" \
+    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"puts before_ps5\"}}}")
+resp=$(find_resp "$output" 4)
+stdout=$(tool_field "$resp" '.stdout')
+
+if [[ "$stdout" == "still here" ]]; then
+    pass "Rush var survives ps5 block"
+else
+    fail "Rush var after ps5" "got $stdout"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 14. Large ps5 output (#145)"
+# ═══════════════════════════════════════════════════════════════════════
+
+resp=$(run_rush_script 'ps5
+  $lines = @()
+  for ($i = 1; $i -le 100; $i++) {
+    $lines += "line-$i: some data here for testing large output"
+  }
+  $env:PS5_LARGE = $lines.Count.ToString()
+end
+puts env.PS5_LARGE')
+stdout=$(tool_field "$resp" '.stdout')
+
+if [[ "$stdout" == "100" ]]; then
+    pass "ps5 large output: 100 lines generated"
+else
+    fail "ps5 large output" "got $stdout"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 15. ps5 output with equals/commas/backslashes (#145)"
+# ═══════════════════════════════════════════════════════════════════════
+
+resp=$(run_rush_script 'ps5
+  $special = "key=value, path=C:\Users\test, OU=Users,DC=local"
+  $env:PS5_SPECIAL = $special
+end
+puts env.PS5_SPECIAL')
+stdout=$(tool_field "$resp" '.stdout')
+
+if echo "$stdout" | grep -q "key=value" && echo "$stdout" | grep -q "DC=local"; then
+    pass "ps5 special output: equals, commas, backslashes"
+else
+    fail "ps5 special output" "got $stdout"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 mcp_ssh "$INIT" \
-    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps\\n  @('PS5_LOOP','PS5_TRY','PS5_PIPE','PS5_JSON','PS5_NESTED','PS5_ERR','PS5_DN','PS5_CSV','PS5_INTERP','PS5_BRIDGE','PS5_AFTER') | ForEach-Object { Remove-Item \\\"Env:\\\\\$_\\\" -ErrorAction SilentlyContinue }\\nend\"}}}" >/dev/null 2>&1
+    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"rush_execute\",\"arguments\":{\"host\":\"$HOST\",\"command\":\"ps\\n  @('PS5_LOOP','PS5_TRY','PS5_PIPE','PS5_JSON','PS5_NESTED','PS5_ERR','PS5_DN','PS5_CSV','PS5_INTERP','PS5_BRIDGE','PS5_AFTER','PS5_SEQ1','PS5_SEQ2','PS5_SEQ3','PS5_SEQ4','PS5_MIDDLE','PS5_LARGE','PS5_SPECIAL') | ForEach-Object { Remove-Item \\\"Env:\\\\\$_\\\" -ErrorAction SilentlyContinue }\\nend\"}}}" >/dev/null 2>&1
 
 echo ""
 TOTAL=$((PASS + FAIL))
