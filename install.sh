@@ -7,30 +7,142 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STAGING_DIR="${RUSH_STAGING:-$SCRIPT_DIR/dist}"
 BUILD_SHA_FILE="$SCRIPT_DIR/.last-build-sha"
 PUBLISH_TMP="$SCRIPT_DIR/.publish-tmp"
+REPO="mhasse1/rush"
 
 export PATH="/opt/homebrew/opt/dotnet/bin:/opt/homebrew/Cellar/dotnet/10.0.105/libexec:$PATH"
 export DOTNET_ROOT="${DOTNET_ROOT:-/opt/homebrew/opt/dotnet/libexec}"
 
-# ── Check if rebuild is needed ───────────────────────────────────────
 CURRENT_SHA=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null || echo "unknown")
-LAST_SHA=""
-if [[ -f "$BUILD_SHA_FILE" ]]; then
-    LAST_SHA=$(cat "$BUILD_SHA_FILE")
+
+# ── --full: CI-based install + distribute ─────────────────────────────
+if [[ "${1:-}" == "--full" ]]; then
+    mkdir -p "$STAGING_DIR"
+
+    echo "Rush install (CI mode)"
+    echo "  Commit: ${CURRENT_SHA:0:7}"
+    echo ""
+
+    # Find the CI run for the current commit
+    RUN_ID=$(gh run list -R "$REPO" --branch main --json databaseId,headSha \
+        -q ".[] | select(.headSha == \"$CURRENT_SHA\") | .databaseId" 2>/dev/null | head -1)
+
+    if [[ -z "$RUN_ID" ]]; then
+        echo "  ! No CI run found for ${CURRENT_SHA:0:7}. Push first."
+        exit 1
+    fi
+
+    echo "  CI run: $RUN_ID"
+
+    # Stream deploys as each platform finishes
+    PLATFORMS=(
+        "osx-arm64:rush-osx-arm64:rush:rush-osx-arm64"
+        "linux-x64:rush-linux-x64:rush:rush-linux-x64"
+        "linux-arm64:rush-linux-arm64:rush:rush-linux-arm64"
+        "win-x64:rush-win-x64:rush.exe:rush_x64.exe"
+        "win-arm64:rush-win-arm64:rush.exe:rush_arm64.exe"
+    )
+
+    DEPLOYED=0
+    WAITED=0
+    MAX_WAIT=600  # 10 minutes max
+
+    while [[ $DEPLOYED -lt ${#PLATFORMS[@]} && $WAITED -lt $MAX_WAIT ]]; do
+        for i in "${!PLATFORMS[@]}"; do
+            IFS=: read -r rid artifact src_name dst_name <<< "${PLATFORMS[$i]}"
+            [[ "$rid" == "done" ]] && continue
+
+            # Check if this job is done
+            job_status=$(gh run view "$RUN_ID" -R "$REPO" --json jobs \
+                --jq ".jobs[] | select(.name | contains(\"$rid\")) | .conclusion" 2>/dev/null)
+
+            if [[ "$job_status" == "success" ]]; then
+                echo "  ✓ $rid: CI passed — downloading..."
+                local_tmp=$(mktemp -d)
+                if gh run download "$RUN_ID" -R "$REPO" -n "$artifact" -D "$local_tmp" 2>/dev/null; then
+                    # Stage the binary
+                    mv "$local_tmp/$src_name" "$STAGING_DIR/$dst_name"
+                    [[ "$src_name" == "rush" ]] && chmod +x "$STAGING_DIR/$dst_name"
+                    echo "    → $STAGING_DIR/$dst_name"
+
+                    # Install locally if this is our platform
+                    if [[ "$rid" == "osx-arm64" && "$(uname -m)" == "arm64" && "$(uname)" == "Darwin" ]]; then
+                        sudo cp "$STAGING_DIR/$dst_name" "$BIN_LINK"
+                        VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "unknown")
+                        echo "    → $BIN_LINK ($VERSION)"
+                        echo "$CURRENT_SHA" > "$BUILD_SHA_FILE"
+                    fi
+                else
+                    echo "    ! Failed to download $artifact"
+                fi
+                rm -rf "$local_tmp"
+                PLATFORMS[$i]="done:::::"
+                DEPLOYED=$((DEPLOYED + 1))
+
+            elif [[ "$job_status" == "failure" ]]; then
+                echo "  ✗ $rid: CI FAILED"
+                PLATFORMS[$i]="done:::::"
+                DEPLOYED=$((DEPLOYED + 1))
+            fi
+        done
+
+        # Check if all done
+        all_done=true
+        for p in "${PLATFORMS[@]}"; do
+            [[ "$p" != "done:::::" ]] && all_done=false && break
+        done
+        $all_done && break
+
+        sleep 10
+        WAITED=$((WAITED + 10))
+
+        # Progress indicator
+        if [[ $((WAITED % 30)) -eq 0 ]]; then
+            remaining=0
+            for p in "${PLATFORMS[@]}"; do
+                [[ "$p" != "done:::::" ]] && remaining=$((remaining + 1))
+            done
+            echo "  ... waiting for $remaining platform(s) ($((WAITED))s)"
+        fi
+    done
+
+    if [[ $WAITED -ge $MAX_WAIT ]]; then
+        echo "  ! Timed out waiting for CI"
+    fi
+
+    # Register as login shell
+    if ! grep -q "$BIN_LINK" "$SHELLS_FILE" 2>/dev/null; then
+        echo "$BIN_LINK" | sudo tee -a "$SHELLS_FILE" > /dev/null
+    fi
+
+    # Docs
+    rm -f "$STAGING_DIR/rush-lang-spec.yaml" "$STAGING_DIR/user-manual.md"
+    ln -f "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$STAGING_DIR/rush-lang-spec.yaml" 2>/dev/null || true
+    ln -f "$SCRIPT_DIR/docs/user-manual.md" "$STAGING_DIR/user-manual.md" 2>/dev/null || true
+
+    echo ""
+    VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "not installed locally")
+    echo "Local: $VERSION"
+    echo "Staged: $STAGING_DIR/"
+    ls -lh "$STAGING_DIR/" 2>/dev/null
+    exit 0
 fi
+
+# ── Default: local build + install ────────────────────────────────────
+
+LAST_SHA=""
+[[ -f "$BUILD_SHA_FILE" ]] && LAST_SHA=$(cat "$BUILD_SHA_FILE")
 
 FORCE="${FORCE:-false}"
 if [[ "$CURRENT_SHA" == "$LAST_SHA" && "$FORCE" != "true" && -f "$BIN_LINK" ]]; then
     VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "unknown")
     echo "Already built: $VERSION (commit ${CURRENT_SHA:0:7})"
-    echo "Use FORCE=true ./install.sh to rebuild anyway."
+    echo "Use FORCE=true ./install.sh to rebuild, or ./install.sh --full for CI."
 else
-    # ── Build to temp dir (never conflicts with running binary) ──────
     rm -rf "$PUBLISH_TMP" "$PUBLISH_TMP"-*
     echo "Building release binary..."
     dotnet publish -c Release -r osx-arm64 -o "$PUBLISH_TMP" "$SCRIPT_DIR"
     echo ""
 
-    # ── Install: copy to /usr/local/lib/rush ─────────────────────────
     sudo rm -rf /usr/local/lib/rush
     sudo mkdir -p /usr/local/lib/rush
     sudo cp -rf "$PUBLISH_TMP"/* /usr/local/lib/rush/
@@ -41,7 +153,7 @@ else
     echo "$CURRENT_SHA" > "$BUILD_SHA_FILE"
 fi
 
-# ── Register as login shell (sudo only if needed) ───────────────────
+# Register as login shell
 if ! grep -q "$BIN_LINK" "$SHELLS_FILE" 2>/dev/null; then
     echo "  → $SHELLS_FILE (registering as valid shell)"
     echo "$BIN_LINK" | sudo tee -a "$SHELLS_FILE" > /dev/null
@@ -49,77 +161,3 @@ fi
 
 echo ""
 echo "Installed: $VERSION"
-
-# ── Distribution: wait for CI, download native binaries (--full) ─────
-if [[ "${1:-}" == "--full" ]]; then
-    mkdir -p "$STAGING_DIR"
-
-    echo ""
-    echo "Waiting for CI to build native binaries..."
-
-    # Find the CI run for the current commit
-    RUN_ID=$(gh run list -R mhasse1/rush --branch main --json databaseId,headSha \
-        -q ".[] | select(.headSha == \"$CURRENT_SHA\") | .databaseId" 2>/dev/null | head -1)
-
-    if [[ -z "$RUN_ID" ]]; then
-        echo "  ! No CI run found for $CURRENT_SHA. Push first, then run --full."
-        echo "  Falling back to local cross-compile..."
-        echo "  → Building Windows x64..."
-        dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -o "$PUBLISH_TMP-win-x64" "$SCRIPT_DIR" > /dev/null
-        echo "  → Building Linux x64..."
-        dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -o "$PUBLISH_TMP-linux-x64" "$SCRIPT_DIR" > /dev/null
-
-        rm -f "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush-linux-x64"
-        cp "$PUBLISH_TMP-win-x64/rush.exe" "$STAGING_DIR/rush_x64.exe"
-        cp "$PUBLISH_TMP-linux-x64/rush" "$STAGING_DIR/rush-linux-x64"
-    else
-        echo "  CI run: $RUN_ID"
-
-        # Wait for it to complete (gh run watch exits when done)
-        gh run watch "$RUN_ID" -R mhasse1/rush --exit-status 2>/dev/null || {
-            echo "  ! CI failed. Check: gh run view $RUN_ID -R mhasse1/rush"
-            exit 1
-        }
-
-        echo "  CI passed. Downloading artifacts..."
-
-        # Download native binaries built on actual target platforms
-        rm -f "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" "$STAGING_DIR/rush_arm64.exe" "$STAGING_DIR/rush-linux-x64" "$STAGING_DIR/rush-osx-arm64"
-
-        gh run download "$RUN_ID" -R mhasse1/rush -n rush-win-x64 -D "$STAGING_DIR" 2>/dev/null && \
-            mv "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_x64.exe" && \
-            echo "  → $STAGING_DIR/rush_x64.exe (win-x64, CI build)" || \
-            echo "  ! Failed to download win-x64 artifact"
-
-        gh run download "$RUN_ID" -R mhasse1/rush -n rush-win-arm64 -D "$STAGING_DIR" 2>/dev/null && \
-            mv "$STAGING_DIR/rush.exe" "$STAGING_DIR/rush_arm64.exe" && \
-            echo "  → $STAGING_DIR/rush_arm64.exe (win-arm64, CI build)" || \
-            echo "  ! Failed to download win-arm64 artifact"
-
-        gh run download "$RUN_ID" -R mhasse1/rush -n rush-linux-x64 -D "$STAGING_DIR" 2>/dev/null && \
-            mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-linux-x64" && \
-            echo "  → $STAGING_DIR/rush-linux-x64 (linux-x64, CI build)" || \
-            echo "  ! Failed to download linux-x64 artifact"
-
-        gh run download "$RUN_ID" -R mhasse1/rush -n rush-linux-arm64 -D "$STAGING_DIR" 2>/dev/null && \
-            mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-linux-arm64" && \
-            echo "  → $STAGING_DIR/rush-linux-arm64 (linux-arm64, CI build)" || \
-            echo "  ! Failed to download linux-arm64 artifact"
-
-        gh run download "$RUN_ID" -R mhasse1/rush -n rush-osx-arm64 -D "$STAGING_DIR" 2>/dev/null && \
-            mv "$STAGING_DIR/rush" "$STAGING_DIR/rush-osx-arm64" 2>/dev/null && \
-            echo "  → $STAGING_DIR/rush-osx-arm64 (osx-arm64, CI build)" || \
-            echo "  ! Failed to download osx-arm64 artifact"
-    fi
-
-    # Docs (always from local — they're not platform-specific)
-    rm -f "$STAGING_DIR/rush-lang-spec.yaml" "$STAGING_DIR/user-manual.md"
-    ln -f "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$STAGING_DIR/rush-lang-spec.yaml"
-    ln -f "$SCRIPT_DIR/docs/user-manual.md" "$STAGING_DIR/user-manual.md"
-    echo "  → $STAGING_DIR/rush-lang-spec.yaml"
-    echo "  → $STAGING_DIR/user-manual.md"
-
-    echo ""
-    echo "Staged: $STAGING_DIR/"
-    ls -lh "$STAGING_DIR/"
-fi
