@@ -2882,7 +2882,7 @@ static void InjectPsHelpers(Runspace runspace)
 function __rush_bridge_vars {
     # Serialize current Rush variables to a JSON temp file for child PS processes.
     # Returns the temp file path. Handles strings, numbers, bools, arrays, hashtables.
-    $exclude = @('PSCommandPath','PSScriptRoot','MyInvocation','_','args','input',
+    $exclude = @('PSCommandPath','PSScriptRoot','MyInvocation','MyCommand','_','args','input',
                  'null','true','false','PSBoundParameters','PSDefaultParameterValues',
                  'ErrorActionPreference','WarningPreference','InformationPreference',
                  'DebugPreference','VerbosePreference','ConfirmPreference','WhatIfPreference',
@@ -2891,7 +2891,8 @@ function __rush_bridge_vars {
                  'PSCulture','PSUICulture','PSVersionTable','StackTrace','switch','foreach',
                  'Matches','ConsoleFileName','MaximumHistoryCount','OutputEncoding',
                  'ProgressPreference','PSSessionApplicationName','PSSessionConfigurationName',
-                 'PSSessionOption','PSEmailServer','PSModuleAutoLoadingPreference')
+                 'PSSessionOption','PSEmailServer','PSModuleAutoLoadingPreference',
+                 'PSEdition','PSHOME','IsCoreCLR','IsLinux','IsMacOS','IsWindows')
 
     $vars = @{}
     Get-Variable -Scope 1 -ErrorAction SilentlyContinue | Where-Object {
@@ -2922,7 +2923,21 @@ function __rush_bridge_vars {
     if ($vars.Count -eq 0) { return $null }
 
     $jsonPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ""rush_vars_$(New-Guid).json"")
-    $vars | ConvertTo-Json -Depth 4 -Compress | Set-Content -Path $jsonPath -Encoding UTF8
+    try {
+        $vars | ConvertTo-Json -Depth 4 -Compress | Set-Content -Path $jsonPath -Encoding UTF8
+    } catch {
+        # Serialization failed — some variable type isn't JSON-safe.
+        # Fall back to only string/number/bool vars (skip arrays and hashtables).
+        $safeVars = @{}
+        foreach ($k in $vars.Keys) {
+            $v = $vars[$k]
+            if ($v -is [string] -or $v -is [int] -or $v -is [long] -or $v -is [double] -or $v -is [bool]) {
+                $safeVars[$k] = $v
+            }
+        }
+        if ($safeVars.Count -eq 0) { return $null }
+        $safeVars | ConvertTo-Json -Compress | Set-Content -Path $jsonPath -Encoding UTF8
+    }
     return $jsonPath
 }
 
