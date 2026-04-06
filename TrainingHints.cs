@@ -162,6 +162,36 @@ static class TrainingHints
             return new Hint("cat-bare", $"File.read(\"{file}\")");
         }
 
+        // ── echo $VAR → puts varname ───────────────────────────────
+        var echoVar = Regex.Match(cmd, @"^echo\s+\$(\w+)$");
+        if (echoVar.Success)
+        {
+            var varName = echoVar.Groups[1].Value;
+            return new Hint("echo-var", $"puts {varName}  (no $ needed in Rush)");
+        }
+
+        // ── sed substitution → .replace / .gsub ───────────────────
+        if (Regex.IsMatch(cmd, @"\bsed\s+[""']?s/"))
+            return new Hint("sed-sub", ".replace(\"old\", \"new\")  or  .gsub(/pattern/, \"new\")");
+
+        // ── xargs → | each ─────────────────────────────────────────
+        if (Regex.IsMatch(cmd, @"\|\s*xargs\b"))
+            return new Hint("xargs", "| each { command $it }  (Rush pipe-to-loop)");
+
+        // ── | head N after pipe → | first N ─────────────────────────
+        var pipeHead = Regex.Match(cmd, @"\|\s*head\s+(?:-n?\s*)?(\d+)");
+        if (pipeHead.Success)
+            return new Hint("pipe-head", $"| first {pipeHead.Groups[1].Value}  (Rush pipeline operator)");
+
+        // ── | tail N after pipe → | last N ──────────────────────────
+        var pipeTail = Regex.Match(cmd, @"\|\s*tail\s+(?:-n?\s*)?(\d+)");
+        if (pipeTail.Success)
+            return new Hint("pipe-tail", $"| last {pipeTail.Groups[1].Value}  (Rush pipeline operator)");
+
+        // ── cut → .split ────────────────────────────────────────────
+        if (Regex.IsMatch(cmd, @"\bcut\s+-d"))
+            return new Hint("cut", "| each { $it.split(\"delim\")[N] }  (Rush string split)");
+
         return null;
     }
 }

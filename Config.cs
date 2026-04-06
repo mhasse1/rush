@@ -24,6 +24,12 @@ public class RushConfig
     public bool CoreutilsTipShown { get; set; } = false;
 
     /// <summary>
+    /// Tracks which bash-to-rush hints have been shown (one-time per pattern).
+    /// Keys are hint pattern names like "grep-to-where", "cat-head-to-readlines".
+    /// </summary>
+    public HashSet<string> HintsShown { get; set; } = new();
+
+    /// <summary>
     /// True when this config was just created (first run). Not persisted —
     /// only set during the Load() call that creates the default config.
     /// Used to show the first-run welcome message.
