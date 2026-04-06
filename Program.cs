@@ -2782,6 +2782,15 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     ps.AddScript($"$os = '{osName}'; $hostname = '{Environment.MachineName.ToLowerInvariant()}'; $rush_version = '{version}'; $is_login_shell = {loginVal}; $__rush_arch = '{archName}'; $__rush_os_version = '{osVersion}'");
     ps.Invoke();
 
+    // Create Rush-normalized $PATH variable (Unix-style: forward slashes, escaped spaces, colon-separated).
+    // This is separate from $env:PATH which stays native for child processes.
+    // On Unix, $PATH == $env:PATH (already in the right format).
+    var rushPath = PathUtils.ImportPath(Environment.GetEnvironmentVariable("PATH") ?? "");
+    using var pathPs = PowerShell.Create();
+    pathPs.Runspace = runspace;
+    pathPs.AddScript($"$PATH = '{rushPath.Replace("'", "''")}'");
+    pathPs.Invoke();
+
     // Set COLUMNS/LINES env vars so native commands (ls, etc.) know the terminal size.
     // Process.Start children don't inherit console dimensions on Windows.
     try
@@ -3472,6 +3481,16 @@ static void SetEnvVar(string varName, string newValue, Runspace runspace)
     var escaped = newValue.Replace("'", "''");
     ps.AddScript($"$env:{varName} = '{escaped}'");
     ps.Invoke();
+
+    // Keep Rush $PATH variable in sync with native $env:PATH
+    if (varName.Equals("PATH", StringComparison.OrdinalIgnoreCase))
+    {
+        var rushNorm = PathUtils.ImportPath(newValue);
+        using var syncPs = PowerShell.Create();
+        syncPs.Runspace = runspace;
+        syncPs.AddScript($"$PATH = '{rushNorm.Replace("'", "''")}'");
+        syncPs.Invoke();
+    }
 }
 
 /// <summary>
@@ -3891,12 +3910,13 @@ static bool HandlePathCommand(string args, Runspace runspace, bool quiet = false
             Console.ForegroundColor = Theme.Current.Muted;
             Console.Write($"  {num}  ");
 
+            var displayDir = PathUtils.FormatForDisplay(dir);
             if (isDupe)
             {
                 Console.ForegroundColor = Theme.Current.Error;
                 Console.Write("↑  ");
                 Console.ForegroundColor = Theme.Current.Muted;
-                Console.WriteLine(dir);
+                Console.WriteLine(displayDir);
             }
             else
             {
@@ -3904,7 +3924,7 @@ static bool HandlePathCommand(string args, Runspace runspace, bool quiet = false
                 Console.Write(exists ? "✓" : "✗");
                 Console.Write("  ");
                 Console.ForegroundColor = exists ? ConsoleColor.White : Theme.Current.Muted;
-                Console.WriteLine(dir);
+                Console.WriteLine(displayDir);
             }
         }
 
@@ -4046,9 +4066,12 @@ static bool HandlePathCommand(string args, Runspace runspace, bool quiet = false
             return true;
         }
 
-        // Strip quotes and expand tilde
+        // Strip quotes, expand tilde, convert Rush-style path to native
         var dir = StripQuotes(addArgs);
         var expandedDir = ExpandTildePath(dir);
+        // Unescape Rush-style paths: C:/Program\ Files → C:\Program Files
+        if (OperatingSystem.IsWindows())
+            expandedDir = expandedDir.Replace("\\ ", " ").Replace('/', '\\');
 
         // Normalize: strip trailing slash
         expandedDir = expandedDir.TrimEnd('/', '\\');
