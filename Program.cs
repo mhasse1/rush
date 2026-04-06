@@ -2818,8 +2818,7 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
             {
                 // Set as Machine (system-wide) so all users + SSH sessions see it
                 Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.Machine);
-                Console.Error.Write("[rush] ");
-                Console.Error.WriteLine($"RUSHPATH set to {exePath}");
+                // Silent — no message. RUSHPATH is internal plumbing.
             }
             catch
             {
