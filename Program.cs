@@ -2806,30 +2806,22 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
     // Set RUSHPATH env var — used by MCP-SSH to find Rush on remote hosts.
     // Set once, persists for child processes (including SSH sessions).
     var currentRushPath = Environment.GetEnvironmentVariable("RUSHPATH");
-    if (string.IsNullOrEmpty(currentRushPath))
+    var exePath = Environment.ProcessPath;
+    // Update RUSHPATH if not set or if the binary moved
+    if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath)
+        && (string.IsNullOrEmpty(currentRushPath) || currentRushPath != exePath))
     {
-        // Find our own executable path
-        var exePath = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+        Environment.SetEnvironmentVariable("RUSHPATH", exePath);
+        if (OperatingSystem.IsWindows())
         {
-            Environment.SetEnvironmentVariable("RUSHPATH", exePath);
-            // Also set as persistent user env var on Windows so SSH picks it up
-            if (OperatingSystem.IsWindows())
+            try
             {
-                try
-                {
-                    Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.User);
-                    Console.ForegroundColor = ConsoleColor.DarkGray;
-                    Console.WriteLine($"  RUSHPATH set to {exePath}");
-                    Console.ResetColor();
-                }
-                catch { /* best effort — may not have permission */ }
+                Environment.SetEnvironmentVariable("RUSHPATH", exePath, EnvironmentVariableTarget.User);
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine($"  RUSHPATH set to {exePath}");
+                Console.ResetColor();
             }
-            else
-            {
-                // On Unix, set in process env (persists via profile for SSH)
-                Environment.SetEnvironmentVariable("RUSHPATH", exePath);
-            }
+            catch { /* best effort — may not have permission */ }
         }
     }
 
