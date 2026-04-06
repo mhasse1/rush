@@ -528,6 +528,37 @@ else
     fail "env: special" "got $stdout"
 fi
 
+# ═══════════════════════════════════════════════════════════════════════
+# 16. PATH NORMALIZATION (#111)
+# ═══════════════════════════════════════════════════════════════════════
+echo ""
+echo "## 16. PATH Normalization"
+
+# $PATH should exist and be non-empty
+output=$(llm_session 'puts $PATH')
+result=$(json_line "$output" 1)
+stdout=$(jf "$result" '.stdout')
+
+if [[ -n "$stdout" && "$stdout" != "null" ]]; then
+    pass "PATH: \$PATH is set"
+else
+    fail "PATH: \$PATH" "empty or null"
+fi
+
+# $PATH should contain colons (colon-separated on all platforms)
+if echo "$stdout" | grep -q ":"; then
+    pass "PATH: colon-separated"
+else
+    fail "PATH: separators" "no colons found"
+fi
+
+# $PATH should contain forward slashes
+if echo "$stdout" | grep -q "/"; then
+    pass "PATH: forward slashes"
+else
+    fail "PATH: slashes" "no forward slashes"
+fi
+
 # ── Cleanup ──────────────────────────────────────────────────────────
 rm -rf "$TEST_DIR"
 

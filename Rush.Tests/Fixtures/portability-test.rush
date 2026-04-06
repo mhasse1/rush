@@ -634,6 +634,47 @@ else
   puts "FAIL: env var set + access"
 end
 
+# ── 12b. PATH Variable ───────────────────────────────────────────────
+puts ""
+puts "## 12b. PATH Variable"
+
+# $PATH should be set and non-empty
+unless $PATH.empty?
+  puts "PASS: $PATH is set"
+else
+  puts "FAIL: $PATH is empty"
+end
+
+# On Windows, $PATH should use forward slashes and colons
+# On Unix, $PATH should be same as $env:PATH
+if os == "windows"
+  if $PATH.include?("/")
+    puts "PASS: $PATH uses forward slashes"
+  else
+    puts "FAIL: $PATH missing forward slashes"
+  end
+
+  if $PATH.include?(":")
+    puts "PASS: $PATH uses colon separators"
+  else
+    puts "FAIL: $PATH missing colon separators"
+  end
+
+  # Should NOT contain backslashes (those are native, not Rush)
+  unless $PATH.include?("\\")
+    puts "PASS: $PATH has no backslashes"
+  else
+    puts "FAIL: $PATH contains backslashes"
+  end
+else
+  # Unix: $PATH should contain colon separators
+  if $PATH.include?(":")
+    puts "PASS: $PATH uses colon separators (Unix)"
+  else
+    puts "FAIL: $PATH missing colons"
+  end
+end
+
 # ── 13. Type Conversions ─────────────────────────────────────────────
 puts ""
 puts "## 13. Type Conversions"
