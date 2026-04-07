@@ -62,6 +62,11 @@ if [[ "${1:-}" == "--full" ]]; then
                     # Stage the binary
                     mv "$local_tmp/$src_name" "$STAGING_DIR/$dst_name"
                     [[ "$src_name" == "rush" ]] && chmod +x "$STAGING_DIR/$dst_name"
+                    # Strip macOS quarantine + ad-hoc sign (CI downloads get SIGKILL without this)
+                    if [[ "$(uname)" == "Darwin" ]]; then
+                        xattr -cr "$STAGING_DIR/$dst_name" 2>/dev/null || true
+                        codesign --sign - --force "$STAGING_DIR/$dst_name" 2>/dev/null || true
+                    fi
                     echo "    → $STAGING_DIR/$dst_name"
 
                     # Install locally if this is our platform
