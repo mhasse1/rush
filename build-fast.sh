@@ -83,12 +83,8 @@ if [[ $failed -eq 0 ]]; then
     ssh buster 'Copy-Item C:\temp\rush-build-x64\rush.exe C:\bin\rush.exe -Force' 2>/dev/null
     log "  buster: deployed"
 
-    # Faust (via Resilio)
-    if [[ -d "$HOME/Resilio/coi/_rush" ]]; then
-        cp "$STAGING/rush-win-arm64.exe" "$HOME/Resilio/coi/_rush/rush_arm64.exe"
-        cp "$STAGING/rush-win-x64.exe" "$HOME/Resilio/coi/_rush/rush_x64.exe"
-        log "  faust: staged to Resilio"
-    fi
+    # Faust + COI: deploy via Datto (not SSH accessible)
+    # Binaries in dist/native/ for manual staging
 
     log "✓ All done"
 else

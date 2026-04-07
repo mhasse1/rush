@@ -199,11 +199,8 @@ if [[ "$DEPLOY" == true ]]; then
         log "  buster: installed ($(ssh buster 'C:\bin\rush.exe --version' 2>/dev/null | tr -d '\r'))" || \
         log "  buster: FAILED"
 
-    # Faust (win-arm64)
-    scp -q "$STAGING/rush-win-arm64.exe" faust:C:/temp/rush-new.exe && \
-        ssh faust 'Copy-Item C:\temp\rush-new.exe C:\bin\rush.exe -Force' 2>/dev/null && \
-        log "  faust: installed ($(ssh faust 'C:\bin\rush.exe --version' 2>/dev/null | tr -d '\r'))" || \
-        log "  faust: FAILED"
+    # Faust + COI: deploy via Datto (not SSH accessible)
+    # Binaries in dist/native/ for manual staging
 
     log "Deploy complete"
 fi
