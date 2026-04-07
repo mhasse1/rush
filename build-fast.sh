@@ -16,13 +16,11 @@ build_mac() {
     export DOTNET_ROOT="/opt/homebrew/opt/dotnet/libexec"
     export PATH="/opt/homebrew/opt/dotnet/bin:$PATH"
     git pull --quiet 2>/dev/null || true
-    # Non-single-file for local install (avoids signing issues)
-    sudo rm -rf /usr/local/lib/rush
-    sudo mkdir -p /usr/local/lib/rush
-    dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /usr/local/lib/rush > /dev/null 2>&1
-    sudo rm -f /usr/local/bin/rush
-    sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
-    log "  rocinante: ✓ $(/usr/local/bin/rush --version 2>/dev/null)"
+    # Build to temp, then sudo copy (sudo pre-authed before backgrounding)
+    rm -rf /tmp/rush-mac-build
+    dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /tmp/rush-mac-build > /dev/null 2>&1
+    cp /tmp/rush-mac-build/rush "$STAGING/rush-osx-arm64" 2>/dev/null
+    chmod +x "$STAGING/rush-osx-arm64" 2>/dev/null
 }
 
 # ── Linux (trinity) ──────────────────────────────────────────────────
@@ -71,6 +69,14 @@ wait $pid_win || { log "  buster: ✗ FAILED"; failed=$((failed+1)); }
 # ── Deploy ────────────────────────────────────────────────────────────
 if [[ $failed -eq 0 ]]; then
     log "Deploying..."
+
+    # Rocinante (local — install from temp build)
+    sudo rm -rf /usr/local/lib/rush
+    sudo mkdir -p /usr/local/lib/rush
+    sudo cp -rf /tmp/rush-mac-build/* /usr/local/lib/rush/
+    sudo rm -f /usr/local/bin/rush
+    sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
+    log "  rocinante: $(/usr/local/bin/rush --version 2>/dev/null)"
 
     # Trinity
     scp -q "$STAGING/rush-linux-x64" trinity:/tmp/rush-new
