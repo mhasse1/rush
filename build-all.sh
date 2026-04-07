@@ -163,9 +163,21 @@ if [[ "$DEPLOY" == true ]]; then
     echo ""
     log "Deploying..."
 
-    # Local (macOS)
-    sudo cp "$STAGING/rush-osx-arm64" /usr/local/lib/rush/rush 2>/dev/null && \
-        log "  rocinante: installed" || log "  rocinante: sudo needed"
+    # Local (macOS) — rebuild as directory publish (matches install.sh)
+    # Single-file binary conflicts with the existing directory layout
+    log "  rocinante: installing (local build)..."
+    (
+        cd "$SCRIPT_DIR"
+        export DOTNET_ROOT="/opt/homebrew/opt/dotnet/libexec"
+        export PATH="/opt/homebrew/opt/dotnet/bin:$PATH"
+        sudo rm -rf /usr/local/lib/rush
+        sudo mkdir -p /usr/local/lib/rush
+        dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /usr/local/lib/rush 2>&1
+        sudo rm -f /usr/local/bin/rush
+        sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
+    ) > "$RESULTS_DIR/rocinante-deploy.log" 2>&1 && \
+        log "  rocinante: installed ($(/usr/local/bin/rush --version 2>/dev/null))" || \
+        log "  rocinante: FAILED (see $RESULTS_DIR/rocinante-deploy.log)"
 
     # Trinity
     scp -q "$STAGING/rush-linux-x64" trinity:/tmp/rush-new && \
