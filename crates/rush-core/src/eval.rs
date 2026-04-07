@@ -1,0 +1,1699 @@
+use std::collections::HashMap;
+
+use crate::ast::{BlockLiteral, Node, StringPart};
+use crate::env::{ClassDef, Environment, Function};
+use crate::token::TokenType;
+use crate::value::Value;
+
+/// Signals from control flow that propagate up the call stack.
+#[derive(Debug)]
+pub enum Signal {
+    Return(Value),
+    Break,
+    Next,
+}
+
+/// Evaluator error.
+#[derive(Debug, Clone)]
+pub struct EvalError {
+    pub message: String,
+}
+
+impl std::fmt::Display for EvalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for EvalError {}
+
+type EvalResult = Result<Value, EvalError>;
+
+fn err(msg: impl Into<String>) -> EvalError {
+    EvalError {
+        message: msg.into(),
+    }
+}
+
+/// Output handler — receives puts/print/warn output.
+pub trait Output {
+    fn puts(&mut self, s: &str);
+    fn print(&mut self, s: &str);
+    fn warn(&mut self, s: &str);
+}
+
+/// Default output: writes to stdout/stderr.
+pub struct StdOutput;
+
+impl Output for StdOutput {
+    fn puts(&mut self, s: &str) {
+        println!("{s}");
+    }
+    fn print(&mut self, s: &str) {
+        use std::io::Write;
+        std::io::stdout().write_all(s.as_bytes()).ok();
+        std::io::stdout().flush().ok();
+    }
+    fn warn(&mut self, s: &str) {
+        eprintln!("{s}");
+    }
+}
+
+/// The Rush evaluator — walks AST nodes and produces values.
+pub struct Evaluator<'a> {
+    pub env: Environment,
+    pub output: &'a mut dyn Output,
+    pub exit_code: i32,
+}
+
+impl<'a> Evaluator<'a> {
+    pub fn new(output: &'a mut dyn Output) -> Self {
+        Self {
+            env: Environment::new(),
+            output,
+            exit_code: 0,
+        }
+    }
+
+    /// Execute a list of statements, returning the last value.
+    pub fn exec(&mut self, nodes: &[Node]) -> Result<Value, Signal> {
+        let mut result = Value::Nil;
+        for node in nodes {
+            result = self.eval_node(node)?;
+        }
+        Ok(result)
+    }
+
+    /// Execute, converting Signal to EvalError for top-level use.
+    pub fn exec_toplevel(&mut self, nodes: &[Node]) -> EvalResult {
+        self.exec(nodes).map_err(|sig| match sig {
+            Signal::Return(v) => err(format!("return outside function (value: {v})")),
+            Signal::Break => err("break outside loop"),
+            Signal::Next => err("next outside loop"),
+        })
+    }
+
+    fn eval_node(&mut self, node: &Node) -> Result<Value, Signal> {
+        match node {
+            Node::Literal { value, literal_type } => Ok(self.eval_literal(value, *literal_type)),
+
+            Node::VariableRef { name } => Ok(self.eval_variable_ref(name)),
+
+            Node::Assignment { name, value } => {
+                let val = self.eval_node(value)?;
+                self.env.set(name, val.clone());
+                Ok(val)
+            }
+
+            Node::MultipleAssignment { names, values } => {
+                let vals: Vec<Value> = values
+                    .iter()
+                    .map(|v| self.eval_node(v))
+                    .collect::<Result<_, _>>()?;
+                for (i, name) in names.iter().enumerate() {
+                    let val = vals.get(i).cloned().unwrap_or(Value::Nil);
+                    self.env.set(name, val);
+                }
+                Ok(Value::Nil)
+            }
+
+            Node::CompoundAssignment { name, op, value } => {
+                let current = self.eval_variable_ref(name);
+                let rhs = self.eval_node(value)?;
+                let base_op = &op[..op.len() - 1]; // "+=" → "+", "-=" → "-"
+                let result = self.apply_binary_op(&current, base_op, &rhs);
+                self.env.set(name, result.clone());
+                Ok(result)
+            }
+
+            Node::PropertyAssignment {
+                receiver,
+                property,
+                value,
+            } => {
+                // For self.x = val, we store as "self.x" or handle instance vars
+                // Simplified: store as flat variable for now
+                let recv = self.eval_node(receiver)?;
+                let val = self.eval_node(value)?;
+                if let Value::String(ref name) = recv {
+                    if name == "self" {
+                        self.env.set(property, val.clone());
+                    }
+                }
+                // If receiver is VariableRef("self"), set the property
+                if matches!(receiver.as_ref(), Node::VariableRef { name } if name == "self") {
+                    self.env.set(property, val.clone());
+                }
+                Ok(val)
+            }
+
+            Node::BinaryOp { left, op, right } => {
+                // Short-circuit for logical operators
+                if op == "&&" || op == "and" {
+                    let l = self.eval_node(left)?;
+                    if !l.is_truthy() {
+                        return Ok(l);
+                    }
+                    return self.eval_node(right);
+                }
+                if op == "||" || op == "or" {
+                    let l = self.eval_node(left)?;
+                    if l.is_truthy() {
+                        return Ok(l);
+                    }
+                    return self.eval_node(right);
+                }
+                let l = self.eval_node(left)?;
+                let r = self.eval_node(right)?;
+                Ok(self.apply_binary_op(&l, op, &r))
+            }
+
+            Node::UnaryOp { op, operand } => {
+                let val = self.eval_node(operand)?;
+                Ok(match op.as_str() {
+                    "not" => Value::Bool(!val.is_truthy()),
+                    "-" => match val {
+                        Value::Int(n) => Value::Int(-n),
+                        Value::Float(f) => Value::Float(-f),
+                        _ => Value::Nil,
+                    },
+                    _ => Value::Nil,
+                })
+            }
+
+            Node::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                let cond = self.eval_node(condition)?;
+                if cond.is_truthy() {
+                    self.eval_node(then_expr)
+                } else {
+                    self.eval_node(else_expr)
+                }
+            }
+
+            Node::If {
+                condition,
+                body,
+                elsifs,
+                else_body,
+            } => {
+                let cond = self.eval_node(condition)?;
+                if cond.is_truthy() {
+                    return self.exec(body);
+                }
+                for (elsif_cond, elsif_body) in elsifs {
+                    let c = self.eval_node(elsif_cond)?;
+                    if c.is_truthy() {
+                        return self.exec(elsif_body);
+                    }
+                }
+                if let Some(eb) = else_body {
+                    return self.exec(eb);
+                }
+                Ok(Value::Nil)
+            }
+
+            Node::PostfixIf {
+                statement,
+                condition,
+                is_unless,
+            } => {
+                let cond = self.eval_node(condition)?;
+                let should_run = if *is_unless {
+                    !cond.is_truthy()
+                } else {
+                    cond.is_truthy()
+                };
+                if should_run {
+                    self.eval_node(statement)
+                } else {
+                    Ok(Value::Nil)
+                }
+            }
+
+            Node::While {
+                condition,
+                body,
+                is_until,
+            } => {
+                loop {
+                    let cond = self.eval_node(condition)?;
+                    let should_run = if *is_until {
+                        !cond.is_truthy()
+                    } else {
+                        cond.is_truthy()
+                    };
+                    if !should_run {
+                        break;
+                    }
+                    match self.exec(body) {
+                        Ok(_) => {}
+                        Err(Signal::Break) => break,
+                        Err(Signal::Next) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(Value::Nil)
+            }
+
+            Node::For {
+                variable,
+                collection,
+                body,
+            } => {
+                let coll = self.eval_node(collection)?;
+                let items = self.value_to_iterable(&coll);
+                self.env.push_scope();
+                for item in items {
+                    self.env.set_local(variable, item);
+                    match self.exec(body) {
+                        Ok(_) => {}
+                        Err(Signal::Break) => break,
+                        Err(Signal::Next) => continue,
+                        Err(e) => {
+                            self.env.pop_scope();
+                            return Err(e);
+                        }
+                    }
+                }
+                self.env.pop_scope();
+                Ok(Value::Nil)
+            }
+
+            Node::FunctionDef {
+                name,
+                params,
+                body,
+                is_static: _,
+            } => {
+                self.env.define_function(Function {
+                    name: name.clone(),
+                    params: params.clone(),
+                    body: body.clone(),
+                });
+                Ok(Value::Nil)
+            }
+
+            Node::FunctionCall { name, args } => {
+                let arg_vals: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.eval_node(a))
+                    .collect::<Result<_, _>>()?;
+                self.call_function(name, &arg_vals)
+            }
+
+            Node::Return { value } => {
+                let val = if let Some(v) = value {
+                    self.eval_node(v)?
+                } else {
+                    Value::Nil
+                };
+                Err(Signal::Return(val))
+            }
+
+            Node::LoopControl { keyword } => match keyword.as_str() {
+                "break" => Err(Signal::Break),
+                "next" | "continue" => Err(Signal::Next),
+                _ => Ok(Value::Nil),
+            },
+
+            Node::Array { elements } => {
+                let vals: Vec<Value> = elements
+                    .iter()
+                    .map(|e| self.eval_node(e))
+                    .collect::<Result<_, _>>()?;
+                Ok(Value::Array(vals))
+            }
+
+            Node::Hash { entries } => {
+                let mut map = HashMap::new();
+                for (key, val) in entries {
+                    let k = self.eval_node(key)?;
+                    let v = self.eval_node(val)?;
+                    map.insert(k.to_rush_string(), v);
+                }
+                Ok(Value::Hash(map))
+            }
+
+            Node::Range {
+                start,
+                end,
+                exclusive,
+            } => {
+                let s = self.eval_node(start)?;
+                let e = self.eval_node(end)?;
+                match (s.to_int(), e.to_int()) {
+                    (Some(a), Some(b)) => Ok(Value::Range(a, b, *exclusive)),
+                    _ => Ok(Value::Nil),
+                }
+            }
+
+            Node::Symbol { name } => Ok(Value::Symbol(name.clone())),
+
+            Node::InterpolatedString { parts } => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        StringPart::Text(t) => result.push_str(t),
+                        StringPart::Expr(e) => {
+                            let val = self.eval_node(e)?;
+                            result.push_str(&val.to_rush_string());
+                        }
+                    }
+                }
+                Ok(Value::String(self.process_escapes(&result)))
+            }
+
+            Node::MethodCall {
+                receiver,
+                method,
+                args,
+                block,
+            } => {
+                let recv = self.eval_node(receiver)?;
+                let arg_vals: Vec<Value> = args
+                    .iter()
+                    .map(|a| self.eval_node(a))
+                    .collect::<Result<_, _>>()?;
+                Ok(self.call_method(&recv, method, &arg_vals, block.as_deref()))
+            }
+
+            Node::PropertyAccess { receiver, property } => {
+                let recv = self.eval_node(receiver)?;
+                Ok(self.access_property(&recv, property))
+            }
+
+            Node::SafeNav { receiver, member } => {
+                let recv = self.eval_node(receiver)?;
+                if matches!(recv, Value::Nil) {
+                    Ok(Value::Nil)
+                } else {
+                    Ok(self.access_property(&recv, member))
+                }
+            }
+
+            Node::CommandSub { command } => {
+                let output = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .output();
+                match output {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        Ok(Value::String(stdout))
+                    }
+                    Err(_) => Ok(Value::Nil),
+                }
+            }
+
+            Node::Try {
+                body,
+                rescue_var,
+                rescue_body,
+                ensure_body,
+            } => {
+                let result = self.exec(body);
+                let val = match result {
+                    Ok(v) => v,
+                    Err(Signal::Return(_)) => {
+                        // Let return propagate through ensure
+                        if let Some(eb) = ensure_body {
+                            let _ = self.exec(eb);
+                        }
+                        return result;
+                    }
+                    Err(_) => {
+                        if let Some(rb) = rescue_body {
+                            if let Some(var) = rescue_var {
+                                self.env.set(var, Value::String("error".to_string()));
+                            }
+                            self.exec(rb).unwrap_or(Value::Nil)
+                        } else {
+                            Value::Nil
+                        }
+                    }
+                };
+                if let Some(eb) = ensure_body {
+                    let _ = self.exec(eb);
+                }
+                Ok(val)
+            }
+
+            Node::Case {
+                subject,
+                whens,
+                else_body,
+            } => {
+                let subj = self.eval_node(subject)?;
+                for (pattern, when_body) in whens {
+                    let pat = self.eval_node(pattern)?;
+                    if subj == pat {
+                        return self.exec(when_body);
+                    }
+                }
+                if let Some(eb) = else_body {
+                    return self.exec(eb);
+                }
+                Ok(Value::Nil)
+            }
+
+            Node::ClassDef {
+                name,
+                parent,
+                attributes,
+                constructor,
+                methods,
+                static_methods,
+            } => {
+                let mut method_map = HashMap::new();
+                let mut static_map = HashMap::new();
+
+                for m in methods {
+                    if let Node::FunctionDef {
+                        name: mname,
+                        params,
+                        body,
+                        ..
+                    } = m
+                    {
+                        method_map.insert(
+                            mname.clone(),
+                            Function {
+                                name: mname.clone(),
+                                params: params.clone(),
+                                body: body.clone(),
+                            },
+                        );
+                    }
+                }
+                for m in static_methods {
+                    if let Node::FunctionDef {
+                        name: mname,
+                        params,
+                        body,
+                        ..
+                    } = m
+                    {
+                        static_map.insert(
+                            mname.clone(),
+                            Function {
+                                name: mname.clone(),
+                                params: params.clone(),
+                                body: body.clone(),
+                            },
+                        );
+                    }
+                }
+
+                let ctor = constructor.as_ref().and_then(|c| {
+                    if let Node::FunctionDef {
+                        name: cname,
+                        params,
+                        body,
+                        ..
+                    } = c.as_ref()
+                    {
+                        Some(Function {
+                            name: cname.clone(),
+                            params: params.clone(),
+                            body: body.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                });
+
+                self.env.define_class(ClassDef {
+                    name: name.clone(),
+                    parent: parent.clone(),
+                    attributes: attributes.clone(),
+                    constructor: ctor,
+                    methods: method_map,
+                    static_methods: static_map,
+                });
+                Ok(Value::Nil)
+            }
+
+            Node::EnumDef { name, members } => {
+                // Store enum members as variables: EnumName::Member = value
+                for (i, (member_name, value)) in members.iter().enumerate() {
+                    let val = if let Some(v) = value {
+                        self.eval_node(v)?
+                    } else {
+                        Value::Int(i as i64)
+                    };
+                    let key = format!("{name}::{member_name}");
+                    self.env.set(&key, val);
+                }
+                Ok(Value::Nil)
+            }
+
+            Node::RegexLiteral { .. } => {
+                // Regex values stored as strings for now
+                Ok(Value::Nil)
+            }
+
+            Node::StaticMember { .. }
+            | Node::SuperCall { .. }
+            | Node::PlatformBlock { .. }
+            | Node::ShellPassthrough { .. }
+            | Node::NamedArg { .. } => Ok(Value::Nil),
+        }
+    }
+
+    // ── Literals ────────────────────────────────────────────────────
+
+    fn eval_literal(&self, value: &str, literal_type: TokenType) -> Value {
+        match literal_type {
+            TokenType::Integer => {
+                // Handle size suffixes
+                let lower = value.to_ascii_lowercase();
+                if lower.ends_with("kb") {
+                    let n: i64 = lower.trim_end_matches("kb").parse().unwrap_or(0);
+                    Value::Int(n * 1024)
+                } else if lower.ends_with("mb") {
+                    let n: i64 = lower.trim_end_matches("mb").parse().unwrap_or(0);
+                    Value::Int(n * 1024 * 1024)
+                } else if lower.ends_with("gb") {
+                    let n: i64 = lower.trim_end_matches("gb").parse().unwrap_or(0);
+                    Value::Int(n * 1024 * 1024 * 1024)
+                } else if lower.ends_with("tb") {
+                    let n: i64 = lower.trim_end_matches("tb").parse().unwrap_or(0);
+                    Value::Int(n * 1024 * 1024 * 1024 * 1024)
+                } else {
+                    Value::Int(value.parse().unwrap_or(0))
+                }
+            }
+            TokenType::Float => Value::Float(value.parse().unwrap_or(0.0)),
+            TokenType::StringLiteral => {
+                // Strip quotes
+                let s = if (value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\''))
+                {
+                    &value[1..value.len() - 1]
+                } else {
+                    value
+                };
+                // Process escapes only for double-quoted strings
+                if value.starts_with('"') {
+                    Value::String(self.process_escapes(s))
+                } else {
+                    Value::String(s.to_string())
+                }
+            }
+            TokenType::True => Value::Bool(true),
+            TokenType::False => Value::Bool(false),
+            TokenType::Nil => Value::Nil,
+            _ => Value::String(value.to_string()),
+        }
+    }
+
+    fn process_escapes(&self, s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => result.push('\n'),
+                    Some('t') => result.push('\t'),
+                    Some('r') => result.push('\r'),
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some('\'') => result.push('\''),
+                    Some('0') => result.push('\0'),
+                    Some('e') => result.push('\x1b'),
+                    Some(other) => {
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+        result
+    }
+
+    fn eval_variable_ref(&self, name: &str) -> Value {
+        self.env
+            .get(name)
+            .cloned()
+            .unwrap_or(Value::Nil)
+    }
+
+    // ── Binary Operations ───────────────────────────────────────────
+
+    fn apply_binary_op(&self, left: &Value, op: &str, right: &Value) -> Value {
+        match op {
+            "+" => self.add(left, right),
+            "-" => self.sub(left, right),
+            "*" => self.mul(left, right),
+            "/" => self.div(left, right),
+            "%" => self.modulo(left, right),
+            "==" => Value::Bool(left == right),
+            "!=" => Value::Bool(left != right),
+            "<" => Value::Bool(left < right),
+            ">" => Value::Bool(left > right),
+            "<=" => Value::Bool(left <= right),
+            ">=" => Value::Bool(left >= right),
+            "=~" | "~" => self.regex_match(left, right),
+            "!~" => {
+                let m = self.regex_match(left, right);
+                Value::Bool(!m.is_truthy())
+            }
+            _ => Value::Nil,
+        }
+    }
+
+    fn add(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
+            (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
+            (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),
+            (Value::String(a), Value::String(b)) => Value::String(format!("{a}{b}")),
+            (Value::String(a), other) => Value::String(format!("{a}{}", other.to_rush_string())),
+            (Value::Array(a), Value::Array(b)) => {
+                let mut result = a.clone();
+                result.extend(b.clone());
+                Value::Array(result)
+            }
+            _ => Value::Nil,
+        }
+    }
+
+    fn sub(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a - b),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a - b),
+            (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 - b),
+            (Value::Float(a), Value::Int(b)) => Value::Float(a - *b as f64),
+            _ => Value::Nil,
+        }
+    }
+
+    fn mul(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
+            (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 * b),
+            (Value::Float(a), Value::Int(b)) => Value::Float(a * *b as f64),
+            (Value::String(s), Value::Int(n)) => Value::String(s.repeat(*n as usize)),
+            _ => Value::Nil,
+        }
+    }
+
+    fn div(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) if *b != 0 => Value::Int(a / b),
+            (Value::Float(a), Value::Float(b)) if *b != 0.0 => Value::Float(a / b),
+            (Value::Int(a), Value::Float(b)) if *b != 0.0 => Value::Float(*a as f64 / b),
+            (Value::Float(a), Value::Int(b)) if *b != 0 => Value::Float(a / *b as f64),
+            _ => Value::Nil,
+        }
+    }
+
+    fn modulo(&self, left: &Value, right: &Value) -> Value {
+        match (left, right) {
+            (Value::Int(a), Value::Int(b)) if *b != 0 => Value::Int(a % b),
+            _ => Value::Nil,
+        }
+    }
+
+    fn regex_match(&self, _left: &Value, _right: &Value) -> Value {
+        // TODO: implement regex matching
+        Value::Bool(false)
+    }
+
+    // ── Method Calls ────────────────────────────────────────────────
+
+    fn call_method(
+        &mut self,
+        receiver: &Value,
+        method: &str,
+        args: &[Value],
+        block: Option<&BlockLiteral>,
+    ) -> Value {
+        match receiver {
+            Value::String(s) => self.string_method(s, method, args),
+            Value::Array(arr) => self.array_method(arr, method, args, block),
+            Value::Hash(map) => self.hash_method(map, method, args),
+            Value::Int(n) => self.int_method(*n, method, args, block),
+            Value::Range(start, end, exclusive) => {
+                self.range_method(*start, *end, *exclusive, method)
+            }
+            _ => {
+                // Index access
+                if method == "[]" {
+                    return self.index_access(receiver, args);
+                }
+                Value::Nil
+            }
+        }
+    }
+
+    fn string_method(&self, s: &str, method: &str, args: &[Value]) -> Value {
+        match method {
+            "length" | "size" | "count" => Value::Int(s.len() as i64),
+            "upcase" | "upper" => Value::String(s.to_uppercase()),
+            "downcase" | "lower" => Value::String(s.to_lowercase()),
+            "strip" | "trim" => Value::String(s.trim().to_string()),
+            "lstrip" | "trim_start" => Value::String(s.trim_start().to_string()),
+            "rstrip" | "trim_end" => Value::String(s.trim_end().to_string()),
+            "reverse" => Value::String(s.chars().rev().collect()),
+            "chars" => Value::Array(s.chars().map(|c| Value::String(c.to_string())).collect()),
+            "lines" => Value::Array(s.lines().map(|l| Value::String(l.to_string())).collect()),
+            "empty?" => Value::Bool(s.is_empty()),
+            "include?" | "contains" => {
+                let search = args.first().map(|v| v.to_rush_string()).unwrap_or_default();
+                Value::Bool(s.contains(&search))
+            }
+            "starts_with?" | "start_with?" => {
+                let prefix = args.first().map(|v| v.to_rush_string()).unwrap_or_default();
+                Value::Bool(s.starts_with(&prefix))
+            }
+            "ends_with?" | "end_with?" => {
+                let suffix = args.first().map(|v| v.to_rush_string()).unwrap_or_default();
+                Value::Bool(s.ends_with(&suffix))
+            }
+            "replace" | "gsub" => {
+                if args.len() >= 2 {
+                    let from = args[0].to_rush_string();
+                    let to = args[1].to_rush_string();
+                    Value::String(s.replace(&from, &to))
+                } else {
+                    Value::String(s.to_string())
+                }
+            }
+            "split" => {
+                let sep = args
+                    .first()
+                    .map(|v| v.to_rush_string())
+                    .unwrap_or_else(|| " ".to_string());
+                Value::Array(s.split(&sep).map(|p| Value::String(p.to_string())).collect())
+            }
+            "to_i" => Value::Int(s.parse::<i64>().unwrap_or(0)),
+            "to_f" => Value::Float(s.parse::<f64>().unwrap_or(0.0)),
+            "to_s" => Value::String(s.to_string()),
+            "[]" => self.index_access(&Value::String(s.to_string()), args),
+            _ => Value::Nil,
+        }
+    }
+
+    fn array_method(
+        &mut self,
+        arr: &[Value],
+        method: &str,
+        args: &[Value],
+        block: Option<&BlockLiteral>,
+    ) -> Value {
+        match method {
+            "length" | "size" | "count" => Value::Int(arr.len() as i64),
+            "empty?" => Value::Bool(arr.is_empty()),
+            "first" => {
+                let n = args.first().and_then(|v| v.to_int()).unwrap_or(1) as usize;
+                if n == 1 {
+                    arr.first().cloned().unwrap_or(Value::Nil)
+                } else {
+                    Value::Array(arr.iter().take(n).cloned().collect())
+                }
+            }
+            "last" => {
+                let n = args.first().and_then(|v| v.to_int()).unwrap_or(1) as usize;
+                if n == 1 {
+                    arr.last().cloned().unwrap_or(Value::Nil)
+                } else {
+                    let skip = arr.len().saturating_sub(n);
+                    Value::Array(arr.iter().skip(skip).cloned().collect())
+                }
+            }
+            "reverse" => Value::Array(arr.iter().rev().cloned().collect()),
+            "sort" => {
+                let mut sorted = arr.to_vec();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                Value::Array(sorted)
+            }
+            "uniq" => {
+                let mut seen = Vec::new();
+                let mut result = Vec::new();
+                for v in arr {
+                    let s = v.inspect();
+                    if !seen.contains(&s) {
+                        seen.push(s);
+                        result.push(v.clone());
+                    }
+                }
+                Value::Array(result)
+            }
+            "flatten" => {
+                let mut result = Vec::new();
+                fn flatten_into(val: &Value, out: &mut Vec<Value>) {
+                    if let Value::Array(inner) = val {
+                        for v in inner {
+                            flatten_into(v, out);
+                        }
+                    } else {
+                        out.push(val.clone());
+                    }
+                }
+                for v in arr {
+                    flatten_into(v, &mut result);
+                }
+                Value::Array(result)
+            }
+            "join" => {
+                let sep = args
+                    .first()
+                    .map(|v| v.to_rush_string())
+                    .unwrap_or_default();
+                let parts: Vec<String> = arr.iter().map(|v| v.to_rush_string()).collect();
+                Value::String(parts.join(&sep))
+            }
+            "include?" | "contains" => {
+                let search = args.first().cloned().unwrap_or(Value::Nil);
+                Value::Bool(arr.iter().any(|v| *v == search))
+            }
+            "push" | "append" => {
+                let mut new_arr = arr.to_vec();
+                for a in args {
+                    new_arr.push(a.clone());
+                }
+                Value::Array(new_arr)
+            }
+            "map" | "collect" => {
+                if let Some(block) = block {
+                    let mut result = Vec::new();
+                    for item in arr {
+                        let val = self.call_block(block, &[item.clone()]);
+                        result.push(val);
+                    }
+                    Value::Array(result)
+                } else {
+                    Value::Array(arr.to_vec())
+                }
+            }
+            "select" | "filter" => {
+                if let Some(block) = block {
+                    let mut result = Vec::new();
+                    for item in arr {
+                        let val = self.call_block(block, &[item.clone()]);
+                        if val.is_truthy() {
+                            result.push(item.clone());
+                        }
+                    }
+                    Value::Array(result)
+                } else {
+                    Value::Array(arr.to_vec())
+                }
+            }
+            "reject" => {
+                if let Some(block) = block {
+                    let mut result = Vec::new();
+                    for item in arr {
+                        let val = self.call_block(block, &[item.clone()]);
+                        if !val.is_truthy() {
+                            result.push(item.clone());
+                        }
+                    }
+                    Value::Array(result)
+                } else {
+                    Value::Array(arr.to_vec())
+                }
+            }
+            "each" => {
+                if let Some(block) = block {
+                    for item in arr {
+                        self.call_block(block, &[item.clone()]);
+                    }
+                }
+                Value::Array(arr.to_vec())
+            }
+            "reduce" | "inject" => {
+                if let Some(block) = block {
+                    let mut acc = args.first().cloned().unwrap_or_else(|| {
+                        arr.first().cloned().unwrap_or(Value::Nil)
+                    });
+                    let start = if args.is_empty() { 1 } else { 0 };
+                    for item in arr.iter().skip(start) {
+                        acc = self.call_block(block, &[acc, item.clone()]);
+                    }
+                    acc
+                } else {
+                    Value::Nil
+                }
+            }
+            "sum" => {
+                let mut total = Value::Int(0);
+                for v in arr {
+                    total = self.add(&total, v);
+                }
+                total
+            }
+            "min" => arr
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Nil),
+            "max" => arr
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Nil),
+            "[]" => self.index_access(&Value::Array(arr.to_vec()), args),
+            _ => Value::Nil,
+        }
+    }
+
+    fn hash_method(&self, map: &HashMap<String, Value>, method: &str, _args: &[Value]) -> Value {
+        match method {
+            "keys" => Value::Array(map.keys().map(|k| Value::String(k.clone())).collect()),
+            "values" => Value::Array(map.values().cloned().collect()),
+            "length" | "size" | "count" => Value::Int(map.len() as i64),
+            "empty?" => Value::Bool(map.is_empty()),
+            "[]" => {
+                let key = _args.first().map(|v| v.to_rush_string()).unwrap_or_default();
+                map.get(&key).cloned().unwrap_or(Value::Nil)
+            }
+            _ => {
+                // Hash key access via dot notation
+                map.get(method).cloned().unwrap_or(Value::Nil)
+            }
+        }
+    }
+
+    fn int_method(&mut self, n: i64, method: &str, _args: &[Value], block: Option<&BlockLiteral>) -> Value {
+        match method {
+            "abs" => Value::Int(n.abs()),
+            "to_s" => Value::String(n.to_string()),
+            "to_f" => Value::Float(n as f64),
+            "to_i" => Value::Int(n),
+            "even?" => Value::Bool(n % 2 == 0),
+            "odd?" => Value::Bool(n % 2 != 0),
+            "zero?" => Value::Bool(n == 0),
+            "positive?" => Value::Bool(n > 0),
+            "negative?" => Value::Bool(n < 0),
+            "times" => {
+                if let Some(block) = block {
+                    for i in 0..n {
+                        self.call_block(block, &[Value::Int(i)]);
+                    }
+                }
+                Value::Int(n)
+            }
+            _ => Value::Nil,
+        }
+    }
+
+    fn range_method(&self, start: i64, end: i64, exclusive: bool, method: &str) -> Value {
+        let items: Vec<Value> = if exclusive {
+            (start..end).map(Value::Int).collect()
+        } else {
+            (start..=end).map(Value::Int).collect()
+        };
+        match method {
+            "to_a" | "to_array" => Value::Array(items),
+            "size" | "length" | "count" => Value::Int(items.len() as i64),
+            "first" => items.first().cloned().unwrap_or(Value::Nil),
+            "last" => items.last().cloned().unwrap_or(Value::Nil),
+            "include?" | "contains" => Value::Bool(true), // TODO: check args
+            _ => Value::Nil,
+        }
+    }
+
+    fn index_access(&self, receiver: &Value, args: &[Value]) -> Value {
+        let idx = args.first().cloned().unwrap_or(Value::Nil);
+        match receiver {
+            Value::Array(arr) => {
+                if let Some(i) = idx.to_int() {
+                    let i = if i < 0 { arr.len() as i64 + i } else { i } as usize;
+                    arr.get(i).cloned().unwrap_or(Value::Nil)
+                } else {
+                    Value::Nil
+                }
+            }
+            Value::String(s) => {
+                if let Some(i) = idx.to_int() {
+                    let i = if i < 0 { s.len() as i64 + i } else { i } as usize;
+                    s.chars()
+                        .nth(i)
+                        .map(|c| Value::String(c.to_string()))
+                        .unwrap_or(Value::Nil)
+                } else {
+                    Value::Nil
+                }
+            }
+            Value::Hash(map) => {
+                let key = idx.to_rush_string();
+                map.get(&key).cloned().unwrap_or(Value::Nil)
+            }
+            _ => Value::Nil,
+        }
+    }
+
+    fn access_property(&self, receiver: &Value, property: &str) -> Value {
+        match receiver {
+            Value::String(s) => self.string_method(s, property, &[]),
+            Value::Array(arr) => self.array_method_no_block(arr, property),
+            Value::Hash(map) => {
+                // Try method first, then key access
+                match property {
+                    "keys" | "values" | "length" | "size" | "count" | "empty?" => {
+                        self.hash_method(map, property, &[])
+                    }
+                    _ => map.get(property).cloned().unwrap_or(Value::Nil),
+                }
+            }
+            Value::Int(n) => self.int_method_no_block(*n, property),
+            _ => Value::Nil,
+        }
+    }
+
+    fn array_method_no_block(&self, arr: &[Value], method: &str) -> Value {
+        match method {
+            "length" | "size" | "count" => Value::Int(arr.len() as i64),
+            "empty?" => Value::Bool(arr.is_empty()),
+            "first" => arr.first().cloned().unwrap_or(Value::Nil),
+            "last" => arr.last().cloned().unwrap_or(Value::Nil),
+            "reverse" => Value::Array(arr.iter().rev().cloned().collect()),
+            "sort" => {
+                let mut sorted = arr.to_vec();
+                sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                Value::Array(sorted)
+            }
+            "uniq" => {
+                let mut seen = Vec::new();
+                let mut result = Vec::new();
+                for v in arr {
+                    let s = v.inspect();
+                    if !seen.contains(&s) {
+                        seen.push(s);
+                        result.push(v.clone());
+                    }
+                }
+                Value::Array(result)
+            }
+            "flatten" => {
+                let mut result = Vec::new();
+                fn flatten_into(val: &Value, out: &mut Vec<Value>) {
+                    if let Value::Array(inner) = val {
+                        for v in inner {
+                            flatten_into(v, out);
+                        }
+                    } else {
+                        out.push(val.clone());
+                    }
+                }
+                for v in arr {
+                    flatten_into(v, &mut result);
+                }
+                Value::Array(result)
+            }
+            "sum" => {
+                let mut total = Value::Int(0);
+                for v in arr {
+                    total = self.add(&total, v);
+                }
+                total
+            }
+            "min" => arr
+                .iter()
+                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Nil),
+            "max" => arr
+                .iter()
+                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()
+                .unwrap_or(Value::Nil),
+            _ => Value::Nil,
+        }
+    }
+
+    fn int_method_no_block(&self, n: i64, method: &str) -> Value {
+        match method {
+            "abs" => Value::Int(n.abs()),
+            "to_s" => Value::String(n.to_string()),
+            "to_f" => Value::Float(n as f64),
+            "even?" => Value::Bool(n % 2 == 0),
+            "odd?" => Value::Bool(n % 2 != 0),
+            "zero?" => Value::Bool(n == 0),
+            "positive?" => Value::Bool(n > 0),
+            "negative?" => Value::Bool(n < 0),
+            _ => Value::Nil,
+        }
+    }
+
+    // ── Function Calls ──────────────────────────────────────────────
+
+    fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Value, Signal> {
+        // Builtins
+        match name.to_ascii_lowercase().as_str() {
+            "puts" => {
+                let msg = args
+                    .iter()
+                    .map(|v| v.to_rush_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.output.puts(&msg);
+                return Ok(Value::Nil);
+            }
+            "print" => {
+                let msg = args
+                    .iter()
+                    .map(|v| v.to_rush_string())
+                    .collect::<Vec<_>>()
+                    .join("");
+                self.output.print(&msg);
+                return Ok(Value::Nil);
+            }
+            "warn" => {
+                let msg = args
+                    .iter()
+                    .map(|v| v.to_rush_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                self.output.warn(&msg);
+                return Ok(Value::Nil);
+            }
+            "exit" => {
+                let code = args.first().and_then(|v| v.to_int()).unwrap_or(0) as i32;
+                std::process::exit(code);
+            }
+            "sleep" => {
+                let secs = args.first().and_then(|v| v.to_float()).unwrap_or(1.0);
+                std::thread::sleep(std::time::Duration::from_secs_f64(secs));
+                return Ok(Value::Nil);
+            }
+            "die" => {
+                let msg = args
+                    .first()
+                    .map(|v| v.to_rush_string())
+                    .unwrap_or_default();
+                self.output.warn(&msg);
+                std::process::exit(1);
+            }
+            _ => {}
+        }
+
+        // User-defined functions
+        if let Some(func) = self.env.functions.get(name).cloned() {
+            return self.call_user_function(&func, args);
+        }
+
+        // Unknown function — return nil
+        Ok(Value::Nil)
+    }
+
+    fn call_user_function(&mut self, func: &Function, args: &[Value]) -> Result<Value, Signal> {
+        self.env.push_scope();
+
+        // Bind parameters
+        for (i, param) in func.params.iter().enumerate() {
+            let val = if let Some(arg) = args.get(i) {
+                arg.clone()
+            } else if let Some(ref default) = param.default_value {
+                self.eval_node(default)?
+            } else {
+                Value::Nil
+            };
+            self.env.set_local(&param.name, val);
+        }
+
+        let result = match self.exec(&func.body) {
+            Ok(v) => Ok(v),
+            Err(Signal::Return(v)) => Ok(v),
+            Err(other) => Err(other),
+        };
+
+        self.env.pop_scope();
+        result
+    }
+
+    fn call_block(&mut self, block: &BlockLiteral, args: &[Value]) -> Value {
+        self.env.push_scope();
+        for (i, param) in block.params.iter().enumerate() {
+            let val = args.get(i).cloned().unwrap_or(Value::Nil);
+            self.env.set_local(param, val);
+        }
+        let result = self.exec(&block.body).unwrap_or(Value::Nil);
+        self.env.pop_scope();
+        result
+    }
+
+    // ── Iterables ───────────────────────────────────────────────────
+
+    fn value_to_iterable(&self, value: &Value) -> Vec<Value> {
+        match value {
+            Value::Array(arr) => arr.clone(),
+            Value::Range(start, end, exclusive) => {
+                if *exclusive {
+                    (*start..*end).map(Value::Int).collect()
+                } else {
+                    (*start..=*end).map(Value::Int).collect()
+                }
+            }
+            Value::String(s) => s.chars().map(|c| Value::String(c.to_string())).collect(),
+            _ => vec![value.clone()],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser;
+
+    struct TestOutput {
+        lines: Vec<String>,
+    }
+
+    impl TestOutput {
+        fn new() -> Self {
+            Self { lines: Vec::new() }
+        }
+    }
+
+    impl Output for TestOutput {
+        fn puts(&mut self, s: &str) {
+            self.lines.push(s.to_string());
+        }
+        fn print(&mut self, s: &str) {
+            self.lines.push(s.to_string());
+        }
+        fn warn(&mut self, s: &str) {
+            self.lines.push(format!("WARN: {s}"));
+        }
+    }
+
+    fn eval(src: &str) -> (Value, Vec<String>) {
+        let nodes = parser::parse(src).unwrap();
+        let mut output = TestOutput::new();
+        let val = {
+            let mut evaluator = Evaluator::new(&mut output);
+            evaluator.exec_toplevel(&nodes).unwrap()
+        };
+        (val, output.lines)
+    }
+
+    fn eval_val(src: &str) -> Value {
+        eval(src).0
+    }
+
+    fn eval_output(src: &str) -> Vec<String> {
+        eval(src).1
+    }
+
+    // ── Literals ────────────────────────────────────────────────────
+
+    #[test]
+    fn integer_literal() {
+        assert_eq!(eval_val("42"), Value::Int(42));
+    }
+
+    #[test]
+    fn float_literal() {
+        assert_eq!(eval_val("3.14"), Value::Float(3.14));
+    }
+
+    #[test]
+    fn string_literal() {
+        assert_eq!(eval_val("\"hello\""), Value::String("hello".to_string()));
+    }
+
+    #[test]
+    fn bool_literals() {
+        assert_eq!(eval_val("true"), Value::Bool(true));
+        assert_eq!(eval_val("false"), Value::Bool(false));
+    }
+
+    #[test]
+    fn nil_literal() {
+        assert_eq!(eval_val("nil"), Value::Nil);
+    }
+
+    #[test]
+    fn size_suffix() {
+        assert_eq!(eval_val("1kb"), Value::Int(1024));
+        assert_eq!(eval_val("1mb"), Value::Int(1048576));
+    }
+
+    // ── Arithmetic ──────────────────────────────────────────────────
+
+    #[test]
+    fn addition() {
+        assert_eq!(eval_val("1 + 2"), Value::Int(3));
+    }
+
+    #[test]
+    fn subtraction() {
+        assert_eq!(eval_val("10 - 3"), Value::Int(7));
+    }
+
+    #[test]
+    fn multiplication() {
+        assert_eq!(eval_val("4 * 5"), Value::Int(20));
+    }
+
+    #[test]
+    fn division() {
+        assert_eq!(eval_val("10 / 3"), Value::Int(3));
+    }
+
+    #[test]
+    fn modulo() {
+        assert_eq!(eval_val("10 % 3"), Value::Int(1));
+    }
+
+    #[test]
+    fn float_arithmetic() {
+        assert_eq!(eval_val("1.5 + 2.5"), Value::Float(4.0));
+    }
+
+    #[test]
+    fn mixed_arithmetic() {
+        assert_eq!(eval_val("1 + 2.5"), Value::Float(3.5));
+    }
+
+    #[test]
+    fn operator_precedence() {
+        assert_eq!(eval_val("2 + 3 * 4"), Value::Int(14));
+    }
+
+    #[test]
+    fn unary_minus() {
+        assert_eq!(eval_val("-42"), Value::Int(-42));
+    }
+
+    #[test]
+    fn string_concat() {
+        assert_eq!(
+            eval_val("\"hello\" + \" world\""),
+            Value::String("hello world".to_string())
+        );
+    }
+
+    #[test]
+    fn string_repeat() {
+        assert_eq!(
+            eval_val("\"ha\" * 3"),
+            Value::String("hahaha".to_string())
+        );
+    }
+
+    // ── Comparison ──────────────────────────────────────────────────
+
+    #[test]
+    fn comparison_ops() {
+        assert_eq!(eval_val("1 == 1"), Value::Bool(true));
+        assert_eq!(eval_val("1 != 2"), Value::Bool(true));
+        assert_eq!(eval_val("1 < 2"), Value::Bool(true));
+        assert_eq!(eval_val("2 > 1"), Value::Bool(true));
+        assert_eq!(eval_val("1 <= 1"), Value::Bool(true));
+        assert_eq!(eval_val("2 >= 1"), Value::Bool(true));
+    }
+
+    // ── Variables ───────────────────────────────────────────────────
+
+    #[test]
+    fn assignment_and_ref() {
+        assert_eq!(eval_val("x = 42; x"), Value::Int(42));
+    }
+
+    #[test]
+    fn compound_assignment() {
+        assert_eq!(eval_val("x = 10; x += 5; x"), Value::Int(15));
+    }
+
+    #[test]
+    fn multiple_assignment() {
+        let output = eval_output("a, b = 1, 2; puts a; puts b");
+        assert_eq!(output, vec!["1", "2"]);
+    }
+
+    // ── Control Flow ────────────────────────────────────────────────
+
+    #[test]
+    fn if_true() {
+        let output = eval_output("if true\n  puts \"yes\"\nend");
+        assert_eq!(output, vec!["yes"]);
+    }
+
+    #[test]
+    fn if_false() {
+        let output = eval_output("if false\n  puts \"yes\"\nelse\n  puts \"no\"\nend");
+        assert_eq!(output, vec!["no"]);
+    }
+
+    #[test]
+    fn if_elsif() {
+        let output = eval_output("x = 2\nif x == 1\n  puts \"one\"\nelsif x == 2\n  puts \"two\"\nend");
+        assert_eq!(output, vec!["two"]);
+    }
+
+    #[test]
+    fn postfix_if() {
+        let output = eval_output("puts \"yes\" if true");
+        assert_eq!(output, vec!["yes"]);
+    }
+
+    #[test]
+    fn postfix_unless() {
+        let output = eval_output("puts \"yes\" unless false");
+        assert_eq!(output, vec!["yes"]);
+    }
+
+    #[test]
+    fn ternary() {
+        assert_eq!(eval_val("true ? 1 : 2"), Value::Int(1));
+        assert_eq!(eval_val("false ? 1 : 2"), Value::Int(2));
+    }
+
+    // ── Loops ───────────────────────────────────────────────────────
+
+    #[test]
+    fn while_loop() {
+        let output = eval_output("x = 0\nwhile x < 3\n  puts x\n  x += 1\nend");
+        assert_eq!(output, vec!["0", "1", "2"]);
+    }
+
+    #[test]
+    fn for_loop() {
+        let output = eval_output("for x in [1, 2, 3]\n  puts x\nend");
+        assert_eq!(output, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn for_range() {
+        let output = eval_output("for i in 1..3\n  puts i\nend");
+        assert_eq!(output, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn break_in_loop() {
+        let output = eval_output("x = 0\nwhile true\n  break if x >= 2\n  puts x\n  x += 1\nend");
+        assert_eq!(output, vec!["0", "1"]);
+    }
+
+    #[test]
+    fn next_in_loop() {
+        let output = eval_output("for x in [1,2,3,4]\n  next if x == 2\n  puts x\nend");
+        assert_eq!(output, vec!["1", "3", "4"]);
+    }
+
+    // ── Functions ───────────────────────────────────────────────────
+
+    #[test]
+    fn function_def_and_call() {
+        let output = eval_output("def greet(name)\n  puts \"hello \" + name\nend\ngreet(\"world\")");
+        assert_eq!(output, vec!["hello world"]);
+    }
+
+    #[test]
+    fn function_return() {
+        assert_eq!(
+            eval_val("def add(a, b)\n  return a + b\nend\nadd(3, 4)"),
+            Value::Int(7)
+        );
+    }
+
+    #[test]
+    fn function_default_params() {
+        let output =
+            eval_output("def greet(name = \"world\")\n  puts name\nend\ngreet()\ngreet(\"Rush\")");
+        assert_eq!(output, vec!["world", "Rush"]);
+    }
+
+    // ── Arrays ──────────────────────────────────────────────────────
+
+    #[test]
+    fn array_literal() {
+        assert_eq!(
+            eval_val("[1, 2, 3]"),
+            Value::Array(vec![Value::Int(1), Value::Int(2), Value::Int(3)])
+        );
+    }
+
+    #[test]
+    fn array_methods() {
+        assert_eq!(eval_val("[1, 2, 3].length"), Value::Int(3));
+        assert_eq!(eval_val("[1, 2, 3].first"), Value::Int(1));
+        assert_eq!(eval_val("[1, 2, 3].last"), Value::Int(3));
+        assert_eq!(eval_val("[].empty?"), Value::Bool(true));
+        assert_eq!(eval_val("[1, 2, 3].sum"), Value::Int(6));
+    }
+
+    #[test]
+    fn array_index() {
+        assert_eq!(eval_val("[10, 20, 30][1]"), Value::Int(20));
+        assert_eq!(eval_val("[10, 20, 30][-1]"), Value::Int(30));
+    }
+
+    #[test]
+    fn array_map() {
+        let output = eval_output("result = [1, 2, 3].map { |x| x * 2 }\nputs result[0]\nputs result[1]\nputs result[2]");
+        assert_eq!(output, vec!["2", "4", "6"]);
+    }
+
+    #[test]
+    fn array_select() {
+        let val = eval_val("[1, 2, 3, 4].select { |x| x > 2 }");
+        assert_eq!(
+            val,
+            Value::Array(vec![Value::Int(3), Value::Int(4)])
+        );
+    }
+
+    #[test]
+    fn array_each() {
+        let output = eval_output("[1, 2, 3].each { |x| puts x }");
+        assert_eq!(output, vec!["1", "2", "3"]);
+    }
+
+    // ── Strings ─────────────────────────────────────────────────────
+
+    #[test]
+    fn string_methods() {
+        assert_eq!(eval_val("\"hello\".length"), Value::Int(5));
+        assert_eq!(
+            eval_val("\"hello\".upcase"),
+            Value::String("HELLO".to_string())
+        );
+        assert_eq!(
+            eval_val("\"HELLO\".downcase"),
+            Value::String("hello".to_string())
+        );
+        assert_eq!(
+            eval_val("\" hi \".strip"),
+            Value::String("hi".to_string())
+        );
+        assert_eq!(
+            eval_val("\"hello\".reverse"),
+            Value::String("olleh".to_string())
+        );
+    }
+
+    #[test]
+    fn string_split() {
+        let val = eval_val("\"a,b,c\".split(\",\")");
+        assert_eq!(
+            val,
+            Value::Array(vec![
+                Value::String("a".to_string()),
+                Value::String("b".to_string()),
+                Value::String("c".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn string_interpolation() {
+        let output = eval_output("name = \"world\"\nputs \"hello #{name}\"");
+        assert_eq!(output, vec!["hello world"]);
+    }
+
+    #[test]
+    fn escape_sequences() {
+        let output = eval_output("puts \"a\\tb\"");
+        assert_eq!(output, vec!["a\tb"]);
+    }
+
+    // ── Hashes ──────────────────────────────────────────────────────
+
+    #[test]
+    fn hash_literal() {
+        let val = eval_val("{a: 1, b: 2}");
+        assert!(matches!(val, Value::Hash(_)));
+    }
+
+    #[test]
+    fn hash_access() {
+        assert_eq!(eval_val("h = {a: 1, b: 2}; h.keys.length"), Value::Int(2));
+    }
+
+    // ── Case ────────────────────────────────────────────────────────
+
+    #[test]
+    fn case_when() {
+        let output = eval_output("x = 2\ncase x\nwhen 1\n  puts \"one\"\nwhen 2\n  puts \"two\"\nelse\n  puts \"other\"\nend");
+        assert_eq!(output, vec!["two"]);
+    }
+
+    // ── Try/Rescue ──────────────────────────────────────────────────
+
+    #[test]
+    fn try_rescue() {
+        // Try body runs, rescue not executed when no error
+        let output = eval_output("try\n  puts \"ok\"\nrescue => e\n  puts \"error\"\nend");
+        assert_eq!(output, vec!["ok"]);
+    }
+
+    // ── Logical Operators ───────────────────────────────────────────
+
+    #[test]
+    fn logical_and() {
+        assert_eq!(eval_val("true && false"), Value::Bool(false));
+        assert_eq!(eval_val("true && true"), Value::Bool(true));
+    }
+
+    #[test]
+    fn logical_or() {
+        assert_eq!(eval_val("false || true"), Value::Bool(true));
+        assert_eq!(eval_val("false || false"), Value::Bool(false));
+    }
+
+    #[test]
+    fn logical_not() {
+        assert_eq!(eval_val("not true"), Value::Bool(false));
+        assert_eq!(eval_val("not false"), Value::Bool(true));
+    }
+
+    // ── Int Methods ─────────────────────────────────────────────────
+
+    #[test]
+    fn int_methods() {
+        assert_eq!(eval_val("42.even?"), Value::Bool(true));
+        assert_eq!(eval_val("41.odd?"), Value::Bool(true));
+        assert_eq!(eval_val("(-5).abs"), Value::Int(5));
+        assert_eq!(eval_val("0.zero?"), Value::Bool(true));
+    }
+
+    #[test]
+    fn int_times() {
+        let output = eval_output("3.times { |i| puts i }");
+        assert_eq!(output, vec!["0", "1", "2"]);
+    }
+
+    // ── Reduce ──────────────────────────────────────────────────────
+
+    #[test]
+    fn array_reduce() {
+        assert_eq!(
+            eval_val("[1, 2, 3, 4].reduce { |acc, x| acc + x }"),
+            Value::Int(10)
+        );
+    }
+}
