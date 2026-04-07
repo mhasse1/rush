@@ -1,8 +1,13 @@
+mod completer;
+mod highlighter;
+mod prompt;
+mod repl;
+
 use rush_core::eval::{Evaluator, StdOutput};
 use rush_core::lexer::Lexer;
 use rush_core::parser;
 use rush_core::process;
-use std::io::{self, BufRead, Write};
+use std::io;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -70,39 +75,12 @@ fn main() {
         }
     }
 
-    // Interactive REPL
-    let mut output = StdOutput;
-    let mut evaluator = Evaluator::new(&mut output);
-
-    let prompt = "» ";
-    print!("{prompt}");
-    io::stdout().flush().ok();
-
-    for line in io::stdin().lock().lines() {
-        let line = line.unwrap_or_default();
-        let trimmed = line.trim();
-
-        if trimmed.is_empty() {
-            print!("{prompt}");
-            io::stdout().flush().ok();
-            continue;
-        }
-
-        if trimmed == "exit" || trimmed == "quit" {
-            break;
-        }
-
-        run_line(&mut evaluator, trimmed);
-
-        print!("{prompt}");
-        io::stdout().flush().ok();
-    }
+    // Interactive REPL with reedline
+    repl::run();
 }
 
 /// Execute a single line — try Rush parse first, fall back to shell execution.
-fn run_line(evaluator: &mut Evaluator, line: &str) {
-    // Quick check: if the first word is a known external command and the line
-    // doesn't look like Rush syntax (no =, no . chain, no keyword), run as shell.
+pub fn run_line(evaluator: &mut Evaluator, line: &str) {
     if should_run_as_shell(evaluator, line) {
         let result = process::run_shell(line);
         evaluator.exit_code = result.exit_code;
@@ -112,7 +90,6 @@ fn run_line(evaluator: &mut Evaluator, line: &str) {
         return;
     }
 
-    // Try parsing as Rush
     match parser::parse(line) {
         Ok(nodes) => {
             if let Err(e) = evaluator.exec_toplevel(&nodes) {
@@ -120,7 +97,6 @@ fn run_line(evaluator: &mut Evaluator, line: &str) {
             }
         }
         Err(_) => {
-            // Parse failed — run as raw shell command
             let result = process::run_shell(line);
             evaluator.exit_code = result.exit_code;
             if !result.stderr.is_empty() {
@@ -131,10 +107,9 @@ fn run_line(evaluator: &mut Evaluator, line: &str) {
 }
 
 /// Heuristic: should this line be run as a shell command rather than parsed as Rush?
-fn should_run_as_shell(evaluator: &Evaluator, line: &str) -> bool {
+pub fn should_run_as_shell(evaluator: &Evaluator, line: &str) -> bool {
     let first_word = line.split_whitespace().next().unwrap_or("");
 
-    // Rush keywords are never shell commands
     let rush_keywords = [
         "if", "elsif", "else", "end", "for", "while", "until", "unless", "loop",
         "def", "class", "enum", "return", "try", "begin", "rescue", "ensure",
@@ -146,24 +121,20 @@ fn should_run_as_shell(evaluator: &Evaluator, line: &str) -> bool {
         return false;
     }
 
-    // If line contains Rush-specific syntax, parse as Rush
     if line.contains(" = ") || line.contains(" += ") || line.contains(" -= ")
         || line.contains("#{") || line.starts_with('[') || line.starts_with('{')
     {
         return false;
     }
 
-    // If first word is a known user function, parse as Rush
     if evaluator.env.functions.contains_key(first_word) {
         return false;
     }
 
-    // If first word is an external command on PATH, run as shell
     if process::command_exists(first_word) {
         return true;
     }
 
-    // If line contains pipes or redirects, run as shell
     if line.contains(" | ") || line.contains(" > ") || line.contains(" >> ") {
         return true;
     }
