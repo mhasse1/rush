@@ -72,6 +72,9 @@ if [[ "${1:-}" == "--full" ]]; then
                     # Install locally if this is our platform
                     if [[ "$rid" == "osx-arm64" && "$(uname -m)" == "arm64" && "$(uname)" == "Darwin" ]]; then
                         sudo cp "$STAGING_DIR/$dst_name" "$BIN_LINK"
+                        # Re-sign after copy (cp strips code signature)
+                        sudo xattr -cr "$BIN_LINK" 2>/dev/null || true
+                        sudo codesign --sign - --force "$BIN_LINK" 2>/dev/null || true
                         VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "unknown")
                         echo "    → $BIN_LINK ($VERSION)"
                         echo "$CURRENT_SHA" > "$BUILD_SHA_FILE"
