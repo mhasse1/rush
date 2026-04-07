@@ -191,11 +191,17 @@ if [[ "$DEPLOY" == true ]]; then
         log "  oci: installed ($(ssh oci '/usr/local/bin/rush --version' 2>/dev/null))" || \
         log "  oci: FAILED"
 
-    # Buster
+    # Buster (win-x64)
     scp -q "$STAGING/rush-win-x64.exe" buster:C:/temp/rush-new.exe && \
         ssh buster 'Copy-Item C:\temp\rush-new.exe C:\bin\rush.exe -Force' 2>/dev/null && \
         log "  buster: installed ($(ssh buster 'C:\bin\rush.exe --version' 2>/dev/null | tr -d '\r'))" || \
         log "  buster: FAILED"
+
+    # Faust (win-arm64)
+    scp -q "$STAGING/rush-win-arm64.exe" faust:C:/temp/rush-new.exe && \
+        ssh faust 'Copy-Item C:\temp\rush-new.exe C:\bin\rush.exe -Force' 2>/dev/null && \
+        log "  faust: installed ($(ssh faust 'C:\bin\rush.exe --version' 2>/dev/null | tr -d '\r'))" || \
+        log "  faust: FAILED"
 
     log "Deploy complete"
 fi
