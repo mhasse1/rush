@@ -66,8 +66,8 @@
 
   <!-- ── Embedded AI context ──────────────────────────────────────────── -->
   <ItemGroup>
-    <EmbeddedResource Include="docs/rush-lang-spec.yaml" />
-    <EmbeddedResource Include="docs/rush-help.yaml" />
+    <EmbeddedResource Include="../docs/rush-lang-spec.yaml" Link="docs/rush-lang-spec.yaml" />
+    <EmbeddedResource Include="../docs/rush-help.yaml" Link="docs/rush-help.yaml" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,9 +4,13 @@
 set -euo pipefail
 
 echo "Building Windows binaries on buster..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 ssh buster "\$env:PATH = \"\$env:LOCALAPPDATA\\Microsoft\\dotnet;C:\\Program Files\\Git\\cmd;\$env:PATH\"
 cd C:\\src\\rush
 & 'C:\\Program Files\\Git\\cmd\\git.exe' pull --quiet 2>\$null
+cd dotnet
 Write-Host 'Building win-x64...'
 dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o C:\\temp\\rush-build-x64 2>&1 | Select-Object -Last 1
 Write-Host 'Building win-arm64...'
@@ -15,9 +19,9 @@ Write-Host 'Done'
 "
 
 echo "Downloading..."
-mkdir -p dist/native
-scp -q buster:C:/temp/rush-build-x64/rush.exe dist/native/rush-win-x64.exe
-scp -q buster:C:/temp/rush-build-arm64/rush.exe dist/native/rush-win-arm64.exe
+mkdir -p "$REPO_ROOT/dist/native"
+scp -q buster:C:/temp/rush-build-x64/rush.exe "$REPO_ROOT/dist/native/rush-win-x64.exe"
+scp -q buster:C:/temp/rush-build-arm64/rush.exe "$REPO_ROOT/dist/native/rush-win-arm64.exe"
 
 # Deploy to buster
 echo "Deploying to buster..."

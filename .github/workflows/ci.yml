@@ -41,27 +41,30 @@ jobs:
 
       - name: Build
         run: dotnet build
+        working-directory: dotnet
 
       - name: Test
         run: dotnet test Rush.Tests --logger "trx;LogFileName=results.trx"
+        working-directory: dotnet
 
       - name: Publish single-file binary
         if: success()
         run: dotnet publish -c Release -r ${{ matrix.rid }} -p:PublishSingleFile=true -p:SkipCleanCheck=true
+        working-directory: dotnet
 
       - name: Upload binary
         if: success()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: rush-${{ matrix.rid }}
-          path: bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
+          path: dotnet/bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
 
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: test-results-${{ matrix.os }}
-          path: Rush.Tests/TestResults/*.trx
+          path: dotnet/Rush.Tests/TestResults/*.trx
 
   # Create a GitHub issue when CI fails on main
   create-issue-on-failure:

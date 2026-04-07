@@ -4,7 +4,8 @@ set -euo pipefail
 BIN_LINK="/usr/local/bin/rush"
 SHELLS_FILE="/etc/shells"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STAGING_DIR="${RUSH_STAGING:-$SCRIPT_DIR/dist}"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STAGING_DIR="${RUSH_STAGING:-$REPO_ROOT/dist}"
 BUILD_SHA_FILE="$SCRIPT_DIR/.last-build-sha"
 PUBLISH_TMP="$SCRIPT_DIR/.publish-tmp"
 REPO="mhasse1/rush"
@@ -124,8 +125,8 @@ if [[ "${1:-}" == "--full" ]]; then
 
     # Docs
     rm -f "$STAGING_DIR/rush-lang-spec.yaml" "$STAGING_DIR/user-manual.md"
-    ln -f "$SCRIPT_DIR/docs/rush-lang-spec.yaml" "$STAGING_DIR/rush-lang-spec.yaml" 2>/dev/null || true
-    ln -f "$SCRIPT_DIR/docs/user-manual.md" "$STAGING_DIR/user-manual.md" 2>/dev/null || true
+    ln -f "$REPO_ROOT/docs/rush-lang-spec.yaml" "$STAGING_DIR/rush-lang-spec.yaml" 2>/dev/null || true
+    ln -f "$REPO_ROOT/docs/user-manual.md" "$STAGING_DIR/user-manual.md" 2>/dev/null || true
 
     echo ""
     VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "not installed locally")

@@ -15,7 +15,8 @@
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STAGING="$SCRIPT_DIR/dist/native"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STAGING="$REPO_ROOT/dist/native"
 DEPLOY=false
 TEST=false
 
@@ -39,10 +40,11 @@ build_rocinante() {
     local logfile="$RESULTS_DIR/rocinante.log"
     log "rocinante: building osx-arm64..."
     (
-        cd "$SCRIPT_DIR"
+        cd "$REPO_ROOT"
         export DOTNET_ROOT="/opt/homebrew/opt/dotnet/libexec"
         export PATH="/opt/homebrew/opt/dotnet/bin:$PATH"
         git pull --quiet 2>/dev/null || true
+        cd dotnet
         dotnet publish -c Release -r osx-arm64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o "$STAGING" 2>&1
         mv "$STAGING/rush" "$STAGING/rush-osx-arm64"
         chmod +x "$STAGING/rush-osx-arm64"
@@ -65,6 +67,7 @@ build_trinity() {
         ssh trinity 'export PATH=$HOME/.dotnet:$PATH
 cd ~/src/rush
 git pull --quiet 2>/dev/null || true
+cd dotnet
 
 # Build both targets in parallel — trinity has plenty of resources
 dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-x64 > /tmp/rush-build-x64.log 2>&1 &
@@ -100,6 +103,7 @@ build_buster() {
         ssh buster "\$env:PATH = \"\$env:LOCALAPPDATA\\Microsoft\\dotnet;C:\\Program Files\\Git\\cmd;\$env:PATH\"
 cd C:\\src\\rush
 & 'C:\\Program Files\\Git\\cmd\\git.exe' pull --quiet 2>\$null
+cd dotnet
 
 Write-Host '=== win-x64 ==='
 dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o C:\\temp\\rush-build-x64 2>&1
@@ -174,7 +178,7 @@ if [[ "$DEPLOY" == true ]]; then
         export PATH="/opt/homebrew/opt/dotnet/bin:$PATH"
         sudo rm -rf /usr/local/lib/rush
         sudo mkdir -p /usr/local/lib/rush
-        dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /usr/local/lib/rush 2>&1
+        dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /usr/local/lib/rush "$SCRIPT_DIR" 2>&1
         sudo rm -f /usr/local/bin/rush
         sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
     ) > "$RESULTS_DIR/rocinante-deploy.log" 2>&1 && \

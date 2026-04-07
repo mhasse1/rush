@@ -5,7 +5,8 @@
 # ═══════════════════════════════════════════════════════════════════════
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-STAGING="$SCRIPT_DIR/dist/native"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+STAGING="$REPO_ROOT/dist/native"
 mkdir -p "$STAGING"
 
 log() { echo "$(date +%H:%M:%S) $1"; }
@@ -29,7 +30,7 @@ build_mac() {
 
 # ── Linux (trinity) ──────────────────────────────────────────────────
 build_linux() {
-    ssh trinity 'export PATH=$HOME/.dotnet:$PATH; cd ~/src/rush; git pull --quiet 2>/dev/null || true
+    ssh trinity 'export PATH=$HOME/.dotnet:$PATH; cd ~/src/rush; git pull --quiet 2>/dev/null || true; cd dotnet
 dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-x64 > /dev/null 2>&1 &
 dotnet publish -c Release -r linux-arm64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-arm64 > /dev/null 2>&1 &
 wait' 2>/dev/null
@@ -44,6 +45,7 @@ build_win() {
     ssh buster "\$env:PATH = \"\$env:LOCALAPPDATA\\Microsoft\\dotnet;C:\\Program Files\\Git\\cmd;\$env:PATH\"
 cd C:\\src\\rush
 & 'C:\\Program Files\\Git\\cmd\\git.exe' pull --quiet 2>\$null
+cd dotnet
 dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o C:\\temp\\rush-build-x64 2>&1 | Out-Null
 dotnet publish -c Release -r win-arm64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o C:\\temp\\rush-build-arm64 2>&1 | Out-Null
 " 2>/dev/null
