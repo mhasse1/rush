@@ -30,12 +30,12 @@ jobs:
             artifact: rush.exe
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
         with:
           fetch-depth: 0
 
       - name: Setup .NET 10
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5
         with:
           dotnet-version: '10.0.1xx'
 
@@ -51,14 +51,14 @@ jobs:
 
       - name: Upload binary
         if: success()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: rush-${{ matrix.rid }}
           path: bin/Release/net10.0/${{ matrix.rid }}/publish/${{ matrix.artifact }}
 
       - name: Upload test results
         if: failure()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: test-results-${{ matrix.os }}
           path: Rush.Tests/TestResults/*.trx
@@ -72,7 +72,7 @@ jobs:
       issues: write
     steps:
       - name: Create issue for CI failure
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         with:
           script: |
             const title = `CI failure on main (${context.sha.substring(0, 7)})`;
