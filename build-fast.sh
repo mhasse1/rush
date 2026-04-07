@@ -51,6 +51,9 @@ dotnet publish -c Release -r win-arm64 -p:PublishSingleFile=true -p:SkipCleanChe
 }
 
 # ── Run all in parallel ──────────────────────────────────────────────
+# Pre-auth sudo before backgrounding (can't prompt from background)
+sudo true
+
 log "Building on 3 hosts in parallel..."
 
 build_mac &
