@@ -2887,10 +2887,12 @@ static void InjectRushEnvVars(Runspace runspace, string version, bool isLoginShe
         // Remove PS aliases that shadow Unix commands (ls→Get-ChildItem, etc.)
         // These aliases ignore Unix flags (-la, -R, etc.) and confuse users.
         // Native .exe files in PATH (C:\bin\ls.exe) handle flags correctly.
+        // Remove PS aliases that shadow Unix commands. Only remove aliases
+        // where we want the native .exe version — keep cd, pushd, popd, set,
+        // clear, pwd which Rush handles as builtins or PS needs internally.
         winPs.AddScript(@"
             @('ls','cat','cp','mv','rm','rmdir','mkdir','echo','sort','tee',
-              'diff','sleep','kill','man','mount','type','clear','pwd','cd',
-              'popd','pushd','dir','set','write') | ForEach-Object {
+              'diff','sleep','kill','man','mount','type','write') | ForEach-Object {
                 if (Test-Path ""Alias:$_"") { Remove-Item ""Alias:$_"" -Force -ErrorAction SilentlyContinue }
             }");
         // Import CimCmdlets — required for Test-NetConnection, Get-CimInstance,
