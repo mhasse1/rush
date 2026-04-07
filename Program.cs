@@ -1011,6 +1011,7 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
         }
 
         // ── --help flag: "file --help" → "help file", "for --help" → "help loops"
+        // Only intercept for Rush keywords/builtins, not external commands
         if (segment.EndsWith(" --help", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("--help", StringComparison.OrdinalIgnoreCase))
         {
@@ -1018,9 +1019,15 @@ static (bool failed, int exitCode, bool shouldExit) ProcessCommand(string input,
                 ? null
                 : segment[..segment.LastIndexOf(" --help", StringComparison.OrdinalIgnoreCase)].Trim();
             var topic = MapKeywordToHelpTopic(keyword);
-            HelpRenderer.Render(topic ?? keyword);
-            lastSegmentFailed = false;
-            continue;
+            // Only show Rush help if we have a matching topic — otherwise let the
+            // command handle its own --help (e.g., "git --help", "e2 --help")
+            if (topic != null || keyword == null)
+            {
+                HelpRenderer.Render(topic ?? keyword);
+                lastSegmentFailed = false;
+                continue;
+            }
+            // Fall through — let the external command handle --help
         }
 
         if (segment.Equals("help", StringComparison.OrdinalIgnoreCase) ||
