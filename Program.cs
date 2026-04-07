@@ -3452,14 +3452,9 @@ static int RunInteractive(string command, CommandTranslator? translator = null,
     }
     catch (System.ComponentModel.Win32Exception)
     {
-        // Command not found — show error and suggest similar commands
-        var firstSpace = command.IndexOf(' ');
-        var exe = firstSpace > 0 ? command[..firstSpace] : command;
-        Console.ForegroundColor = Theme.Current.Error;
-        Console.Error.WriteLine($"  command not found: {exe}");
-        Console.ResetColor();
-        if (translator != null)
-            ShowSuggestions(exe, translator);
+        // Command not found as native process — return 127 silently.
+        // The caller will try UseShellExecute and PowerShell fallbacks
+        // before showing an error to the user.
         return 127;
     }
     catch (Exception ex)
