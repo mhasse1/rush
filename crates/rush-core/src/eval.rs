@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::ast::{BlockLiteral, Node, StringPart};
 use crate::env::{ClassDef, Environment, Function};
 use crate::process;
+use crate::stdlib;
 use crate::token::TokenType;
 use crate::value::Value;
 
@@ -374,6 +375,23 @@ impl<'a> Evaluator<'a> {
                 args,
                 block,
             } => {
+                // Stdlib dispatch: File.method(), Dir.method(), Time.method()
+                if let Some(name) = Self::stdlib_receiver_name(receiver) {
+                    let arg_vals: Vec<Value> = args
+                        .iter()
+                        .map(|a| self.eval_node(a))
+                        .collect::<Result<_, _>>()?;
+                    return Ok(match name {
+                        "file" => stdlib::file_method(method, &arg_vals),
+                        "dir" => stdlib::dir_method(method, &arg_vals),
+                        "time" => stdlib::time_method(method, &arg_vals),
+                        "env" if method == "[]" => {
+                            let key = arg_vals.first().map(|v| v.to_rush_string()).unwrap_or_default();
+                            stdlib::env_get(&key)
+                        }
+                        _ => Value::Nil,
+                    });
+                }
                 let recv = self.eval_node(receiver)?;
                 let arg_vals: Vec<Value> = args
                     .iter()
@@ -383,7 +401,25 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::PropertyAccess { receiver, property } => {
+                // Stdlib property: Time.now, Dir.pwd, env.HOME, duration (2.hours)
+                if let Some(name) = Self::stdlib_receiver_name(receiver) {
+                    return Ok(match name {
+                        "time" => stdlib::time_method(property, &[]),
+                        "dir" => stdlib::dir_method(property, &[]),
+                        "file" => stdlib::file_method(property, &[]),
+                        "env" => stdlib::env_get(property),
+                        _ => Value::Nil,
+                    });
+                }
                 let recv = self.eval_node(receiver)?;
+                // Duration: 2.hours, 30.minutes, etc.
+                if matches!(property.as_str(), "hours" | "hour" | "minutes" | "minute"
+                    | "seconds" | "second" | "days" | "day")
+                {
+                    if let Some(n) = recv.to_float() {
+                        return Ok(stdlib::duration_to_seconds(n, property));
+                    }
+                }
                 Ok(self.access_property(&recv, property))
             }
 
@@ -554,6 +590,23 @@ impl<'a> Evaluator<'a> {
             | Node::PlatformBlock { .. }
             | Node::ShellPassthrough { .. }
             | Node::NamedArg { .. } => Ok(Value::Nil),
+        }
+    }
+
+    // ── Stdlib Dispatch ──────────────────────────────────────────────
+
+    /// Check if a node is a stdlib receiver (File, Dir, Time, env).
+    fn stdlib_receiver_name(node: &Node) -> Option<&'static str> {
+        if let Node::VariableRef { name } = node {
+            match name.to_ascii_lowercase().as_str() {
+                "file" => Some("file"),
+                "dir" => Some("dir"),
+                "time" => Some("time"),
+                "env" => Some("env"),
+                _ => None,
+            }
+        } else {
+            None
         }
     }
 
