@@ -66,12 +66,14 @@ build_trinity() {
 cd ~/src/rush
 git pull --quiet 2>/dev/null || true
 
-echo "=== linux-x64 ==="
-dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-x64 2>&1
-sha256sum /tmp/rush-build-x64/rush
+# Build both targets in parallel — trinity has plenty of resources
+dotnet publish -c Release -r linux-x64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-x64 > /tmp/rush-build-x64.log 2>&1 &
+dotnet publish -c Release -r linux-arm64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-arm64 > /tmp/rush-build-arm64.log 2>&1 &
+wait
 
+echo "=== linux-x64 ==="
+sha256sum /tmp/rush-build-x64/rush
 echo "=== linux-arm64 ==="
-dotnet publish -c Release -r linux-arm64 -p:PublishSingleFile=true -p:SkipCleanCheck=true -o /tmp/rush-build-arm64 2>&1
 sha256sum /tmp/rush-build-arm64/rush
 '
         # Download the built binaries
