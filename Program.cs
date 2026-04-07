@@ -3127,7 +3127,7 @@ static void ShimCoreutilsIfNeeded(Runspace runspace, bool quiet = false)
         foreach (var cmd in commands)
         {
             sb.AppendLine($"if (Test-Path \"Alias:{cmd}\") {{ Remove-Item \"Alias:{cmd}\" -Force }}");
-            sb.AppendLine($"Set-Item -Path \"Function:\\{cmd}\" -Value ([scriptblock]::Create(\"coreutils.exe {cmd} `$args\")).GetNewClosure()");
+            sb.AppendLine($"function {cmd} {{ coreutils.exe {cmd} @args }}");
         }
 
         ps.AddScript(sb.ToString());
@@ -3194,7 +3194,7 @@ static void ShimDiffutilsIfNeeded(Runspace runspace, bool quiet = false)
         foreach (var cmd in commands)
         {
             sb.AppendLine($"if (Test-Path \"Alias:{cmd}\") {{ Remove-Item \"Alias:{cmd}\" -Force }}");
-            sb.AppendLine($"Set-Item -Path \"Function:\\{cmd}\" -Value ([scriptblock]::Create(\"diffutils.exe {cmd} `$args\")).GetNewClosure()");
+            sb.AppendLine($"function {cmd} {{ diffutils.exe {cmd} @args }}");
         }
 
         ps.AddScript(sb.ToString());
