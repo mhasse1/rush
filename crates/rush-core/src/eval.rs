@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use crate::ast::{BlockLiteral, Node, StringPart};
 use crate::env::{ClassDef, Environment, Function};
+use crate::process;
 use crate::token::TokenType;
 use crate::value::Value;
 
@@ -396,17 +397,9 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::CommandSub { command } => {
-                let output = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(command)
-                    .output();
-                match output {
-                    Ok(out) => {
-                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        Ok(Value::String(stdout))
-                    }
-                    Err(_) => Ok(Value::Nil),
-                }
+                let result = process::run_shell_capture(command);
+                self.exit_code = result.exit_code;
+                Ok(Value::String(result.stdout.trim_end().to_string()))
             }
 
             Node::Try {
@@ -1204,7 +1197,19 @@ impl<'a> Evaluator<'a> {
             return self.call_user_function(&func, args);
         }
 
-        // Unknown function — return nil
+        // Try as external command
+        if process::command_exists(name) {
+            let str_args: Vec<String> = args.iter().map(|v| v.to_rush_string()).collect();
+            let str_refs: Vec<&str> = str_args.iter().map(|s| s.as_str()).collect();
+            let result = process::run_command(name, &str_refs);
+            self.exit_code = result.exit_code;
+            if !result.stderr.is_empty() {
+                self.output.warn(&result.stderr);
+            }
+            return Ok(Value::Int(result.exit_code as i64));
+        }
+
+        // Truly unknown
         Ok(Value::Nil)
     }
 

@@ -5,3 +5,4 @@ pub mod parser;
 pub mod value;
 pub mod env;
 pub mod eval;
+pub mod process;
