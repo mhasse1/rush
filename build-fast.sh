@@ -16,11 +16,15 @@ build_mac() {
     export DOTNET_ROOT="/opt/homebrew/opt/dotnet/libexec"
     export PATH="/opt/homebrew/opt/dotnet/bin:$PATH"
     git pull --quiet 2>/dev/null || true
-    # Build to temp, then sudo copy (sudo pre-authed before backgrounding)
     rm -rf /tmp/rush-mac-build
-    dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /tmp/rush-mac-build > /dev/null 2>&1
-    cp /tmp/rush-mac-build/rush "$STAGING/rush-osx-arm64" 2>/dev/null
-    chmod +x "$STAGING/rush-osx-arm64" 2>/dev/null
+    dotnet publish -c Release -r osx-arm64 -p:SkipCleanCheck=true -o /tmp/rush-mac-build 2>&1 | tail -1
+    # Install immediately
+    sudo rm -rf /usr/local/lib/rush
+    sudo mkdir -p /usr/local/lib/rush
+    sudo cp -rf /tmp/rush-mac-build/* /usr/local/lib/rush/
+    sudo rm -f /usr/local/bin/rush
+    sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
+    log "  rocinante: ✓ $(/usr/local/bin/rush --version 2>/dev/null)"
 }
 
 # ── Linux (trinity) ──────────────────────────────────────────────────
@@ -49,34 +53,26 @@ dotnet publish -c Release -r win-arm64 -p:PublishSingleFile=true -p:SkipCleanChe
 }
 
 # ── Run all in parallel ──────────────────────────────────────────────
-# Pre-auth sudo before backgrounding (can't prompt from background)
-sudo true
-
+# macOS builds in foreground (needs sudo), remote hosts in parallel
 log "Building on 3 hosts in parallel..."
 
-build_mac &
-pid_mac=$!
 build_linux &
 pid_lin=$!
 build_win &
 pid_win=$!
 
+# macOS in foreground — fast (cached ~2s, cold ~4min), needs sudo
+build_mac
+mac_ok=$?
+
 failed=0
-wait $pid_mac || { log "  rocinante: ✗ FAILED"; failed=$((failed+1)); }
+[[ $mac_ok -ne 0 ]] && { log "  rocinante: ✗ FAILED"; failed=$((failed+1)); }
 wait $pid_lin || { log "  trinity: ✗ FAILED"; failed=$((failed+1)); }
 wait $pid_win || { log "  buster: ✗ FAILED"; failed=$((failed+1)); }
 
 # ── Deploy ────────────────────────────────────────────────────────────
 if [[ $failed -eq 0 ]]; then
-    log "Deploying..."
-
-    # Rocinante (local — install from temp build)
-    sudo rm -rf /usr/local/lib/rush
-    sudo mkdir -p /usr/local/lib/rush
-    sudo cp -rf /tmp/rush-mac-build/* /usr/local/lib/rush/
-    sudo rm -f /usr/local/bin/rush
-    sudo ln -sf /usr/local/lib/rush/rush /usr/local/bin/rush
-    log "  rocinante: $(/usr/local/bin/rush --version 2>/dev/null)"
+    log "Deploying remotes..."
 
     # Trinity
     scp -q "$STAGING/rush-linux-x64" trinity:/tmp/rush-new
