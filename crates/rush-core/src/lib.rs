@@ -12,3 +12,4 @@ pub mod pipeline;
 pub mod ai;
 pub mod mcp;
 pub mod config;
+pub mod triage;

@@ -10,6 +10,7 @@ use rush_core::lexer::Lexer;
 use rush_core::parser;
 use rush_core::pipeline;
 use rush_core::process;
+use rush_core::triage;
 use std::io;
 
 fn main() {
@@ -120,7 +121,8 @@ pub fn run_line(evaluator: &mut Evaluator, line: &str) {
         return;
     }
 
-    if should_run_as_shell(evaluator, line) {
+    if !triage::is_rush_syntax(line) {
+        // Shell command — execute via sh
         let result = process::run_shell(line);
         evaluator.exit_code = result.exit_code;
         if !result.stderr.is_empty() {
@@ -136,6 +138,7 @@ pub fn run_line(evaluator: &mut Evaluator, line: &str) {
             }
         }
         Err(_) => {
+            // Parse failed — try as shell command
             let result = process::run_shell(line);
             evaluator.exit_code = result.exit_code;
             if !result.stderr.is_empty() {
@@ -161,7 +164,7 @@ fn run_pipeline(evaluator: &mut Evaluator, segments: &[String]) {
     let first = &segments[0];
     let auto_obj = pipeline::should_auto_objectify(first);
 
-    let mut value = if should_run_as_shell(evaluator, first) {
+    let mut value = if !triage::is_rush_syntax(first) {
         let result = process::run_shell_capture(first);
         evaluator.exit_code = result.exit_code;
         if !result.stderr.is_empty() {
@@ -217,42 +220,6 @@ fn run_pipeline(evaluator: &mut Evaluator, segments: &[String]) {
 
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// Heuristic: should this line be run as a shell command rather than parsed as Rush?
-pub fn should_run_as_shell(evaluator: &Evaluator, line: &str) -> bool {
-    let first_word = line.split_whitespace().next().unwrap_or("");
-
-    let rush_keywords = [
-        "if", "elsif", "else", "end", "for", "while", "until", "unless", "loop",
-        "def", "class", "enum", "return", "try", "begin", "rescue", "ensure",
-        "case", "match", "when", "puts", "print", "warn", "die", "true", "false",
-        "nil", "break", "next", "continue", "macos", "linux", "win64", "win32",
-        "ps", "ps5",
-    ];
-    if rush_keywords.iter().any(|k| k.eq_ignore_ascii_case(first_word)) {
-        return false;
-    }
-
-    if line.contains(" = ") || line.contains(" += ") || line.contains(" -= ")
-        || line.contains("#{") || line.starts_with('[') || line.starts_with('{')
-    {
-        return false;
-    }
-
-    if evaluator.env.functions.contains_key(first_word) {
-        return false;
-    }
-
-    if process::command_exists(first_word) {
-        return true;
-    }
-
-    if line.contains(" | ") || line.contains(" > ") || line.contains(" >> ") {
-        return true;
-    }
-
-    false
 }
 
 fn read_input(file: Option<&String>) -> String {

@@ -605,7 +605,7 @@ fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_nam
 
         // Lines that are shell builtins — handle directly
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
-        if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source") {
+        if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source" | "clear") {
             // Flush any accumulated Rush code first
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
