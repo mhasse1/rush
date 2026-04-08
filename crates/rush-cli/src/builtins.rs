@@ -110,16 +110,7 @@ fn handle_source(evaluator: &mut Evaluator, path: &str) {
     }
     let expanded = expand_tilde(path);
     match std::fs::read_to_string(&expanded) {
-        Ok(content) => {
-            match rush_core::parser::parse(&content) {
-                Ok(nodes) => {
-                    if let Err(e) = evaluator.exec_toplevel(&nodes) {
-                        eprintln!("source: {expanded}: {e}");
-                    }
-                }
-                Err(e) => eprintln!("source: {expanded}: {e}"),
-            }
-        }
+        Ok(content) => run_script_with_builtins(evaluator, &content, &expanded),
         Err(e) => eprintln!("source: {expanded}: {e}"),
     }
 }
@@ -585,14 +576,57 @@ pub fn load_init(evaluator: &mut Evaluator) {
     let init_path = config_dir().join("init.rush");
     if init_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&init_path) {
-            match rush_core::parser::parse(&content) {
-                Ok(nodes) => {
-                    if let Err(e) = evaluator.exec_toplevel(&nodes) {
-                        eprintln!("init.rush: {e}");
+            run_script_with_builtins(evaluator, &content, "init.rush");
+        }
+    }
+}
+
+/// Run a script handling shell builtins (path, export, alias) line-by-line,
+/// and batching Rush syntax for the parser.
+fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_name: &str) {
+    let mut rush_buf = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Skip empty lines and comments
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            rush_buf.push('\n');
+            continue;
+        }
+
+        // Lines that are shell builtins — handle directly
+        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source") {
+            // Flush any accumulated Rush code first
+            if !rush_buf.trim().is_empty() {
+                match rush_core::parser::parse(&rush_buf) {
+                    Ok(nodes) => {
+                        if let Err(e) = evaluator.exec_toplevel(&nodes) {
+                            eprintln!("{source_name}: {e}");
+                        }
                     }
+                    Err(e) => eprintln!("{source_name}: {e}"),
                 }
-                Err(e) => eprintln!("init.rush: {e}"),
+                rush_buf.clear();
             }
+            // Handle the builtin line
+            handle(evaluator, trimmed);
+        } else {
+            rush_buf.push_str(line);
+            rush_buf.push('\n');
+        }
+    }
+
+    // Flush remaining Rush code
+    if !rush_buf.trim().is_empty() {
+        match rush_core::parser::parse(&rush_buf) {
+            Ok(nodes) => {
+                if let Err(e) = evaluator.exec_toplevel(&nodes) {
+                    eprintln!("{source_name}: {e}");
+                }
+            }
+            Err(e) => eprintln!("{source_name}: {e}"),
         }
     }
 }
