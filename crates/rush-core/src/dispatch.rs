@@ -93,6 +93,7 @@ pub fn dispatch_with_jobs(
                 match process::spawn_background(segment) {
                     Ok((pid, pgid)) => {
                         jt.add(pid, pgid, segment);
+                        unsafe { std::env::set_var("RUSH_LAST_BG_PID", pid.to_string()) };
                         last_exit = 0;
                         last_failed = false;
                     }
@@ -280,6 +281,9 @@ pub fn dispatch_with_jobs(
                 None => unsafe { std::env::remove_var(&key) },
             }
         }
+
+        // Update $? for special parameter expansion
+        unsafe { std::env::set_var("RUSH_LAST_EXIT", last_exit.to_string()) };
 
         // set -e: exit on failure (with POSIX exceptions)
         // Exceptions: condition of if/while/until, left side of && or ||

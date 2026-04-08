@@ -1070,17 +1070,25 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             continue;
         }
 
-        // Lines that are shell builtins — handle directly
+        // Triage: is this line Rush syntax or a shell command/builtin?
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
+
+        // Shell builtins that must be handled directly
         if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source" | "clear") {
-            // Flush any accumulated Rush code first
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
-            // Handle the builtin line
             handle(evaluator, trimmed);
-        } else {
+        }
+        // If line is Rush syntax, accumulate for block parsing
+        else if rush_core::triage::is_rush_syntax(trimmed) {
             rush_buf.push_str(line);
             rush_buf.push('\n');
+        }
+        // Shell command — flush Rush buf and dispatch
+        else {
+            flush_rush_buf(evaluator, &rush_buf, source_name);
+            rush_buf.clear();
+            crate::run_line(evaluator, trimmed);
         }
     }
 

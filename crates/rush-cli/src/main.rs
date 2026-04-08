@@ -17,6 +17,12 @@ fn main() {
     signals::install();
     signals::update_terminal_size();
 
+    // Set SECONDS baseline
+    let start_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs()).unwrap_or(0);
+    unsafe { std::env::set_var("RUSH_START_TIME", start_secs.to_string()) };
+
     let args: Vec<String> = std::env::args().collect();
 
     // rush --lex: dump tokens
@@ -84,8 +90,16 @@ fn main() {
                 .iter()
                 .map(|a| rush_core::value::Value::String(a.clone()))
                 .collect();
-            evaluator.env.set("ARGV", rush_core::value::Value::Array(script_args));
+            evaluator.env.set("ARGV", rush_core::value::Value::Array(script_args.clone()));
             evaluator.env.set("__FILE__", rush_core::value::Value::String(file.clone()));
+
+            // POSIX special params for $@ $# $0
+            let argv_str = args[2..].join(" ");
+            unsafe {
+                std::env::set_var("RUSH_ARGC", (args.len() - 2).to_string());
+                std::env::set_var("RUSH_ARGV", &argv_str);
+                std::env::set_var("RUSH_SCRIPT_NAME", file);
+            }
             if let Some(dir) = std::path::Path::new(file).parent() {
                 evaluator.env.set("__DIR__", rush_core::value::Value::String(
                     dir.to_string_lossy().to_string(),

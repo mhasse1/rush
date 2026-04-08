@@ -805,8 +805,21 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                             Some('b') => current.push('\x08'),
                             Some('f') => current.push('\x0C'),
                             Some('v') => current.push('\x0B'),
-                            Some('0') => current.push('\0'),
                             Some('e') => current.push('\x1b'),
+                            Some(d) if d.is_ascii_digit() && d <= '7' => {
+                                // \ddd octal byte (1-3 digits)
+                                let mut oct = String::new();
+                                oct.push(d);
+                                for _ in 0..2 {
+                                    if let Some(&o) = chars.peek() {
+                                        if o.is_ascii_digit() && o <= '7' { oct.push(chars.next().unwrap()); }
+                                        else { break; }
+                                    }
+                                }
+                                if let Ok(byte) = u8::from_str_radix(&oct, 8) {
+                                    current.push(byte as char);
+                                }
+                            }
                             Some('x') => {
                                 // \xHH hex byte
                                 let mut hex = String::new();
@@ -932,15 +945,92 @@ fn expand_env_vars(arg: &str) -> String {
                     var_name.push(chars[i]);
                     i += 1;
                 }
-                result.push_str(&std::env::var(&var_name).unwrap_or_default());
+                // Dynamic shell variables
+                let value = match var_name.as_str() {
+                    "RANDOM" => {
+                        // Simple PRNG — good enough for shell scripts
+                        let t = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos()).unwrap_or(0);
+                        ((t ^ (t >> 16)) % 32768).to_string()
+                    }
+                    "SECONDS" => {
+                        std::env::var("RUSH_START_TIME")
+                            .ok()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(|start| {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs()).unwrap_or(0);
+                                (now - start).to_string()
+                            })
+                            .unwrap_or_else(|| "0".into())
+                    }
+                    "LINENO" => std::env::var("RUSH_LINENO").unwrap_or_else(|_| "0".into()),
+                    _ => std::env::var(&var_name).unwrap_or_default(),
+                };
+                result.push_str(&value);
                 continue;
             }
 
-            // $? $$ $! etc — special params
-            if chars[i + 1] == '?' {
-                result.push_str("$?"); // let Rush evaluator handle
-                i += 2;
-                continue;
+            // Special parameters: $? $$ $! $0 $# $@ $* $-
+            match chars[i + 1] {
+                '?' => {
+                    // $? — last exit code (from RUSH_LAST_EXIT env or 0)
+                    let code = std::env::var("RUSH_LAST_EXIT").unwrap_or_else(|_| "0".into());
+                    result.push_str(&code);
+                    i += 2;
+                    continue;
+                }
+                '$' => {
+                    // $$ — PID of the shell
+                    result.push_str(&std::process::id().to_string());
+                    i += 2;
+                    continue;
+                }
+                '!' => {
+                    // $! — PID of last background command
+                    let pid = std::env::var("RUSH_LAST_BG_PID").unwrap_or_else(|_| "0".into());
+                    result.push_str(&pid);
+                    i += 2;
+                    continue;
+                }
+                '0' => {
+                    // $0 — name of the shell or script
+                    let name = std::env::var("RUSH_SCRIPT_NAME").unwrap_or_else(|_| "rush".into());
+                    result.push_str(&name);
+                    i += 2;
+                    continue;
+                }
+                '#' => {
+                    // $# — number of positional parameters
+                    let argc = std::env::var("RUSH_ARGC").unwrap_or_else(|_| "0".into());
+                    result.push_str(&argc);
+                    i += 2;
+                    continue;
+                }
+                '@' => {
+                    // $@ — all positional params (each as separate word)
+                    let args = std::env::var("RUSH_ARGV").unwrap_or_default();
+                    result.push_str(&args);
+                    i += 2;
+                    continue;
+                }
+                '*' if i + 2 < chars.len() && chars[i + 2] != '/' => {
+                    // $* — all positional params (joined by IFS)
+                    // Only match if not followed by / (to avoid matching glob patterns like $*/)
+                    let args = std::env::var("RUSH_ARGV").unwrap_or_default();
+                    result.push_str(&args);
+                    i += 2;
+                    continue;
+                }
+                '-' if i + 2 >= chars.len() || !chars[i + 2].is_ascii_alphanumeric() => {
+                    // $- — current shell option flags
+                    result.push_str(&flags::current_flags());
+                    i += 2;
+                    continue;
+                }
+                _ => {}
             }
         }
         result.push(chars[i]);
@@ -1541,6 +1631,73 @@ mod tests {
         let result = parse_and_expand("echo $HOME");
         let home = std::env::var("HOME").unwrap_or_default();
         assert_eq!(result, vec!["echo", &home]);
+    }
+
+    // ── Special parameters ───────────────────────────────────────────
+
+    #[test]
+    fn special_param_pid() {
+        let result = expand_env_vars("$$");
+        let pid = std::process::id().to_string();
+        assert_eq!(result, pid);
+    }
+
+    #[test]
+    fn special_param_exit_code() {
+        unsafe { std::env::set_var("RUSH_LAST_EXIT", "42") };
+        let result = expand_env_vars("$?");
+        assert_eq!(result, "42");
+        unsafe { std::env::remove_var("RUSH_LAST_EXIT") };
+    }
+
+    #[test]
+    fn special_param_flags() {
+        use crate::flags;
+        flags::set_errexit(false);
+        flags::set_xtrace(false);
+        let result = expand_env_vars("$-");
+        assert_eq!(result, "");
+        flags::set_errexit(true);
+        let result = expand_env_vars("$-");
+        assert_eq!(result, "e");
+        flags::set_errexit(false);
+    }
+
+    #[test]
+    fn special_param_argc() {
+        unsafe { std::env::set_var("RUSH_ARGC", "3") };
+        let result = expand_env_vars("$#");
+        assert_eq!(result, "3");
+        unsafe { std::env::remove_var("RUSH_ARGC") };
+    }
+
+    #[test]
+    fn special_param_script_name() {
+        unsafe { std::env::set_var("RUSH_SCRIPT_NAME", "test.rush") };
+        let result = expand_env_vars("$0");
+        assert_eq!(result, "test.rush");
+        unsafe { std::env::remove_var("RUSH_SCRIPT_NAME") };
+    }
+
+    #[test]
+    fn random_var() {
+        let r1 = expand_env_vars("$RANDOM");
+        let n: u64 = r1.parse().unwrap_or(99999);
+        assert!(n < 32768, "RANDOM should be 0-32767, got {n}");
+    }
+
+    // ── Octal in $'...' ─────────────────────────────────────────────
+
+    #[test]
+    fn dollar_single_quote_octal() {
+        let result = parse_command_line("echo $'\\101'"); // \101 = 'A' (65 decimal)
+        assert_eq!(result, vec!["echo", "A"]);
+    }
+
+    #[test]
+    fn dollar_single_quote_null() {
+        let result = parse_command_line("echo $'\\0'"); // \0 = null
+        assert_eq!(result, vec!["echo", "\0"]);
     }
 
     // ── Brace expansion ─────────────────────────────────────────────
