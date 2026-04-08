@@ -4,26 +4,26 @@ use reedline::{
 };
 
 use rush_core::eval::{Evaluator, StdOutput};
+use rush_core::value::Value;
 
+use crate::builtins;
 use crate::completer::RushCompleter;
 use crate::highlighter::RushHighlighter;
 use crate::prompt::RushPrompt;
+use crate::validator::RushValidator;
 
 /// History file location.
 fn history_path() -> std::path::PathBuf {
-    let config_dir = dirs_config().join("rush");
+    let config_dir = config_dir();
     std::fs::create_dir_all(&config_dir).ok();
     config_dir.join("history")
 }
 
-fn dirs_config() -> std::path::PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        std::path::PathBuf::from(home).join(".config")
-    } else if let Ok(home) = std::env::var("USERPROFILE") {
-        std::path::PathBuf::from(home).join(".config")
-    } else {
-        std::path::PathBuf::from(".config")
-    }
+fn config_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".config").join("rush")
 }
 
 /// Run the interactive REPL.
@@ -31,29 +31,21 @@ pub fn run() {
     let mut output = StdOutput;
     let mut evaluator = Evaluator::new(&mut output);
 
+    // Inject built-in variables
+    builtins::inject_builtin_vars(&mut evaluator);
+
+    // Load secrets and init file
+    builtins::load_secrets(&mut evaluator);
+    builtins::load_init(&mut evaluator);
+
     // Build reedline editor
     let history = FileBackedHistory::with_file(10_000, history_path())
         .expect("Failed to create history file");
 
     let completer = Box::new(RushCompleter::new());
-
-    // Completion menu
     let completion_menu = Box::new(ColumnarMenu::default());
 
-    let vi = Vi::new(
-        default_vi_insert_keybindings(),
-        default_vi_normal_keybindings(),
-    );
-
-    let mut editor = Reedline::create()
-        .with_edit_mode(Box::new(vi))
-        .with_history(Box::new(history))
-        .with_completer(completer)
-        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
-        .with_highlighter(Box::new(RushHighlighter))
-        .with_ansi_colors(true);
-
-    // Bind Tab to completion menu
+    // Bind Tab to completion menu in vi insert mode
     let mut insert_bindings = default_vi_insert_keybindings();
     insert_bindings.add_binding(
         KeyModifiers::NONE,
@@ -63,15 +55,27 @@ pub fn run() {
             ReedlineEvent::MenuNext,
         ]),
     );
-    editor = editor.with_edit_mode(Box::new(Vi::new(
-        insert_bindings,
-        default_vi_normal_keybindings(),
-    )));
 
+    let editor = Reedline::create()
+        .with_edit_mode(Box::new(Vi::new(
+            insert_bindings,
+            default_vi_normal_keybindings(),
+        )))
+        .with_history(Box::new(history))
+        .with_completer(completer)
+        .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
+        .with_highlighter(Box::new(RushHighlighter))
+        .with_validator(Box::new(RushValidator))
+        .with_ansi_colors(true);
+
+    let mut editor = editor;
     let prompt = RushPrompt::new();
 
     // REPL loop
     loop {
+        // Update $? before each prompt
+        evaluator.env.set("$?", Value::Int(evaluator.exit_code as i64));
+
         match editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
                 let trimmed = line.trim();
@@ -79,14 +83,9 @@ pub fn run() {
                     continue;
                 }
 
-                // Shell builtins
-                match trimmed {
-                    "exit" | "quit" => break,
-                    s if s.starts_with("cd ") || s == "cd" => {
-                        handle_cd(&mut evaluator, trimmed);
-                        continue;
-                    }
-                    _ => {}
+                // Shell builtins (cd, export, source, clear, etc.)
+                if builtins::handle(&mut evaluator, trimmed) {
+                    continue;
                 }
 
                 crate::run_line(&mut evaluator, trimmed);
@@ -101,33 +100,6 @@ pub fn run() {
                 eprintln!("rush: input error: {e}");
                 break;
             }
-        }
-    }
-}
-
-/// Handle cd builtin — must run in-process.
-fn handle_cd(evaluator: &mut Evaluator, line: &str) {
-    let target = line.strip_prefix("cd").unwrap_or("").trim();
-    let path = if target.is_empty() || target == "~" {
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_string())
-    } else if let Some(rest) = target.strip_prefix("~/") {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
-        format!("{home}/{rest}")
-    } else {
-        target.to_string()
-    };
-
-    match std::env::set_current_dir(&path) {
-        Ok(()) => {
-            evaluator.exit_code = 0;
-        }
-        Err(e) => {
-            eprintln!("cd: {path}: {e}");
-            evaluator.exit_code = 1;
         }
     }
 }

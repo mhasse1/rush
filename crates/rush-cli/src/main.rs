@@ -1,7 +1,9 @@
+mod builtins;
 mod completer;
 mod highlighter;
 mod prompt;
 mod repl;
+mod validator;
 
 use rush_core::eval::{Evaluator, StdOutput};
 use rush_core::lexer::Lexer;
@@ -63,7 +65,7 @@ fn main() {
         return;
     }
 
-    // rush <file>: run a script
+    // rush <file> [args...]: run a script
     if let Some(file) = args.get(1) {
         if !file.starts_with('-') {
             let input = std::fs::read_to_string(file).unwrap_or_else(|e| {
@@ -72,6 +74,20 @@ fn main() {
             });
             let mut output = StdOutput;
             let mut evaluator = Evaluator::new(&mut output);
+
+            // Set ARGV and __FILE__
+            let script_args: Vec<rush_core::value::Value> = args[2..]
+                .iter()
+                .map(|a| rush_core::value::Value::String(a.clone()))
+                .collect();
+            evaluator.env.set("ARGV", rush_core::value::Value::Array(script_args));
+            evaluator.env.set("__FILE__", rush_core::value::Value::String(file.clone()));
+            if let Some(dir) = std::path::Path::new(file).parent() {
+                evaluator.env.set("__DIR__", rush_core::value::Value::String(
+                    dir.to_string_lossy().to_string(),
+                ));
+            }
+
             match parser::parse(&input) {
                 Ok(nodes) => {
                     if let Err(e) = evaluator.exec_toplevel(&nodes) {
