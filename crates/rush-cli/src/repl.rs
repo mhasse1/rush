@@ -95,12 +95,7 @@ pub fn run() {
                 // Track last command for !! and !$
                 last_cmd = Some(trimmed.to_string());
 
-                // Shell builtins
-                if builtins::handle(&mut evaluator, trimmed) {
-                    continue;
-                }
-
-                // Execute with timing
+                // Execute through unified dispatch (handles builtins, Rush, shell)
                 let start = std::time::Instant::now();
                 crate::run_line(&mut evaluator, trimmed);
                 let elapsed = start.elapsed();

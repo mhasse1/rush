@@ -61,21 +61,33 @@ pub fn is_rush_syntax(input: &str) -> bool {
         }
     }
 
-    // Assignment: word = expr (but not ==)
-    if let Some(eq_pos) = trimmed.find('=') {
-        if eq_pos > 0 {
-            let before_eq = trimmed[..eq_pos].trim();
-            let after_eq = &trimmed[eq_pos..];
-            // Not == and not !=
-            if !after_eq.starts_with("==") && !trimmed[..eq_pos].ends_with('!') {
-                // Check left side is identifier(s)
-                let is_ident = before_eq.split(',')
-                    .all(|part| {
-                        let p = part.trim();
-                        !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
-                    });
-                if is_ident {
-                    return true;
+    // Assignment: word = expr (but not ==, !=, >=, <=)
+    // Exclude builtins that use = in their own syntax (export FOO=bar, alias k='v', etc.)
+    let builtins_with_equals = [
+        "export", "set", "alias", "cd", "unset", "wait", "printf", "read", "exec", "trap",
+    ];
+    let is_builtin_eq = builtins_with_equals.iter().any(|b| b.eq_ignore_ascii_case(first_word));
+
+    if !is_builtin_eq {
+        if let Some(eq_pos) = trimmed.find('=') {
+            if eq_pos > 0 {
+                let before_eq = trimmed[..eq_pos].trim();
+                let after_eq = &trimmed[eq_pos..];
+                // Not ==, !=, >=, <=
+                if !after_eq.starts_with("==")
+                    && !trimmed[..eq_pos].ends_with('!')
+                    && !trimmed[..eq_pos].ends_with('>')
+                    && !trimmed[..eq_pos].ends_with('<')
+                {
+                    // Check left side is identifier(s)
+                    let is_ident = before_eq.split(',')
+                        .all(|part| {
+                            let p = part.trim();
+                            !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
+                        });
+                    if is_ident {
+                        return true;
+                    }
                 }
             }
         }
