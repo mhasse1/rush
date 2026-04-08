@@ -52,6 +52,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "o" | "open" => { handle_open(args); true }
         "reload" => { handle_reload(evaluator, args); true }
         "sync" => { rush_core::sync::handle_sync(args); true }
+        "ai" => { handle_ai(args); true }
         "init" => { handle_init(); true }
         "printf" => { handle_printf(args); true }
         "mark" | "---" => { handle_mark(args); true }
@@ -889,6 +890,26 @@ fn handle_kill_job(args: &str) {
                 eprintln!("kill: {spec}: no such job");
             }
         });
+    }
+}
+
+// ── ai — LLM assistant ──────────────────────────────────────────────
+
+fn handle_ai(args: &str) {
+    if args.is_empty() {
+        eprintln!("usage: ai \"question\" [-p provider] [-m model]");
+        return;
+    }
+    let (prompt, provider, model) = rush_core::ai::parse_ai_args(args);
+    if prompt.is_empty() {
+        eprintln!("usage: ai \"question\"");
+        return;
+    }
+    match rush_core::ai::execute(provider.as_deref(), model.as_deref(), &prompt, None) {
+        Ok(_response) => {
+            // Response already printed via streaming
+        }
+        Err(e) => eprintln!("ai: {e}"),
     }
 }
 
