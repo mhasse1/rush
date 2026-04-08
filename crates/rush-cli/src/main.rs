@@ -46,6 +46,12 @@ fn main() {
         return;
     }
 
+    // rush --mcp: MCP server mode (JSON-RPC 2.0 over stdio)
+    if args.get(1).is_some_and(|a| a == "--mcp") {
+        rush_core::mcp::run();
+        return;
+    }
+
     // rush -c "command": execute and exit
     if args.get(1).is_some_and(|a| a == "-c") {
         if let Some(cmd) = args.get(2) {

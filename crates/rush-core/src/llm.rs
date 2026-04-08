@@ -165,7 +165,7 @@ fn check_tty_blocklist(cmd: &str) -> Option<(String, String)> {
 
 // ── lcat (file reader) ──────────────────────────────────────────────
 
-fn lcat(path: &str, cwd: &str) -> LlmResult {
+pub fn lcat(path: &str, cwd: &str) -> LlmResult {
     let path = path.trim();
     if path.is_empty() {
         return error_result("lcat: missing file path", cwd);
@@ -295,7 +295,7 @@ fn is_likely_text(path: &str) -> bool {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-fn error_result(msg: &str, cwd: &str) -> LlmResult {
+pub fn error_result(msg: &str, cwd: &str) -> LlmResult {
     LlmResult {
         status: "error".into(),
         exit_code: 1,
@@ -305,13 +305,13 @@ fn error_result(msg: &str, cwd: &str) -> LlmResult {
     }
 }
 
-fn get_cwd() -> String {
+pub fn get_cwd() -> String {
     std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| ".".into())
 }
 
-fn get_hostname() -> String {
+pub fn get_hostname() -> String {
     #[cfg(unix)]
     {
         let mut buf = [0u8; 256];
@@ -325,13 +325,13 @@ fn get_hostname() -> String {
     std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into())
 }
 
-fn get_username() -> String {
+pub fn get_username() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".into())
 }
 
-fn get_git_info(cwd: &str) -> (Option<String>, bool) {
+pub fn get_git_info(cwd: &str) -> (Option<String>, bool) {
     let branch = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(cwd)
@@ -483,6 +483,12 @@ fn handle_envelope(raw: &str, spool: &mut Spool) -> LlmResult {
     };
 
     execute_command(&cmd, spool)
+}
+
+/// Execute a command and return structured result (public for MCP).
+pub fn execute_one(input: &str) -> LlmResult {
+    let mut spool = Spool::new();
+    execute_command(input, &mut spool)
 }
 
 fn execute_command(input: &str, spool: &mut Spool) -> LlmResult {

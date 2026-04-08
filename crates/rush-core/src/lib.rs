@@ -10,3 +10,4 @@ pub mod stdlib;
 pub mod llm;
 pub mod pipeline;
 pub mod ai;
+pub mod mcp;
