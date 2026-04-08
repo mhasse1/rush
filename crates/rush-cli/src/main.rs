@@ -159,20 +159,35 @@ fn run_pipeline(evaluator: &mut Evaluator, segments: &[String]) {
 
     // Execute first segment to get initial data
     let first = &segments[0];
+    let auto_obj = pipeline::should_auto_objectify(first);
+
     let mut value = if should_run_as_shell(evaluator, first) {
         let result = process::run_shell_capture(first);
         evaluator.exit_code = result.exit_code;
         if !result.stderr.is_empty() {
             eprintln!("{}", result.stderr);
         }
-        pipeline::text_to_array(&result.stdout)
+        let text_val = pipeline::text_to_array(&result.stdout);
+        // Auto-objectify tabular output from known commands
+        if auto_obj {
+            let op = pipeline::parse_pipe_op("objectify");
+            pipeline::apply_pipe_op(text_val, &op)
+        } else {
+            text_val
+        }
     } else {
         match parser::parse(first) {
             Ok(nodes) => evaluator.exec_toplevel(&nodes).unwrap_or(rush_core::value::Value::Nil),
             Err(_) => {
                 let result = process::run_shell_capture(first);
                 evaluator.exit_code = result.exit_code;
-                pipeline::text_to_array(&result.stdout)
+                let text_val = pipeline::text_to_array(&result.stdout);
+                if auto_obj {
+                    let op = pipeline::parse_pipe_op("objectify");
+                    pipeline::apply_pipe_op(text_val, &op)
+                } else {
+                    text_val
+                }
             }
         }
     };

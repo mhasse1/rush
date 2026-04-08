@@ -82,6 +82,8 @@ pub fn apply_pipe_op(input: Value, op: &PipeOp) -> Value {
         "from" | "json" => apply_from(input, &op.args),
         "objectify" => apply_objectify(input),
         "grep" => apply_grep(input, &op.args),
+        "tee" => apply_tee(input, &op.args),
+        "columns" => apply_columns(input, &op.args),
         _ => input,
     }
 }
@@ -436,6 +438,64 @@ fn apply_grep(input: Value, args: &[String]) -> Value {
     Value::Array(filtered)
 }
 
+fn apply_tee(input: Value, args: &[String]) -> Value {
+    if let Some(path) = args.first() {
+        let text = match &input {
+            Value::Array(arr) => arr.iter().map(|v| v.to_rush_string()).collect::<Vec<_>>().join("\n"),
+            other => other.to_rush_string(),
+        };
+        if let Err(e) = std::fs::write(path, &text) {
+            eprintln!("tee: {path}: {e}");
+        }
+    } else {
+        eprintln!("tee: missing filename");
+    }
+    input // pass through
+}
+
+fn apply_columns(input: Value, args: &[String]) -> Value {
+    // columns 1,3,5 — select columns by 1-based index
+    let indices: Vec<usize> = args
+        .iter()
+        .flat_map(|a| a.split(','))
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .map(|i| i.saturating_sub(1)) // 1-based → 0-based
+        .collect();
+
+    if indices.is_empty() {
+        return input;
+    }
+
+    let items = to_items(input);
+    let result: Vec<Value> = items
+        .into_iter()
+        .map(|item| {
+            let text = item.to_rush_string();
+            let fields: Vec<&str> = text.split_whitespace().collect();
+            let selected: Vec<&str> = indices
+                .iter()
+                .filter_map(|&i| fields.get(i).copied())
+                .collect();
+            Value::String(selected.join("\t"))
+        })
+        .collect();
+    Value::Array(result)
+}
+
+// ── Auto-objectify ──────────────────────────────────────────────────
+
+/// Commands whose output should be automatically objectified when piped.
+const AUTO_OBJECTIFY_COMMANDS: &[&str] = &[
+    "ps", "docker", "kubectl", "netstat", "ss", "lsof", "free", "df",
+    "mount", "ip", "ifconfig", "lsblk", "blkid",
+];
+
+/// Check if a command should auto-objectify its output for pipeline operators.
+pub fn should_auto_objectify(first_segment: &str) -> bool {
+    let cmd = first_segment.split_whitespace().next().unwrap_or("");
+    AUTO_OBJECTIFY_COMMANDS.iter().any(|c| cmd.eq_ignore_ascii_case(c))
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn to_items(value: Value) -> Vec<Value> {
@@ -786,5 +846,83 @@ mod tests {
     fn text_to_array_conversion() {
         let result = text_to_array("line1\nline2\nline3");
         assert_eq!(result, str_arr(&["line1", "line2", "line3"]));
+    }
+
+    // ── Tee ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn op_tee() {
+        let tmp = std::env::temp_dir().join("rush_tee_test.txt");
+        let path = tmp.to_string_lossy().to_string();
+        let input = str_arr(&["hello", "world"]);
+        let result = apply_pipe_op(input.clone(), &parse_pipe_op(&format!("tee {path}")));
+        // Tee passes through unchanged
+        assert_eq!(result, input);
+        // And writes to file
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        assert_eq!(content, "hello\nworld");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    // ── Columns ─────────────────────────────────────────────────────
+
+    #[test]
+    fn op_columns() {
+        let input = str_arr(&["alice 30 eng", "bob 25 sales"]);
+        let result = apply_pipe_op(input, &parse_pipe_op("columns 1,3"));
+        assert_eq!(result, str_arr(&["alice\teng", "bob\tsales"]));
+    }
+
+    // ── Auto-objectify detection ────────────────────────────────────
+
+    #[test]
+    fn auto_objectify_detection() {
+        assert!(should_auto_objectify("ps aux"));
+        assert!(should_auto_objectify("docker ps"));
+        assert!(should_auto_objectify("df -h"));
+        assert!(!should_auto_objectify("ls -la"));
+        assert!(!should_auto_objectify("echo hello"));
+    }
+
+    // ── CSV round-trip ──────────────────────────────────────────────
+
+    #[test]
+    fn csv_round_trip() {
+        let items = Value::Array(vec![
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Alice".to_string())),
+                ("age".to_string(), Value::String("30".to_string())),
+            ])),
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Bob".to_string())),
+                ("age".to_string(), Value::String("25".to_string())),
+            ])),
+        ]);
+        let csv = apply_pipe_op(items.clone(), &parse_pipe_op("as csv"));
+        if let Value::String(csv_text) = csv {
+            assert!(csv_text.contains("Alice"));
+            assert!(csv_text.contains("Bob"));
+            // Parse back
+            let parsed = apply_pipe_op(Value::String(csv_text), &parse_pipe_op("from csv"));
+            if let Value::Array(arr) = parsed {
+                assert_eq!(arr.len(), 2);
+            } else {
+                panic!("expected array from CSV parse");
+            }
+        } else {
+            panic!("expected string from as csv");
+        }
+    }
+
+    // ── Chained pipeline ────────────────────────────────────────────
+
+    #[test]
+    fn chained_pipeline() {
+        // Simulate: [5,3,1,4,2] | sort | first 3 | sum
+        let input = arr(&[5, 3, 1, 4, 2]);
+        let sorted = apply_pipe_op(input, &parse_pipe_op("sort"));
+        let first3 = apply_pipe_op(sorted, &parse_pipe_op("first 3"));
+        let sum = apply_pipe_op(first3, &parse_pipe_op("sum"));
+        assert_eq!(sum, Value::Int(6)); // 1 + 2 + 3
     }
 }
