@@ -223,4 +223,174 @@ mod tests {
         assert!(hint.is_some());
         assert!(hint.unwrap().contains("git"));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Trap
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn trap_set_and_get() {
+        crate::trap::init();
+        crate::trap::set_trap("EXIT", "echo bye");
+        assert_eq!(crate::trap::get_exit_trap(), Some("echo bye".to_string()));
+        crate::trap::set_trap("EXIT", "-"); // reset
+        assert_eq!(crate::trap::get_exit_trap(), None);
+    }
+
+    #[test]
+    fn trap_ignore() {
+        crate::trap::init();
+        crate::trap::set_trap("INT", "");
+        assert_eq!(crate::trap::get_trap("INT"), Some(String::new()));
+        crate::trap::set_trap("INT", "-"); // reset
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Jobs
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn job_table_operations() {
+        let mut table = crate::jobs::JobTable::new();
+        assert!(table.is_empty());
+        let id = table.add(99999, 99999, "test command");
+        assert_eq!(id, 1);
+        assert!(!table.is_empty());
+        table.list(); // should not panic
+    }
+
+    #[test]
+    fn job_resolve_spec() {
+        let mut table = crate::jobs::JobTable::new();
+        table.add(1111, 1111, "sleep 60");
+        table.add(2222, 2222, "make build");
+        assert_eq!(table.resolve_job_spec_pub(Some("%1")), Some(1));
+        assert_eq!(table.resolve_job_spec_pub(Some("%2")), Some(2));
+        assert_eq!(table.resolve_job_spec_pub(None), Some(2)); // current
+        assert_eq!(table.resolve_job_spec_pub(Some("%sleep")), Some(1)); // by prefix
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Platform
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn platform_ssh_detection() {
+        let p = crate::platform::current();
+        // In test environment, likely not SSH
+        // Just verify it doesn't crash
+        let _ = p.is_ssh();
+    }
+
+    #[test]
+    fn platform_root_detection() {
+        let p = crate::platform::current();
+        // In test, likely not root
+        let is_root = p.is_root();
+        // Most CI/test runs are not root
+        assert!(!is_root || std::env::var("CI").is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Config
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn config_defaults() {
+        let config = crate::config::RushConfig::default();
+        assert_eq!(config.edit_mode, "vi");
+        assert_eq!(config.history_size, 10_000);
+        assert_eq!(config.ai_provider, "anthropic");
+    }
+
+    #[test]
+    fn config_set_get() {
+        let mut config = crate::config::RushConfig::default();
+        assert!(config.set("ai_provider", "openai"));
+        assert_eq!(config.get("ai_provider"), "openai");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Pipeline Operators
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn pipeline_where_filter() {
+        use crate::pipeline;
+        use crate::value::Value;
+        let input = Value::Array(vec![
+            Value::String("ERROR: bad".into()),
+            Value::String("INFO: good".into()),
+            Value::String("ERROR: worse".into()),
+        ]);
+        let op = pipeline::parse_pipe_op("where /ERROR/");
+        let result = pipeline::apply_pipe_op(input, &op);
+        if let Value::Array(arr) = result {
+            assert_eq!(arr.len(), 2);
+        } else { panic!("expected array"); }
+    }
+
+    #[test]
+    fn pipeline_sort_sum() {
+        use crate::pipeline;
+        use crate::value::Value;
+        let input = Value::Array(vec![
+            Value::Int(3), Value::Int(1), Value::Int(2),
+        ]);
+        let sorted = pipeline::apply_pipe_op(input, &pipeline::parse_pipe_op("sort"));
+        let sum = pipeline::apply_pipe_op(sorted, &pipeline::parse_pipe_op("sum"));
+        assert_eq!(sum, Value::Int(6));
+    }
+
+    #[test]
+    fn pipeline_as_json() {
+        use crate::pipeline;
+        use crate::value::Value;
+        let input = Value::Array(vec![Value::Int(1), Value::Int(2)]);
+        let result = pipeline::apply_pipe_op(input, &pipeline::parse_pipe_op("as json"));
+        if let Value::String(s) = result {
+            assert!(s.contains("["));
+            assert!(s.contains("1"));
+        } else { panic!("expected string"); }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // AI Provider Detection
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn ai_providers_exist() {
+        assert!(crate::ai::get_provider("anthropic").is_some());
+        assert!(crate::ai::get_provider("openai").is_some());
+        assert!(crate::ai::get_provider("gemini").is_some());
+        assert!(crate::ai::get_provider("ollama").is_some());
+        assert!(crate::ai::get_provider("nonexistent").is_none());
+    }
+
+    #[test]
+    fn ai_parse_args() {
+        let (prompt, provider, model) = crate::ai::parse_ai_args("-p openai -m gpt-4 what is rust");
+        assert_eq!(prompt, "what is rust");
+        assert_eq!(provider, Some("openai".to_string()));
+        assert_eq!(model, Some("gpt-4".to_string()));
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Theme
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn theme_detect() {
+        let theme = crate::theme::detect();
+        // Should not crash
+        assert!(!theme.reset.is_empty());
+    }
+
+    #[test]
+    fn theme_ls_colors() {
+        let theme = crate::theme::Theme::new(true, Some((0.1, 0.1, 0.15)));
+        let ls = crate::theme::generate_ls_colors(&theme);
+        assert!(ls.contains("di="));
+        assert!(ls.contains("ex="));
+    }
 }

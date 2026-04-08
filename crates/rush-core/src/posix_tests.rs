@@ -195,9 +195,19 @@ mod tests {
 
     #[test]
     fn posix_param_flags() {
+        // Reset all flags to known state
         flags::set_errexit(false);
         flags::set_xtrace(false);
-        assert_eq!(process::expand_env_vars_pub("$-"), "");
+        flags::set_noglob(false);
+        flags::set_noclobber(false);
+        flags::set_verbose(false);
+        flags::set_allexport(false);
+        flags::set_notify(false);
+        flags::set_nounset(false);
+        flags::set_noexec(false);
+        flags::set_monitor(false);
+        let empty = process::expand_env_vars_pub("$-");
+        assert_eq!(empty, "", "expected empty flags, got '{empty}'");
         flags::set_errexit(true);
         assert!(process::expand_env_vars_pub("$-").contains('e'));
         flags::set_errexit(false);
