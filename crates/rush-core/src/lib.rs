@@ -23,3 +23,5 @@ pub mod hints;
 pub mod sync;
 #[cfg(test)]
 mod posix_tests;
+#[cfg(test)]
+mod integration_tests;
