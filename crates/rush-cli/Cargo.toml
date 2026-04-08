@@ -9,3 +9,4 @@ description = "Rush shell binary"
 rush-core = { path = "../rush-core" }
 reedline = "0.46"
 nu-ansi-term = "0.50"
+serde_json.workspace = true

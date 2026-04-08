@@ -1042,6 +1042,7 @@ dependencies = [
  "nu-ansi-term",
  "reedline",
  "rush-core",
+ "serde_json",
 ]
 
 [[package]]

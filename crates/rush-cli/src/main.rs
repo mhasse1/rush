@@ -59,7 +59,9 @@ fn main() {
         if let Some(cmd) = args.get(2) {
             let mut output = StdOutput;
             let mut evaluator = Evaluator::new(&mut output);
-            run_line(&mut evaluator, cmd);
+            if !builtins::handle(&mut evaluator, cmd) {
+                run_line(&mut evaluator, cmd);
+            }
             std::process::exit(evaluator.exit_code);
         }
         return;

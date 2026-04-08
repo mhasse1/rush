@@ -34,7 +34,8 @@ pub fn run() {
     // Inject built-in variables
     builtins::inject_builtin_vars(&mut evaluator);
 
-    // Load secrets and init file
+    // Load config, secrets, aliases, and init file
+    builtins::load_aliases_from_config();
     builtins::load_secrets(&mut evaluator);
     builtins::load_init(&mut evaluator);
 
