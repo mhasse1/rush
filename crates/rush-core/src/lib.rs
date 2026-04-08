@@ -14,3 +14,4 @@ pub mod mcp;
 pub mod config;
 pub mod triage;
 pub mod dispatch;
+pub mod theme;

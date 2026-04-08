@@ -6,6 +6,7 @@ use reedline::{
 
 use rush_core::config::RushConfig;
 use rush_core::eval::{Evaluator, StdOutput};
+use rush_core::theme;
 use rush_core::value::Value;
 
 use crate::builtins;
@@ -26,6 +27,10 @@ fn history_path() -> std::path::PathBuf {
 /// Run the interactive REPL.
 pub fn run() {
     let config = RushConfig::load();
+
+    // Initialize theme (dark/light detection, LS_COLORS, GREP_COLORS)
+    let detected_theme = theme::initialize();
+
     let mut output = StdOutput;
     let mut evaluator = Evaluator::new(&mut output);
 
@@ -69,13 +74,22 @@ pub fn run() {
         .with_validator(Box::new(RushValidator))
         .with_ansi_colors(true);
 
-    let prompt = RushPrompt::new();
+    let mut prompt = RushPrompt::new(detected_theme);
     let show_timing = config.show_timing;
     let mut last_cmd: Option<String> = None;
+
+    // Banner
+    let version = "0.1.0";
+    let mode = if config.edit_mode == "emacs" { "emacs" } else { "vi" };
+    let theme_name = if detected_theme.is_dark { "dark" } else { "light" };
+    println!("{}rush v{version} — a modern-day warrior{}", detected_theme.muted, detected_theme.reset);
+    println!("{}Rust engine | {mode} mode | Tab | Ctrl+R | {theme_name}{}", detected_theme.muted, detected_theme.reset);
+    println!();
 
     // REPL loop
     loop {
         evaluator.env.set("$?", Value::Int(evaluator.exit_code as i64));
+        prompt.set_exit_code(evaluator.exit_code);
 
         match editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
@@ -92,23 +106,21 @@ pub fn run() {
                 let trimmed = route_help(trimmed);
                 let trimmed = trimmed.as_ref();
 
-                // Track last command for !! and !$
                 last_cmd = Some(trimmed.to_string());
 
-                // Execute through unified dispatch (handles builtins, Rush, shell)
+                // Execute through unified dispatch
                 let start = std::time::Instant::now();
                 crate::run_line(&mut evaluator, trimmed);
                 let elapsed = start.elapsed();
 
-                // Show timing for slow commands (>500ms)
                 if show_timing && elapsed.as_millis() > 500 {
                     let secs = elapsed.as_secs_f64();
                     if secs >= 60.0 {
                         let mins = secs as u64 / 60;
                         let rem = secs % 60.0;
-                        eprintln!("\x1b[2m{mins}m{rem:.1}s\x1b[0m");
+                        eprintln!("{}  {mins}m{rem:.1}s{}", detected_theme.muted, detected_theme.reset);
                     } else {
-                        eprintln!("\x1b[2m{secs:.1}s\x1b[0m");
+                        eprintln!("{}  {secs:.1}s{}", detected_theme.muted, detected_theme.reset);
                     }
                 }
             }
@@ -138,7 +150,6 @@ fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
         return None;
     }
 
-    // !$ — last argument of previous command
     if line.contains("!$") {
         let last_arg = last.split_whitespace().last().unwrap_or("");
         let expanded = line.replace("!$", last_arg);
@@ -146,7 +157,6 @@ fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
         return Some(expanded);
     }
 
-    // !N — Nth command from history (read from file)
     if line.starts_with('!') && line.len() > 1 {
         let rest = &line[1..];
         if let Ok(n) = rest.parse::<usize>() {
@@ -161,6 +171,18 @@ fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
                 }
             }
         }
+        // !prefix — find last command starting with prefix
+        let prefix = rest;
+        let home = std::env::var("HOME").unwrap_or_default();
+        let history_path = format!("{home}/.config/rush/history");
+        if let Ok(content) = std::fs::read_to_string(&history_path) {
+            for line in content.lines().rev() {
+                if line.starts_with(prefix) {
+                    println!("{line}");
+                    return Some(line.to_string());
+                }
+            }
+        }
     }
 
     None
@@ -170,7 +192,6 @@ fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
 fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
     if line.ends_with(" --help") || line.ends_with(" -h") {
         let word = line.split_whitespace().next().unwrap_or("");
-        // Map common keywords to help topics
         let topic = match word.to_lowercase().as_str() {
             "file" => "file",
             "dir" => "dir",
