@@ -19,12 +19,28 @@ impl Highlighter for RushHighlighter {
             }
 
             let start = token.position;
-            if start > last_end && last_end < line.len() {
+
+            // Safety: token positions are byte offsets from the lexer which operates
+            // on chars. If the input contains multi-byte UTF-8 (emoji, unicode),
+            // the byte position might not be a char boundary. Skip if invalid.
+            if !line.is_char_boundary(start) {
+                continue;
+            }
+
+            if start > last_end && last_end < line.len() && line.is_char_boundary(last_end) {
                 let gap_end = start.min(line.len());
-                styled.push((Style::default(), line[last_end..gap_end].to_string()));
+                if line.is_char_boundary(gap_end) {
+                    styled.push((Style::default(), line[last_end..gap_end].to_string()));
+                }
             }
 
             let end = (start + token.value.len()).min(line.len());
+            if !line.is_char_boundary(end) {
+                // Token spans a multi-byte char boundary — use the token value directly
+                styled.push((Style::default(), token.value.clone()));
+                last_end = end;
+                continue;
+            }
             let text = &line[start..end];
 
             let style = match token.token_type {
@@ -70,8 +86,15 @@ impl Highlighter for RushHighlighter {
             last_end = end;
         }
 
-        if last_end < line.len() {
+        if last_end < line.len() && line.is_char_boundary(last_end) {
             styled.push((Style::default(), line[last_end..].to_string()));
+        } else if last_end < line.len() {
+            // Find next valid char boundary
+            let mut safe = last_end;
+            while safe < line.len() && !line.is_char_boundary(safe) { safe += 1; }
+            if safe < line.len() {
+                styled.push((Style::default(), line[safe..].to_string()));
+            }
         }
 
         styled

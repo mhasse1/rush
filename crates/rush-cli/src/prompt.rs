@@ -2,13 +2,12 @@ use reedline::{Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchS
 use rush_core::theme::Theme;
 use std::borrow::Cow;
 
-/// Rush prompt — multi-line with mode indicator:
+/// Rush prompt — single-line info + input on next line:
 /// ```
 ///
-/// ✓ 14:32 » mark@macbook  src/rush  main*
+/// ✓ 16:54 » mark@rocinante  src/rush  main*
 ///   {cursor}
 /// ```
-/// The mode character (» for insert, : for normal) appears inline.
 pub struct RushPrompt {
     theme: Theme,
     last_exit_code: i32,
@@ -17,16 +16,17 @@ pub struct RushPrompt {
 
 impl RushPrompt {
     pub fn new(theme: Theme) -> Self {
-        // Capture binary mtime at startup for stale detection
         let start_mtime = std::env::current_exe()
             .ok()
             .and_then(|p| std::fs::metadata(p).ok())
             .and_then(|m| m.modified().ok());
-
         Self { theme, last_exit_code: 0, start_mtime }
     }
 
-    /// Check if the rush binary has been updated since startup.
+    pub fn set_exit_code(&mut self, code: i32) {
+        self.last_exit_code = code;
+    }
+
     fn is_stale(&self) -> bool {
         if let Some(start) = self.start_mtime {
             if let Some(current) = std::env::current_exe()
@@ -39,19 +39,21 @@ impl RushPrompt {
         }
         false
     }
-
-    pub fn set_exit_code(&mut self, code: i32) {
-        self.last_exit_code = code;
-    }
 }
 
 impl Prompt for RushPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
+        // Everything goes in the indicator — left is just the blank line
+        Cow::Borrowed("\n")
+    }
+
+    fn render_prompt_right(&self) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
         let t = &self.theme;
         let mut line = String::with_capacity(256);
-
-        // Blank line before prompt
-        line.push('\n');
 
         // Exit status: ✓ or ✗ [code]
         if self.last_exit_code == 0 {
@@ -62,22 +64,9 @@ impl Prompt for RushPrompt {
             line.push_str(&format!("{}✗{}", t.prompt_failed, t.reset));
         }
 
-        // Time: HH:MM
+        // Time
         let now = chrono_hhmm();
         line.push_str(&format!(" {}{}{}", t.prompt_time, now, t.reset));
-
-        // Mode character will be inserted by render_prompt_indicator
-
-        Cow::Owned(line)
-    }
-
-    fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
-    }
-
-    fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
-        let t = &self.theme;
-        let mut line = String::with_capacity(256);
 
         // Mode character
         let mode_char = match edit_mode {
@@ -113,12 +102,12 @@ impl Prompt for RushPrompt {
             }
         }
 
-        // Stale binary indicator
+        // Stale binary
         if self.is_stale() {
             line.push_str(&format!("  {}[stale]{}", t.warning, t.reset));
         }
 
-        // Input on next line with 2-space prefix
+        // Input on next line
         line.push_str("\n  ");
 
         Cow::Owned(line)
@@ -169,7 +158,6 @@ fn short_cwd() -> String {
         cwd.clone()
     };
 
-    // Shorten to last 2 path components
     let parts: Vec<&str> = display.split('/').filter(|s| !s.is_empty()).collect();
     if parts.len() > 2 {
         parts[parts.len() - 2..].join("/")
