@@ -71,9 +71,8 @@ pub fn dispatch(
                 last_failed = code != 0;
                 evaluator.exit_code = code;
             } else {
-                // Pure shell pipeline (ls | grep foo) — run via sh to get
-                // proper pipe setup. TODO: implement native pipe chains.
-                let result = process::run_shell(segment);
+                // Pure shell pipeline — native pipe chain (fork/exec/dup2)
+                let result = process::run_native(segment);
                 last_exit = result.exit_code;
                 last_failed = last_exit != 0;
                 evaluator.exit_code = last_exit;
@@ -267,12 +266,38 @@ fn run_pipeline(
             let op = pipeline::parse_pipe_op(segment);
             value = pipeline::apply_pipe_op(value, &op);
         } else {
-            // Shell segment in pipeline
+            // Shell segment in Rush pipeline — pipe Rush value into command's stdin
             let input_text = value.to_rush_string();
-            let result = process::run_shell_capture(
-                &format!("echo '{}' | {}", input_text.replace('\'', "'\\''"), segment)
-            );
-            value = Value::String(result.stdout.trim_end().to_string());
+            let parts = process::parse_command_line(segment);
+            if !parts.is_empty() {
+                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+                match std::process::Command::new(&parts[0])
+                    .args(&args)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::inherit())
+                    .spawn()
+                {
+                    Ok(mut child) => {
+                        use std::io::Write;
+                        if let Some(mut stdin) = child.stdin.take() {
+                            stdin.write_all(input_text.as_bytes()).ok();
+                        }
+                        match child.wait_with_output() {
+                            Ok(output) => {
+                                value = Value::String(
+                                    String::from_utf8_lossy(&output.stdout).trim_end().to_string()
+                                );
+                            }
+                            Err(_) => { value = Value::String(String::new()); }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("rush: {}: {e}", parts[0]);
+                        value = Value::String(String::new());
+                    }
+                }
+            }
         }
     }
 

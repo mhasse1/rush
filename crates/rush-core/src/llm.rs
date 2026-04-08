@@ -588,7 +588,7 @@ fn execute_command(input: &str, spool: &mut Spool) -> LlmResult {
     }
 
     // ── Shell execution ─────────────────────────────────────────────
-    let result = process::run_shell_capture(input);
+    let result = process::run_native_capture(input);
     let stdout = if result.stdout.is_empty() { None } else { Some(result.stdout.trim_end().to_string()) };
     let stderr = if result.stderr.is_empty() { None } else { Some(result.stderr.trim_end().to_string()) };
 

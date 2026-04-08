@@ -433,7 +433,7 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::CommandSub { command } => {
-                let result = process::run_shell_capture(command);
+                let result = process::run_native_capture(command);
                 self.exit_code = result.exit_code;
                 Ok(Value::String(result.stdout.trim_end().to_string()))
             }
