@@ -4,6 +4,7 @@
 //! init.rush, -c mode. This ensures consistent behavior everywhere.
 
 use crate::eval::Evaluator;
+use crate::jobs::JobTable;
 use crate::parser;
 use crate::pipeline;
 use crate::process;
@@ -26,6 +27,15 @@ pub fn dispatch(
     line: &str,
     evaluator: &mut Evaluator,
     _builtin_handler: Option<&mut BuiltinHandler>,
+) -> DispatchResult {
+    dispatch_with_jobs(line, evaluator, None)
+}
+
+/// Dispatch with optional job table for background job support.
+pub fn dispatch_with_jobs(
+    line: &str,
+    evaluator: &mut Evaluator,
+    mut job_table: Option<&mut JobTable>,
 ) -> DispatchResult {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -63,7 +73,56 @@ pub fn dispatch(
             unsafe { std::env::set_var(key, val) };
         }
 
-        // Step 2b: Check for ! negation
+        // Step 2b: Check for background &
+        let (is_background, segment) = if segment.ends_with(" &") || segment.ends_with("\t&") {
+            (true, segment[..segment.len() - 1].trim())
+        } else if segment == "&" {
+            continue; // bare & is meaningless
+        } else {
+            (false, segment)
+        };
+
+        // Background job — spawn and continue
+        if is_background {
+            if let Some(jt) = job_table.as_deref_mut() {
+                match process::spawn_background(segment) {
+                    Ok((pid, pgid)) => {
+                        jt.add(pid, pgid, segment);
+                        last_exit = 0;
+                        last_failed = false;
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        last_exit = 127;
+                        last_failed = true;
+                    }
+                }
+            } else {
+                // No job table — just spawn and forget
+                match process::spawn_background(segment) {
+                    Ok((pid, _)) => {
+                        eprintln!("[bg] {pid}");
+                        last_exit = 0;
+                    }
+                    Err(e) => {
+                        eprintln!("{e}");
+                        last_exit = 127;
+                        last_failed = true;
+                    }
+                }
+            }
+            evaluator.exit_code = last_exit;
+            // Restore inline env vars before continuing
+            for (key, prev) in saved_vars {
+                match prev {
+                    Some(val) => unsafe { std::env::set_var(&key, &val) },
+                    None => unsafe { std::env::remove_var(&key) },
+                }
+            }
+            continue;
+        }
+
+        // Step 2c: Check for ! negation
         let (negate, segment) = if segment.starts_with("! ") {
             (true, &segment[2..])
         } else {

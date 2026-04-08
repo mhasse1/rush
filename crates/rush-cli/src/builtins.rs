@@ -13,6 +13,8 @@ thread_local! {
     static DIR_STACK: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     // alias registry: name → expansion
     static ALIASES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    // job table for background processes
+    pub(crate) static JOB_TABLE: RefCell<rush_core::jobs::JobTable> = RefCell::new(rush_core::jobs::JobTable::new());
 }
 
 /// Try to handle a line as a shell builtin. Returns true if handled.
@@ -54,6 +56,27 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "exec" => { handle_exec(args); true }
         "eval" => { handle_eval(evaluator, args); true }
         "trap" => { rush_core::trap::handle_trap(args); true }
+        "jobs" => { JOB_TABLE.with(|jt| jt.borrow().list()); true }
+        "fg" => {
+            let code = JOB_TABLE.with(|jt| {
+                jt.borrow_mut().foreground(if args.is_empty() { None } else { Some(args) })
+            });
+            evaluator.exit_code = code.unwrap_or(1);
+            true
+        }
+        "bg" => {
+            JOB_TABLE.with(|jt| {
+                jt.borrow_mut().background(if args.is_empty() { None } else { Some(args) });
+            });
+            true
+        }
+        "wait" => {
+            let code = JOB_TABLE.with(|jt| {
+                jt.borrow_mut().wait(if args.is_empty() { None } else { Some(args) })
+            });
+            evaluator.exit_code = code;
+            true
+        }
         _ => false,
     }
 }

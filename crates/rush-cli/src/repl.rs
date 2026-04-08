@@ -101,6 +101,9 @@ pub fn run() {
             break;
         }
 
+        // Report completed background jobs
+        crate::builtins::JOB_TABLE.with(|jt| jt.borrow_mut().report_done());
+
         evaluator.env.set("$?", Value::Int(evaluator.exit_code as i64));
         prompt.set_exit_code(evaluator.exit_code);
 
@@ -152,6 +155,9 @@ pub fn run() {
             crate::run_line(&mut evaluator, &action);
         }
     }
+
+    // Send SIGHUP to all background jobs (POSIX requirement)
+    crate::builtins::JOB_TABLE.with(|jt| jt.borrow_mut().shutdown());
 }
 
 /// Expand history references: !!, !$, !N

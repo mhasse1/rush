@@ -16,3 +16,4 @@ pub mod triage;
 pub mod dispatch;
 pub mod theme;
 pub mod trap;
+pub mod jobs;

@@ -116,14 +116,14 @@ fn main() {
 /// Checks builtins first (in-process), then delegates to dispatch for
 /// chain operators, triage, Rush eval, and shell execution.
 pub fn run_line(evaluator: &mut Evaluator, line: &str) {
-    // Builtins must be checked before dispatch because they need
-    // the evaluator (for cd, export, etc.) and can't go through
-    // the borrow-checker with a closure.
     let trimmed = line.trim();
     if builtins::handle(evaluator, trimmed) {
         return;
     }
-    dispatch::dispatch(trimmed, evaluator, None);
+    // Pass job table for background job support
+    builtins::JOB_TABLE.with(|jt| {
+        dispatch::dispatch_with_jobs(trimmed, evaluator, Some(&mut jt.borrow_mut()));
+    });
 }
 
 fn read_input(file: Option<&String>) -> String {

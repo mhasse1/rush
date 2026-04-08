@@ -140,6 +140,49 @@ pub fn run_command_capture(program: &str, args: &[&str]) -> CommandResult {
 
 // ── Command Line Execution ──────────────────────────────────────────
 
+/// Spawn a command in the background. Returns (pid, pgid) on success.
+pub fn spawn_background(line: &str) -> Result<(u32, u32), String> {
+    let parts = parse_and_expand(line);
+    if parts.is_empty() {
+        return Err("empty command".to_string());
+    }
+
+    let program = &parts[0];
+    let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+
+    let mut cmd = Command::new(program);
+    cmd.args(&args)
+        .stdin(Stdio::null())  // Background jobs don't read terminal
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setpgid(0, 0);
+                libc::signal(libc::SIGINT, libc::SIG_IGN);
+                libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+                libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+                libc::signal(libc::SIGTTIN, libc::SIG_DFL);
+                libc::signal(libc::SIGTTOU, libc::SIG_DFL);
+                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+    }
+
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            // Process group ID = pid (since setpgid(0,0) makes pid=pgid)
+            Ok((pid, pid))
+        }
+        Err(e) => Err(format!("rush: {program}: {e}")),
+    }
+}
+
 /// Run a command line natively: parse → expand → fork/exec.
 /// Handles pipes natively (pipe/fork/dup2/exec for each segment).
 pub fn run_native(line: &str) -> CommandResult {
