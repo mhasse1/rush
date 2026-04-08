@@ -61,13 +61,23 @@ pub fn dispatch(
             break;
         }
 
-        // Step 3: Check for Rush pipeline operators
+        // Step 3: Check for pipes
         let pipe_segments = pipeline::split_pipeline(segment);
-        if pipe_segments.len() > 1 && has_rush_pipe_ops(&pipe_segments) {
-            let code = run_pipeline(evaluator, &pipe_segments);
-            last_exit = code;
-            last_failed = code != 0;
-            evaluator.exit_code = code;
+        if pipe_segments.len() > 1 {
+            if has_rush_pipe_ops(&pipe_segments) {
+                // Rush pipeline operators (where, sort, etc.)
+                let code = run_pipeline(evaluator, &pipe_segments);
+                last_exit = code;
+                last_failed = code != 0;
+                evaluator.exit_code = code;
+            } else {
+                // Pure shell pipeline (ls | grep foo) — run via sh to get
+                // proper pipe setup. TODO: implement native pipe chains.
+                let result = process::run_shell(segment);
+                last_exit = result.exit_code;
+                last_failed = last_exit != 0;
+                evaluator.exit_code = last_exit;
+            }
             continue;
         }
 
@@ -89,8 +99,8 @@ pub fn dispatch(
                     }
                 }
                 Err(_) => {
-                    // Parse failed — try as shell command (graceful fallback)
-                    let result = process::run_shell(segment);
+                    // Parse failed — run natively (fork/exec, TTY preserved)
+                    let result = process::run_native(segment);
                     last_exit = result.exit_code;
                     last_failed = last_exit != 0;
                     evaluator.exit_code = last_exit;
@@ -100,8 +110,8 @@ pub fn dispatch(
                 }
             }
         } else {
-            // Shell command
-            let result = process::run_shell(segment);
+            // External command — fork/exec with inherited TTY
+            let result = process::run_native(segment);
             last_exit = result.exit_code;
             last_failed = last_exit != 0;
             evaluator.exit_code = last_exit;
@@ -225,7 +235,7 @@ fn run_pipeline(
 
     // Execute first segment
     let mut value = if !triage::is_rush_syntax(first) {
-        let result = process::run_shell_capture(first);
+        let result = process::run_native_capture(first);
         if !result.stderr.is_empty() {
             eprintln!("{}", result.stderr);
         }
@@ -239,7 +249,7 @@ fn run_pipeline(
         match parser::parse(first) {
             Ok(nodes) => evaluator.exec_toplevel(&nodes).unwrap_or(Value::Nil),
             Err(_) => {
-                let result = process::run_shell_capture(first);
+                let result = process::run_native_capture(first);
                 let text_val = pipeline::text_to_array(&result.stdout);
                 if auto_obj {
                     pipeline::apply_pipe_op(text_val, &pipeline::parse_pipe_op("objectify"))

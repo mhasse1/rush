@@ -25,6 +25,9 @@ impl RushPrompt {
         let t = &self.theme;
         let mut line = String::with_capacity(256);
 
+        // Blank line before prompt (matches C# layout)
+        line.push('\n');
+
         // Exit status: ✓ or ✗ [code]
         if self.last_exit_code == 0 {
             line.push_str(&format!("{}✓{}", t.prompt_success, t.reset));
@@ -84,6 +87,9 @@ impl Prompt for RushPrompt {
             _ => Cow::Borrowed("\n  » "),
         }
     }
+
+    // The blank line before the info line comes from render_prompt_left
+    // starting with \n
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
         Cow::Borrowed("    ")

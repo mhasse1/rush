@@ -8,6 +8,47 @@ pub struct CommandResult {
     pub exit_code: i32,
 }
 
+/// Run a command line natively: parse into program + args, fork/exec with
+/// inherited stdio (TTY preserved). This is how a shell should execute
+/// external commands — no sh -c wrapper.
+pub fn run_native(line: &str) -> CommandResult {
+    let parts = parse_command_line(line);
+    if parts.is_empty() {
+        return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
+    }
+
+    let program = &parts[0];
+
+    // Tilde expansion on first arg if it's a path
+    let args: Vec<String> = parts[1..].iter().map(|a| expand_tilde(a)).collect();
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    run_command(program, &arg_refs)
+}
+
+/// Run a command line natively and capture stdout.
+pub fn run_native_capture(line: &str) -> CommandResult {
+    let parts = parse_command_line(line);
+    if parts.is_empty() {
+        return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
+    }
+
+    let program = &parts[0];
+    let args: Vec<String> = parts[1..].iter().map(|a| expand_tilde(a)).collect();
+    let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    run_command_capture(program, &arg_refs)
+}
+
+fn expand_tilde(arg: &str) -> String {
+    if arg.starts_with("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return format!("{home}{}", &arg[1..]);
+        }
+    }
+    arg.to_string()
+}
+
 /// Run a single external command with arguments.
 pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
     let result = Command::new(program)
