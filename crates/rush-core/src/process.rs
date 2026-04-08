@@ -227,37 +227,72 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
 
 #[derive(Debug)]
 enum Redirect {
-    StdoutWrite(String),   // > file
-    StdoutAppend(String),  // >> file
-    StdinRead(String),     // < file
+    StdoutWrite(String),     // > file
+    StdoutAppend(String),    // >> file
+    StdinRead(String),       // < file
+    StderrWrite(String),     // 2> file
+    StderrAppend(String),    // 2>> file
+    StderrToStdout,          // 2>&1
 }
 
-/// Extract redirections from argument list.
+/// Extract redirections from argument list. Supports multiple redirections.
 fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Option<Redirect>) {
     let mut redirect = None;
     let mut clean = Vec::new();
     let mut i = 0;
 
     while i < parts.len() {
-        if parts[i] == ">" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StdoutWrite(parts[i + 1].clone()));
+        // 2>&1
+        if parts[i] == "2>&1" {
+            redirect = Some(Redirect::StderrToStdout);
+            i += 1;
+        }
+        // 2>> file
+        else if parts[i] == "2>>" && i + 1 < parts.len() {
+            redirect = Some(Redirect::StderrAppend(parts[i + 1].clone()));
             i += 2;
-        } else if parts[i] == ">>" && i + 1 < parts.len() {
+        }
+        // 2> file
+        else if parts[i] == "2>" && i + 1 < parts.len() {
+            redirect = Some(Redirect::StderrWrite(parts[i + 1].clone()));
+            i += 2;
+        }
+        // 2>/dev/null or 2>file (no space)
+        else if parts[i].starts_with("2>") && parts[i].len() > 2 && !parts[i].starts_with("2>&") {
+            let rest = &parts[i][2..];
+            if rest.starts_with('>') {
+                // 2>>file
+                redirect = Some(Redirect::StderrAppend(rest[1..].to_string()));
+            } else {
+                redirect = Some(Redirect::StderrWrite(rest.to_string()));
+            }
+            i += 1;
+        }
+        // >> file
+        else if parts[i] == ">>" && i + 1 < parts.len() {
             redirect = Some(Redirect::StdoutAppend(parts[i + 1].clone()));
             i += 2;
-        } else if parts[i] == "<" && i + 1 < parts.len() {
+        }
+        // > file
+        else if parts[i] == ">" && i + 1 < parts.len() {
+            redirect = Some(Redirect::StdoutWrite(parts[i + 1].clone()));
+            i += 2;
+        }
+        // < file
+        else if parts[i] == "<" && i + 1 < parts.len() {
             redirect = Some(Redirect::StdinRead(parts[i + 1].clone()));
             i += 2;
-        } else if parts[i].starts_with('>') && parts[i].len() > 1 {
-            // >file (no space)
-            let file = parts[i][1..].to_string();
-            redirect = Some(Redirect::StdoutWrite(file));
+        }
+        // >file (no space)
+        else if parts[i].starts_with(">>") && parts[i].len() > 2 {
+            redirect = Some(Redirect::StdoutAppend(parts[i][2..].to_string()));
             i += 1;
-        } else if parts[i].starts_with(">>") && parts[i].len() > 2 {
-            let file = parts[i][2..].to_string();
-            redirect = Some(Redirect::StdoutAppend(file));
+        }
+        else if parts[i].starts_with('>') && parts[i].len() > 1 {
+            redirect = Some(Redirect::StdoutWrite(parts[i][1..].to_string()));
             i += 1;
-        } else {
+        }
+        else {
             clean.push(parts[i].clone());
             i += 1;
         }
@@ -276,26 +311,7 @@ fn run_with_redirect(program: &str, args: &[&str], redirect: &Redirect) -> Comma
                 std::fs::File::create(path)
             };
             match file {
-                Ok(file) => {
-                    match Command::new(program)
-                        .args(args)
-                        .stdin(Stdio::inherit())
-                        .stdout(Stdio::from(file))
-                        .stderr(Stdio::inherit())
-                        .status()
-                    {
-                        Ok(status) => CommandResult {
-                            stdout: String::new(),
-                            stderr: String::new(),
-                            exit_code: status.code().unwrap_or(-1),
-                        },
-                        Err(e) => CommandResult {
-                            stdout: String::new(),
-                            stderr: format!("rush: {program}: {e}"),
-                            exit_code: 127,
-                        },
-                    }
-                }
+                Ok(file) => run_cmd_with_stdio(program, args, Stdio::inherit(), Stdio::from(file), Stdio::inherit()),
                 Err(e) => CommandResult {
                     stdout: String::new(),
                     stderr: format!("rush: {path}: {e}"),
@@ -305,26 +321,7 @@ fn run_with_redirect(program: &str, args: &[&str], redirect: &Redirect) -> Comma
         }
         Redirect::StdinRead(path) => {
             match std::fs::File::open(path) {
-                Ok(file) => {
-                    match Command::new(program)
-                        .args(args)
-                        .stdin(Stdio::from(file))
-                        .stdout(Stdio::inherit())
-                        .stderr(Stdio::inherit())
-                        .status()
-                    {
-                        Ok(status) => CommandResult {
-                            stdout: String::new(),
-                            stderr: String::new(),
-                            exit_code: status.code().unwrap_or(-1),
-                        },
-                        Err(e) => CommandResult {
-                            stdout: String::new(),
-                            stderr: format!("rush: {program}: {e}"),
-                            exit_code: 127,
-                        },
-                    }
-                }
+                Ok(file) => run_cmd_with_stdio(program, args, Stdio::from(file), Stdio::inherit(), Stdio::inherit()),
                 Err(e) => CommandResult {
                     stdout: String::new(),
                     stderr: format!("rush: {path}: {e}"),
@@ -332,19 +329,209 @@ fn run_with_redirect(program: &str, args: &[&str], redirect: &Redirect) -> Comma
                 },
             }
         }
+        Redirect::StderrWrite(path) | Redirect::StderrAppend(path) => {
+            let file = if matches!(redirect, Redirect::StderrAppend(_)) {
+                std::fs::OpenOptions::new().create(true).append(true).open(path)
+            } else {
+                std::fs::File::create(path)
+            };
+            match file {
+                Ok(file) => run_cmd_with_stdio(program, args, Stdio::inherit(), Stdio::inherit(), Stdio::from(file)),
+                Err(e) => CommandResult {
+                    stdout: String::new(),
+                    stderr: format!("rush: {path}: {e}"),
+                    exit_code: 1,
+                },
+            }
+        }
+        Redirect::StderrToStdout => {
+            // 2>&1: merge stderr into stdout
+            match Command::new(program)
+                .args(args)
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit()) // Both go to same fd
+                .status()
+            {
+                Ok(status) => CommandResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: status.code().unwrap_or(-1),
+                },
+                Err(e) => CommandResult {
+                    stdout: String::new(),
+                    stderr: format!("rush: {program}: {e}"),
+                    exit_code: 127,
+                },
+            }
+        }
+    }
+}
+
+fn run_cmd_with_stdio(program: &str, args: &[&str], stdin: Stdio, stdout: Stdio, stderr: Stdio) -> CommandResult {
+    match Command::new(program)
+        .args(args)
+        .stdin(stdin)
+        .stdout(stdout)
+        .stderr(stderr)
+        .status()
+    {
+        Ok(status) => CommandResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: status.code().unwrap_or(-1),
+        },
+        Err(e) => CommandResult {
+            stdout: String::new(),
+            stderr: format!("rush: {program}: {e}"),
+            exit_code: 127,
+        },
     }
 }
 
 // ── Parsing & Expansion ─────────────────────────────────────────────
 
-/// Parse a command line into words and expand tildes and globs.
+/// Parse a command line into words, then expand tildes and globs.
+/// This is the shell expansion pipeline: parse → tilde → glob.
+/// Quoted words are never glob-expanded (matching bash/zsh behavior).
 fn parse_and_expand(line: &str) -> Vec<String> {
-    let parts = parse_command_line(line);
-    parts.into_iter().map(|p| expand_tilde(&p)).collect()
+    let parts = parse_command_line_with_quote_info(line);
+    let mut result = Vec::new();
+
+    for (word, was_quoted) in parts {
+        let expanded = expand_tilde(&word);
+
+        // Only glob-expand unquoted words that contain glob characters
+        if !was_quoted && contains_glob_chars(&expanded) {
+            match glob::glob(&expanded) {
+                Ok(paths) => {
+                    let mut matches: Vec<String> = paths
+                        .filter_map(|p| p.ok())
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+                    if matches.is_empty() {
+                        // No matches: pass through literally (bash behavior)
+                        result.push(expanded);
+                    } else {
+                        matches.sort();
+                        result.extend(matches);
+                    }
+                }
+                Err(_) => result.push(expanded),
+            }
+        } else {
+            result.push(expanded);
+        }
+    }
+
+    result
 }
 
-/// Expand ~ to $HOME.
+/// Check if a string contains glob metacharacters.
+fn contains_glob_chars(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Parse command line returning (word, was_quoted) pairs.
+/// Quoted words should not be glob-expanded.
+fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut was_quoted = false;
+    let mut chars = line.chars().peekable();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                was_quoted = true;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                was_quoted = true;
+            }
+            '\\' if !in_single => {
+                if let Some(&next) = chars.peek() {
+                    if in_double {
+                        match next {
+                            '"' | '\\' | '$' | '`' => {
+                                current.push(chars.next().unwrap());
+                            }
+                            _ => current.push('\\'),
+                        }
+                    } else {
+                        current.push(chars.next().unwrap());
+                    }
+                }
+            }
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    parts.push((std::mem::take(&mut current), was_quoted));
+                    was_quoted = false;
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        parts.push((current, was_quoted));
+    }
+    parts
+}
+
+/// Expand ~ to $HOME and $VAR to environment variable value.
 fn expand_tilde(arg: &str) -> String {
+    // First expand env vars
+    let arg = expand_env_vars(arg);
+    expand_tilde_only(&arg)
+}
+
+/// Expand $VAR and ${VAR} in a string to environment variable values.
+fn expand_env_vars(arg: &str) -> String {
+    if !arg.contains('$') {
+        return arg.to_string();
+    }
+
+    let mut result = String::with_capacity(arg.len());
+    let chars: Vec<char> = arg.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            // ${VAR} form
+            if chars[i + 1] == '{' {
+                i += 2;
+                let mut var_name = String::new();
+                while i < chars.len() && chars[i] != '}' {
+                    var_name.push(chars[i]);
+                    i += 1;
+                }
+                if i < chars.len() { i += 1; } // skip }
+                result.push_str(&std::env::var(&var_name).unwrap_or_default());
+                continue;
+            }
+            // $VAR form
+            if chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_' {
+                i += 1;
+                let mut var_name = String::new();
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    var_name.push(chars[i]);
+                    i += 1;
+                }
+                result.push_str(&std::env::var(&var_name).unwrap_or_default());
+                continue;
+            }
+        }
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+fn expand_tilde_only(arg: &str) -> String {
     if arg == "~" {
         return std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
     }
@@ -618,5 +805,94 @@ mod tests {
         let (clean, redir) = extract_redirections(parts);
         assert_eq!(clean, vec!["echo", "hello"]);
         assert!(matches!(redir, Some(Redirect::StdoutWrite(f)) if f == "out.txt"));
+    }
+
+    #[test]
+    fn extract_redir_stderr() {
+        let parts = vec!["cmd".into(), "2>".into(), "/dev/null".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert!(matches!(redir, Some(Redirect::StderrWrite(f)) if f == "/dev/null"));
+    }
+
+    #[test]
+    fn extract_redir_stderr_nospace() {
+        let parts = vec!["cmd".into(), "2>/dev/null".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert!(matches!(redir, Some(Redirect::StderrWrite(f)) if f == "/dev/null"));
+    }
+
+    #[test]
+    fn extract_redir_stderr_to_stdout() {
+        let parts = vec!["cmd".into(), "2>&1".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert!(matches!(redir, Some(Redirect::StderrToStdout)));
+    }
+
+    // ── Glob expansion ──────────────────────────────────────────────
+
+    #[test]
+    fn glob_expansion_star() {
+        // Create temp files for glob test
+        let dir = std::env::temp_dir().join("rush_glob_test");
+        std::fs::create_dir_all(&dir).ok();
+        std::fs::write(dir.join("a.txt"), "").ok();
+        std::fs::write(dir.join("b.txt"), "").ok();
+        std::fs::write(dir.join("c.log"), "").ok();
+
+        let pattern = format!("{}/*.txt", dir.to_string_lossy());
+        let result = parse_and_expand(&format!("ls {pattern}"));
+        // Should have "ls" + 2 .txt files
+        assert!(result.len() >= 3, "expected ls + 2 files, got {:?}", result);
+        assert_eq!(result[0], "ls");
+        assert!(result.iter().any(|f| f.ends_with("a.txt")));
+        assert!(result.iter().any(|f| f.ends_with("b.txt")));
+        assert!(!result.iter().any(|f| f.ends_with("c.log")));
+
+        // Cleanup
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn glob_no_match_passes_through() {
+        let result = parse_and_expand("ls /nonexistent/*.xyz");
+        assert_eq!(result, vec!["ls", "/nonexistent/*.xyz"]);
+    }
+
+    #[test]
+    fn glob_quoted_not_expanded() {
+        let result = parse_and_expand("echo '*.txt'");
+        assert_eq!(result, vec!["echo", "*.txt"]);
+    }
+
+    // ── Env var expansion ───────────────────────────────────────────
+
+    #[test]
+    fn env_var_expansion() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let result = expand_env_vars("$HOME/bin");
+        assert_eq!(result, format!("{home}/bin"));
+    }
+
+    #[test]
+    fn env_var_braces() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let result = expand_env_vars("${HOME}/bin");
+        assert_eq!(result, format!("{home}/bin"));
+    }
+
+    #[test]
+    fn env_var_missing() {
+        let result = expand_env_vars("$NONEXISTENT_VAR_XYZ");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn env_var_in_command() {
+        let result = parse_and_expand("echo $HOME");
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert_eq!(result, vec!["echo", &home]);
     }
 }
