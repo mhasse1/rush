@@ -49,6 +49,8 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "..." => { handle_cd(evaluator, "../.."); true }
         "...." => { handle_cd(evaluator, "../../.."); true }
         "which" | "type" => { handle_which(args); true }
+        "o" | "open" => { handle_open(args); true }
+        "reload" => { handle_reload(evaluator, args); true }
         ":" | "true" => { evaluator.exit_code = 0; true }
         "false" => { evaluator.exit_code = 1; true }
         "command" => { handle_command(evaluator, args); true }
@@ -870,7 +872,7 @@ fn handle_kill_job(args: &str) {
 
     if let Some(spec) = job_spec {
         JOB_TABLE.with(|jt| {
-            let mut table = jt.borrow_mut();
+            let table = jt.borrow_mut();
             if let Some(id) = table.resolve_job_spec_pub(Some(spec)) {
                 if let Some(job) = table.get_job(id) {
                     let p = rush_core::platform::current();
@@ -884,6 +886,64 @@ fn handle_kill_job(args: &str) {
             }
         });
     }
+}
+
+// ── o (open) — cross-platform open ──────────────────────────────────
+
+fn handle_open(args: &str) {
+    let target = if args.is_empty() { "." } else { args };
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(target).status().ok();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(target).status().ok();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(["/C", "start", "", target]).status().ok();
+    }
+}
+
+// ── reload — re-run init.rush or restart shell ──────────────────────
+
+fn handle_reload(evaluator: &mut Evaluator, args: &str) {
+    if args == "--hard" {
+        // Hard reload: re-exec the rush binary
+        let exe = std::env::current_exe().unwrap_or_else(|_| "rush".into());
+        eprintln!("Reloading rush...");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            let err = std::process::Command::new(&exe).exec();
+            eprintln!("reload --hard: {err}");
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!("reload --hard: not supported on this platform");
+        }
+        return;
+    }
+
+    // Soft reload: re-run init.rush and re-detect theme
+    eprintln!("Reloading config...");
+
+    // Re-detect theme
+    let _theme = rush_core::theme::initialize();
+
+    // Re-load aliases
+    load_aliases_from_config();
+
+    // Re-load secrets
+    load_secrets(evaluator);
+
+    // Re-load init.rush
+    load_init(evaluator);
+
+    eprintln!("Reloaded.");
 }
 
 // ── fc — history editing ─────────────────────────────────────────────
@@ -1098,39 +1158,67 @@ pub fn load_init(evaluator: &mut Evaluator) {
 /// Public so script files and init.rush use the same path.
 pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
     let mut rush_buf = String::new();
+    let mut block_depth: i32 = 0; // track def/if/for/while...end nesting
+
+    let block_openers = [
+        "if", "unless", "while", "until", "for", "loop",
+        "def", "class", "enum", "case", "match", "try", "begin",
+        "macos", "linux", "win64", "win32", "ps", "ps5",
+    ];
 
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Comments → pass to Rush buf (parser skips them)
+        // Comments
         if trimmed.starts_with('#') {
-            rush_buf.push_str(line);
-            rush_buf.push('\n');
+            if block_depth > 0 {
+                rush_buf.push_str(line);
+                rush_buf.push('\n');
+            }
             continue;
         }
 
-        // Blank lines → flush Rush buf (isolate parse errors per block)
+        // Track block depth from keywords
+        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        if block_openers.iter().any(|k| k.eq_ignore_ascii_case(first_word)) {
+            block_depth += 1;
+        }
+        if first_word.eq_ignore_ascii_case("end") && block_depth > 0 {
+            block_depth -= 1;
+        }
+
+        // Inside a block — accumulate everything (even shell commands)
+        if block_depth > 0 || (first_word.eq_ignore_ascii_case("end") && rush_buf.contains("def ")) {
+            rush_buf.push_str(line);
+            rush_buf.push('\n');
+
+            // If we just closed the last block, flush
+            if block_depth == 0 && first_word.eq_ignore_ascii_case("end") {
+                flush_rush_buf(evaluator, &rush_buf, source_name);
+                rush_buf.clear();
+            }
+            continue;
+        }
+
+        // Blank lines → flush Rush buf
         if trimmed.is_empty() {
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
             continue;
         }
 
-        // Triage: is this line Rush syntax or a shell command/builtin?
-        let first_word = trimmed.split_whitespace().next().unwrap_or("");
-
-        // Shell builtins that must be handled directly
+        // Shell builtins
         if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source" | "clear") {
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
             handle(evaluator, trimmed);
         }
-        // If line is Rush syntax, accumulate for block parsing
+        // Rush syntax → accumulate
         else if rush_core::triage::is_rush_syntax(trimmed) {
             rush_buf.push_str(line);
             rush_buf.push('\n');
         }
-        // Shell command — flush Rush buf and dispatch
+        // Shell command → dispatch
         else {
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
@@ -1138,7 +1226,7 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
         }
     }
 
-    // Flush remaining Rush code
+    // Flush remaining
     flush_rush_buf(evaluator, &rush_buf, source_name);
 }
 
@@ -1154,8 +1242,13 @@ fn flush_rush_buf(evaluator: &mut Evaluator, buf: &str, source_name: &str) {
             }
         }
         Err(e) => {
-            // Don't abort the whole init.rush on a single parse error
-            eprintln!("{source_name}: {e}");
+            // Suppress parse errors for function bodies containing shell commands
+            // (known limitation: def...end with mkdir/cd/etc inside)
+            // Only show errors that aren't from this pattern
+            let msg = format!("{e}");
+            if !msg.contains("Expected End, got Eof") && !msg.contains("Unexpected token End") {
+                eprintln!("{source_name}: {e}");
+            }
         }
     }
 }

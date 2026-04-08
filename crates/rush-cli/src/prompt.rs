@@ -12,11 +12,32 @@ use std::borrow::Cow;
 pub struct RushPrompt {
     theme: Theme,
     last_exit_code: i32,
+    start_mtime: Option<std::time::SystemTime>,
 }
 
 impl RushPrompt {
     pub fn new(theme: Theme) -> Self {
-        Self { theme, last_exit_code: 0 }
+        // Capture binary mtime at startup for stale detection
+        let start_mtime = std::env::current_exe()
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
+        Self { theme, last_exit_code: 0, start_mtime }
+    }
+
+    /// Check if the rush binary has been updated since startup.
+    fn is_stale(&self) -> bool {
+        if let Some(start) = self.start_mtime {
+            if let Some(current) = std::env::current_exe()
+                .ok()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .and_then(|m| m.modified().ok())
+            {
+                return current > start;
+            }
+        }
+        false
     }
 
     pub fn set_exit_code(&mut self, code: i32) {
@@ -90,6 +111,11 @@ impl Prompt for RushPrompt {
             if dirty {
                 line.push_str(&format!("{}*{}", t.prompt_git_dirty, t.reset));
             }
+        }
+
+        // Stale binary indicator
+        if self.is_stale() {
+            line.push_str(&format!("  {}[stale]{}", t.warning, t.reset));
         }
 
         // Input on next line with 2-space prefix
