@@ -203,11 +203,65 @@ pub fn dispatch_with_jobs(
             continue;
         }
 
-        // Core POSIX builtins handled directly in dispatch
-        if first_word == ":" {
+        // Core builtins handled directly in dispatch (work in chains)
+        if first_word == ":" || first_word == "true" {
             last_exit = 0;
             last_failed = false;
             evaluator.exit_code = 0;
+            for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
+            continue;
+        }
+        if first_word == "false" {
+            last_exit = 1;
+            last_failed = true;
+            evaluator.exit_code = 1;
+            for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
+            continue;
+        }
+
+        // export — must work in chains: export FOO=bar; echo $FOO
+        if first_word == "export" {
+            let args = segment[first_word.len()..].trim();
+            if let Some((key, value)) = args.split_once('=') {
+                let key = key.trim();
+                let value = value.trim().trim_matches('"').trim_matches('\'');
+                unsafe { std::env::set_var(key, value) };
+            }
+            last_exit = 0;
+            last_failed = false;
+            evaluator.exit_code = 0;
+            for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
+            continue;
+        }
+
+        // unset — must work in chains
+        if first_word == "unset" {
+            let args = segment[first_word.len()..].trim();
+            for name in args.split_whitespace() {
+                unsafe { std::env::remove_var(name) };
+            }
+            last_exit = 0;
+            last_failed = false;
+            evaluator.exit_code = 0;
+            for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
+            continue;
+        }
+
+        // cd — must work in chains: cd /tmp && pwd
+        if first_word == "cd" {
+            let target = segment[first_word.len()..].trim();
+            let path = if target.is_empty() || target == "~" {
+                std::env::var("HOME").unwrap_or_else(|_| ".".into())
+            } else if let Some(rest) = target.strip_prefix("~/") {
+                format!("{}/{rest}", std::env::var("HOME").unwrap_or_default())
+            } else {
+                target.to_string()
+            };
+            match std::env::set_current_dir(&path) {
+                Ok(()) => { last_exit = 0; last_failed = false; }
+                Err(e) => { eprintln!("cd: {path}: {e}"); last_exit = 1; last_failed = true; }
+            }
+            evaluator.exit_code = last_exit;
             for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
             continue;
         }
