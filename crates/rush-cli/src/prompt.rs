@@ -2,11 +2,13 @@ use reedline::{Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchS
 use rush_core::theme::Theme;
 use std::borrow::Cow;
 
-/// Rush prompt — matches the C# version's layout:
+/// Rush prompt — multi-line with mode indicator:
 /// ```
-/// ✓ 14:32  mark@macbook  rush/src  main*
+///
+/// ✓ 14:32 » mark@macbook  src/rush  main*
 ///   {cursor}
 /// ```
+/// The mode character (» for insert, : for normal) appears inline.
 pub struct RushPrompt {
     theme: Theme,
     last_exit_code: i32,
@@ -20,12 +22,14 @@ impl RushPrompt {
     pub fn set_exit_code(&mut self, code: i32) {
         self.last_exit_code = code;
     }
+}
 
-    fn build_info_line(&self) -> String {
+impl Prompt for RushPrompt {
+    fn render_prompt_left(&self) -> Cow<'_, str> {
         let t = &self.theme;
         let mut line = String::with_capacity(256);
 
-        // Blank line before prompt (matches C# layout)
+        // Blank line before prompt
         line.push('\n');
 
         // Exit status: ✓ or ✗ [code]
@@ -41,40 +45,9 @@ impl RushPrompt {
         let now = chrono_hhmm();
         line.push_str(&format!(" {}{}{}", t.prompt_time, now, t.reset));
 
-        // User@Host
-        let user = std::env::var("USER")
-            .or_else(|_| std::env::var("USERNAME"))
-            .unwrap_or_default();
-        let host = short_hostname();
-        let is_ssh = is_ssh_session();
+        // Mode character will be inserted by render_prompt_indicator
 
-        line.push_str(&format!("  {}{}{}", t.prompt_user, user, t.reset));
-        line.push_str(&format!("{}@{}", t.muted, t.reset));
-        if is_ssh {
-            line.push_str(&format!("{}{}{}", t.prompt_ssh_host, host, t.reset));
-        } else {
-            line.push_str(&format!("{}{}{}", t.prompt_host, host, t.reset));
-        }
-
-        // CWD: shortened to last 2 levels, ~ for home
-        let cwd = short_cwd();
-        line.push_str(&format!("  {}{}{}", t.prompt_path, cwd, t.reset));
-
-        // Git: branch + dirty
-        if let Some((branch, dirty)) = git_info() {
-            line.push_str(&format!("  {}{}{}", t.prompt_git_branch, branch, t.reset));
-            if dirty {
-                line.push_str(&format!("{}*{}", t.prompt_git_dirty, t.reset));
-            }
-        }
-
-        line
-    }
-}
-
-impl Prompt for RushPrompt {
-    fn render_prompt_left(&self) -> Cow<'_, str> {
-        Cow::Owned(self.build_info_line())
+        Cow::Owned(line)
     }
 
     fn render_prompt_right(&self) -> Cow<'_, str> {
@@ -82,14 +55,48 @@ impl Prompt for RushPrompt {
     }
 
     fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
-        match edit_mode {
-            PromptEditMode::Vi(PromptViMode::Normal) => Cow::Borrowed("\n  : "),
-            _ => Cow::Borrowed("\n  » "),
-        }
-    }
+        let t = &self.theme;
+        let mut line = String::with_capacity(256);
 
-    // The blank line before the info line comes from render_prompt_left
-    // starting with \n
+        // Mode character
+        let mode_char = match edit_mode {
+            PromptEditMode::Vi(PromptViMode::Normal) => ":",
+            _ => "»",
+        };
+        line.push_str(&format!(" {}{}{}", t.muted, mode_char, t.reset));
+
+        // User@Host
+        let user = std::env::var("USER")
+            .or_else(|_| std::env::var("USERNAME"))
+            .unwrap_or_default();
+        let host = short_hostname();
+        let is_ssh = is_ssh_session();
+
+        line.push_str(&format!(" {}{}{}", t.prompt_user, user, t.reset));
+        line.push_str(&format!("{}@{}", t.muted, t.reset));
+        if is_ssh {
+            line.push_str(&format!("{}{}{}", t.prompt_ssh_host, host, t.reset));
+        } else {
+            line.push_str(&format!("{}{}{}", t.prompt_host, host, t.reset));
+        }
+
+        // CWD
+        let cwd = short_cwd();
+        line.push_str(&format!("  {}{}{}", t.prompt_path, cwd, t.reset));
+
+        // Git
+        if let Some((branch, dirty)) = git_info() {
+            line.push_str(&format!("  {}{}{}", t.prompt_git_branch, branch, t.reset));
+            if dirty {
+                line.push_str(&format!("{}*{}", t.prompt_git_dirty, t.reset));
+            }
+        }
+
+        // Input on next line with 2-space prefix
+        line.push_str("\n  ");
+
+        Cow::Owned(line)
+    }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
         Cow::Borrowed("    ")
@@ -144,10 +151,9 @@ fn short_cwd() -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "?".to_string());
 
-    // Replace home with ~
     let display = if let Ok(home) = std::env::var("HOME") {
         if let Some(rest) = cwd.strip_prefix(&home) {
-            format!("~{rest}")
+            if rest.is_empty() { "~".to_string() } else { format!("~{rest}") }
         } else {
             cwd.clone()
         }
@@ -155,7 +161,7 @@ fn short_cwd() -> String {
         cwd.clone()
     };
 
-    // Shorten to last 2 path components (matching C# behavior)
+    // Shorten to last 2 path components
     let parts: Vec<&str> = display.split('/').filter(|s| !s.is_empty()).collect();
     if parts.len() > 2 {
         parts[parts.len() - 2..].join("/")
@@ -165,7 +171,6 @@ fn short_cwd() -> String {
 }
 
 fn git_info() -> Option<(String, bool)> {
-    // Branch
     let branch_output = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .stdout(std::process::Stdio::piped())
@@ -185,15 +190,12 @@ fn git_info() -> Option<(String, bool)> {
         return None;
     }
 
-    // Dirty check
-    let dirty_output = std::process::Command::new("git")
+    let dirty = std::process::Command::new("git")
         .args(["status", "--porcelain"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .output()
-        .ok();
-
-    let dirty = dirty_output
+        .ok()
         .map(|o| !o.stdout.is_empty())
         .unwrap_or(false);
 

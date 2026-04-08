@@ -246,84 +246,21 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Build a theme for the given background. If bg_rgb is provided, uses
-    /// 256-color palette with contrast validation. Otherwise basic 16-color.
+    /// Build a theme for the given background.
+    /// Prompt colors always use basic ANSI (proven visible across terminals).
+    /// 256-color is only used for LS_COLORS/GREP_COLORS (via generate_ls_colors).
     pub fn new(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>) -> Self {
         let reset = "\x1b[0m".to_string();
-
-        if let Some((r, g, b)) = bg_rgb {
-            Self::build_256(is_dark, r, g, b, &reset)
-        } else {
-            Self::build_basic(is_dark, &reset)
-        }
+        // Prompt and syntax colors: always basic ANSI (reliable, proven in C# Rush)
+        Self::build_basic(is_dark, bg_rgb, &reset)
     }
 
-    /// 256-color theme with contrast-validated palette.
-    fn build_256(is_dark: bool, bg_r: f64, bg_g: f64, bg_b: f64, reset: &str) -> Self {
-        let bg_lum = luminance(bg_r, bg_g, bg_b);
-        let (bg_hue, _, _) = rgb_to_hsl(bg_r, bg_g, bg_b);
-
-        // Helper: select a 256-color that contrasts with background
-        let pick = |min_cr: f64, max_cr: f64, hue: Option<f64>, hw: f64, used: &[u8]| -> u8 {
-            select_best_color(bg_lum, bg_hue, min_cr, max_cr, hue, hw, used, is_dark)
-        };
-
-        let sgr = |idx: u8| format!("\x1b[38;5;{idx}m");
-
-        // Pick prompt colors with distinction
-        let mut used = Vec::new();
-        let success_idx = pick(5.0, 14.0, Some(120.0), 1.5, &used); used.push(success_idx);
-        let failed_idx = pick(5.0, 14.0, Some(0.0), 2.0, &used); // red
-        let time_idx = pick(2.5, 5.0, None, 0.0, &used); // dim
-        let user_idx = pick(5.0, 14.0, Some(180.0), 1.5, &used); used.push(user_idx);
-        let host_idx = time_idx; // same as time (dim)
-        let ssh_idx = pick(5.0, 14.0, Some(50.0), 1.5, &used); // yellow-ish
-        let path_idx = pick(5.0, 14.0, Some(if is_dark { 120.0 } else { 220.0 }), 1.5, &used); used.push(path_idx);
-        let git_idx = pick(5.0, 14.0, Some(50.0), 1.5, &used); used.push(git_idx);
-        let dirty_idx = pick(5.0, 14.0, Some(55.0), 1.5, &used);
-
-        // Syntax highlighting
-        let kw_idx = pick(5.0, 12.0, Some(330.0), 1.5, &[]); // pink
-        let str_idx = pick(4.0, 12.0, Some(120.0), 1.0, &[]); // green
-        let num_idx = pick(4.0, 12.0, Some(180.0), 1.0, &[]); // cyan
-        let cmd_idx = pick(5.0, 12.0, Some(180.0), 1.0, &[]); // cyan
-        let flag_idx = pick(4.0, 10.0, Some(45.0), 1.0, &[]);  // yellow/orange
-        let op_idx = pick(4.0, 10.0, Some(280.0), 1.0, &[]);   // magenta
-
-        Self {
-            is_dark,
-            bg_rgb: Some((bg_r, bg_g, bg_b)),
-            prompt_success: sgr(success_idx),
-            prompt_failed: sgr(failed_idx),
-            prompt_time: sgr(time_idx),
-            prompt_user: sgr(user_idx),
-            prompt_host: sgr(host_idx),
-            prompt_ssh_host: sgr(ssh_idx),
-            prompt_path: sgr(path_idx),
-            prompt_git_branch: sgr(git_idx),
-            prompt_git_dirty: sgr(dirty_idx),
-            prompt_root: sgr(failed_idx),
-            muted: sgr(time_idx),
-            error: sgr(failed_idx),
-            warning: sgr(ssh_idx),
-            reset: reset.to_string(),
-            hl_keyword: sgr(kw_idx),
-            hl_string: sgr(str_idx),
-            hl_number: sgr(num_idx),
-            hl_command: sgr(cmd_idx),
-            hl_unknown_cmd: if is_dark { "\x1b[37m".into() } else { "\x1b[30m".into() },
-            hl_flag: sgr(flag_idx),
-            hl_operator: sgr(op_idx),
-            hl_pipe: sgr(time_idx),
-            hl_comment: sgr(time_idx),
-        }
-    }
-
-    /// Basic 16-color theme (no background RGB available).
-    fn build_basic(is_dark: bool, reset: &str) -> Self {
+    /// Build theme with proven basic ANSI colors (matching C# Rush).
+    /// These colors are reliable across all terminals and backgrounds.
+    fn build_basic(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>, reset: &str) -> Self {
         if is_dark {
             Self {
-                is_dark, bg_rgb: None,
+                is_dark, bg_rgb,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
                 prompt_time: "\x1b[90m".into(), prompt_user: "\x1b[36m".into(),
                 prompt_host: "\x1b[90m".into(), prompt_ssh_host: "\x1b[33m".into(),
@@ -339,7 +276,7 @@ impl Theme {
             }
         } else {
             Self {
-                is_dark, bg_rgb: None,
+                is_dark, bg_rgb,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
                 prompt_time: "\x1b[90m".into(), prompt_user: "\x1b[34m".into(),
                 prompt_host: "\x1b[90m".into(), prompt_ssh_host: "\x1b[33m".into(),
@@ -623,14 +560,15 @@ mod tests {
     }
 
     #[test]
-    fn theme_256_vs_basic() {
-        let t256 = Theme::new(true, Some((0.1, 0.1, 0.15)));
-        let tbasic = Theme::new(true, None);
-        // 256 theme should use 38;5;N codes
-        assert!(t256.prompt_success.contains("38;5;"), "256 theme should use 256-color codes");
-        // Basic theme should use simple codes
-        assert!(!tbasic.prompt_success.contains("38;5;") || tbasic.prompt_success.contains("38;5;204"),
-            "basic theme should use simple ANSI");
+    fn theme_with_and_without_bg() {
+        let with_bg = Theme::new(true, Some((0.1, 0.1, 0.15)));
+        let without_bg = Theme::new(true, None);
+        // Both use basic ANSI for prompt (proven visible)
+        assert!(with_bg.prompt_success.contains("\x1b["), "should have ANSI codes");
+        assert!(without_bg.prompt_success.contains("\x1b["), "should have ANSI codes");
+        // bg_rgb should be preserved for LS_COLORS generation
+        assert!(with_bg.bg_rgb.is_some());
+        assert!(without_bg.bg_rgb.is_none());
     }
 
     #[test]
