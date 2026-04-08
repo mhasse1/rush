@@ -255,40 +255,54 @@ impl Theme {
         Self::build_basic(is_dark, bg_rgb, &reset)
     }
 
-    /// Build theme with proven basic ANSI colors (matching C# Rush).
-    /// These colors are reliable across all terminals and backgrounds.
+    /// Build theme using basic ANSI for bright colors, 256-color for muted.
+    /// When bg_rgb is known, picks a muted color with guaranteed contrast.
     fn build_basic(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>, reset: &str) -> Self {
+        // The muted color needs to be readable on the background.
+        // \x1b[90m (dark gray) is invisible on #282828 and similar dark backgrounds.
+        // Use 256-color picker when bg is known, fallback to 90m otherwise.
+        let muted_code = if let Some((r, g, b)) = bg_rgb {
+            let bg_lum = luminance(r, g, b);
+            let (bg_hue, _, _) = rgb_to_hsl(r, g, b);
+            let idx = select_best_color(bg_lum, bg_hue, 3.0, 5.5, None, 0.0, &[], is_dark);
+            format!("\x1b[38;5;{idx}m")
+        } else if is_dark {
+            "\x1b[37m".into() // white instead of dark gray on dark unknown bg
+        } else {
+            "\x1b[90m".into() // dark gray is fine on light backgrounds
+        };
+
         if is_dark {
             Self {
                 is_dark, bg_rgb,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
-                prompt_time: "\x1b[90m".into(), prompt_user: "\x1b[36m".into(),
-                prompt_host: "\x1b[90m".into(), prompt_ssh_host: "\x1b[33m".into(),
+                prompt_time: muted_code.clone(), prompt_user: "\x1b[36m".into(),
+                prompt_host: muted_code.clone(), prompt_ssh_host: "\x1b[33m".into(),
                 prompt_path: "\x1b[32m".into(), prompt_git_branch: "\x1b[33m".into(),
                 prompt_git_dirty: "\x1b[93m".into(), prompt_root: "\x1b[31m".into(),
-                muted: "\x1b[90m".into(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
+                muted: muted_code.clone(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
                 reset: reset.into(),
                 hl_keyword: "\x1b[38;5;204m".into(), hl_string: "\x1b[32m".into(),
                 hl_number: "\x1b[36m".into(), hl_command: "\x1b[36m".into(),
                 hl_unknown_cmd: "\x1b[37m".into(), hl_flag: "\x1b[33m".into(),
-                hl_operator: "\x1b[35m".into(), hl_pipe: "\x1b[90m".into(),
-                hl_comment: "\x1b[90m".into(),
+                hl_operator: "\x1b[35m".into(), hl_pipe: muted_code.clone(),
+                hl_comment: muted_code,
             }
         } else {
             Self {
                 is_dark, bg_rgb,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
-                prompt_time: "\x1b[90m".into(), prompt_user: "\x1b[34m".into(),
-                prompt_host: "\x1b[90m".into(), prompt_ssh_host: "\x1b[33m".into(),
+                prompt_time: muted_code.clone(), prompt_user: "\x1b[34m".into(),
+                prompt_host: muted_code.clone(), prompt_ssh_host: "\x1b[33m".into(),
                 prompt_path: "\x1b[34m".into(), prompt_git_branch: "\x1b[33m".into(),
                 prompt_git_dirty: "\x1b[33m".into(), prompt_root: "\x1b[31m".into(),
-                muted: "\x1b[90m".into(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
+                muted: muted_code.clone(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
                 reset: reset.into(),
                 hl_keyword: "\x1b[38;5;161m".into(), hl_string: "\x1b[32m".into(),
                 hl_number: "\x1b[36m".into(), hl_command: "\x1b[34m".into(),
                 hl_unknown_cmd: "\x1b[30m".into(), hl_flag: "\x1b[38;5;130m".into(),
-                hl_operator: "\x1b[35m".into(), hl_pipe: "\x1b[90m".into(),
-                hl_comment: "\x1b[90m".into(),
+                hl_operator: "\x1b[35m".into(), hl_pipe: muted_code.clone(),
+                hl_comment: muted_code,
             }
         }
     }
