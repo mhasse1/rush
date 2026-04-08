@@ -87,8 +87,89 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Test
+      - name: Unit Tests
         run: cargo test
+
+      - name: LLM Mode Tests
+        run: |
+          # Test LLM context output
+          echo 'echo hello' | target/release/rush-cli --llm 2>/dev/null | head -1 | python3 -c "
+          import sys, json
+          ctx = json.loads(sys.stdin.readline())
+          assert ctx['ready'] == True, 'context not ready'
+          assert ctx['shell'] == 'rush', f'wrong shell: {ctx[\"shell\"]}'
+          print('✓ LLM context OK')
+          "
+
+          # Test LLM command execution
+          echo 'echo hello' | target/release/rush-cli --llm 2>/dev/null | sed -n '2p' | python3 -c "
+          import sys, json
+          result = json.loads(sys.stdin.readline())
+          assert result['status'] == 'success', f'status: {result[\"status\"]}'
+          assert result['stdout'] == 'hello', f'stdout: {result.get(\"stdout\")}'
+          print('✓ LLM execute OK')
+          "
+
+          # Test LLM Rush syntax
+          echo 'puts 1 + 2' | target/release/rush-cli --llm 2>/dev/null | sed -n '2p' | python3 -c "
+          import sys, json
+          result = json.loads(sys.stdin.readline())
+          assert result['status'] == 'success', f'status: {result[\"status\"]}'
+          assert result['stdout'] == '3', f'stdout: {result.get(\"stdout\")}'
+          print('✓ LLM Rush eval OK')
+          "
+
+          # Test LLM TTY blocklist
+          echo 'vim test.txt' | target/release/rush-cli --llm 2>/dev/null | sed -n '2p' | python3 -c "
+          import sys, json
+          result = json.loads(sys.stdin.readline())
+          assert result.get('error_type') == 'tty_required', f'expected tty_required, got: {result}'
+          print('✓ LLM TTY blocklist OK')
+          "
+
+      - name: MCP Mode Tests
+        run: |
+          # Test MCP initialize
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize"}' | target/release/rush-cli --mcp 2>/dev/null | python3 -c "
+          import sys, json
+          resp = json.loads(sys.stdin.readline())
+          assert resp['result']['serverInfo']['name'] == 'rush-local', 'wrong server name'
+          assert resp['result']['protocolVersion'] == '2024-11-05', 'wrong protocol version'
+          print('✓ MCP initialize OK')
+          "
+
+          # Test MCP tools/list
+          echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | target/release/rush-cli --mcp 2>/dev/null | python3 -c "
+          import sys, json
+          resp = json.loads(sys.stdin.readline())
+          tools = resp['result']['tools']
+          names = [t['name'] for t in tools]
+          assert 'rush_execute' in names, f'missing rush_execute: {names}'
+          assert 'rush_read_file' in names, f'missing rush_read_file: {names}'
+          assert 'rush_context' in names, f'missing rush_context: {names}'
+          assert len(tools) == 3, f'expected 3 tools, got {len(tools)}'
+          print('✓ MCP tools/list OK (3 tools)')
+          "
+
+          # Test MCP rush_execute
+          printf '{"jsonrpc":"2.0","id":1,"method":"initialize"}\n{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rush_execute","arguments":{"command":"echo mcp_ci_test"}}}\n' | target/release/rush-cli --mcp 2>/dev/null | sed -n '2p' | python3 -c "
+          import sys, json
+          resp = json.loads(sys.stdin.readline())
+          content = json.loads(resp['result']['content'][0]['text'])
+          assert content['status'] == 'success', f'status: {content[\"status\"]}'
+          assert content['stdout'] == 'mcp_ci_test', f'stdout: {content.get(\"stdout\")}'
+          print('✓ MCP rush_execute OK')
+          "
+
+          # Test MCP resources/list
+          echo '{"jsonrpc":"2.0","id":1,"method":"resources/list"}' | target/release/rush-cli --mcp 2>/dev/null | python3 -c "
+          import sys, json
+          resp = json.loads(sys.stdin.readline())
+          resources = resp['result']['resources']
+          assert len(resources) == 1, f'expected 1 resource, got {len(resources)}'
+          assert resources[0]['uri'] == 'rush://lang-spec', f'wrong uri: {resources[0][\"uri\"]}'
+          print('✓ MCP resources/list OK')
+          "
 
       - name: Upload binary
         if: success()
