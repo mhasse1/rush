@@ -19,5 +19,6 @@ pub mod trap;
 pub mod jobs;
 pub mod platform;
 pub mod flags;
+pub mod hints;
 #[cfg(test)]
 mod posix_tests;

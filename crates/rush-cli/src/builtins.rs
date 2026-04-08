@@ -51,6 +51,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "which" | "type" => { handle_which(args); true }
         "o" | "open" => { handle_open(args); true }
         "reload" => { handle_reload(evaluator, args); true }
+        "init" => { handle_init(); true }
         ":" | "true" => { evaluator.exit_code = 0; true }
         "false" => { evaluator.exit_code = 1; true }
         "command" => { handle_command(evaluator, args); true }
@@ -888,22 +889,54 @@ fn handle_kill_job(args: &str) {
     }
 }
 
+// ── init — open init.rush in $EDITOR ─────────────────────────────────
+
+fn handle_init() {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
+        if cfg!(windows) { "notepad".into() } else { "vi".into() }
+    });
+    let init_path = config_dir().join("init.rush");
+
+    // Create if doesn't exist
+    if !init_path.exists() {
+        std::fs::create_dir_all(init_path.parent().unwrap()).ok();
+        std::fs::write(&init_path, "# ~/.config/rush/init.rush\n# Startup script — runs on every shell launch.\n").ok();
+    }
+
+    let path_str = init_path.to_string_lossy().to_string();
+    std::process::Command::new(&editor)
+        .arg(&path_str)
+        .status()
+        .ok();
+
+    eprintln!("Tip: run 'reload' to apply changes.");
+}
+
 // ── o (open) — cross-platform open ──────────────────────────────────
 
 fn handle_open(args: &str) {
-    let target = if args.is_empty() { "." } else { args };
+    if args.is_empty() {
+        #[cfg(target_os = "macos")]
+        { std::process::Command::new("open").arg(".").status().ok(); }
+        #[cfg(target_os = "linux")]
+        { std::process::Command::new("xdg-open").arg(".").status().ok(); }
+        return;
+    }
 
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(target).status().ok();
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open").arg(target).status().ok();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd").args(["/C", "start", "", target]).status().ok();
+    // Open each argument separately
+    for target in args.split_whitespace() {
+        let target = if target.starts_with("~/") {
+            format!("{}/{}", std::env::var("HOME").unwrap_or_default(), &target[2..])
+        } else {
+            target.to_string()
+        };
+
+        #[cfg(target_os = "macos")]
+        { std::process::Command::new("open").arg(&target).status().ok(); }
+        #[cfg(target_os = "linux")]
+        { std::process::Command::new("xdg-open").arg(&target).status().ok(); }
+        #[cfg(target_os = "windows")]
+        { std::process::Command::new("cmd").args(["/C", "start", "", &target]).status().ok(); }
     }
 }
 

@@ -1,7 +1,7 @@
 use reedline::{
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
-    ColumnarMenu, Emacs, FileBackedHistory, KeyCode, KeyModifiers, Reedline, ReedlineEvent,
-    ReedlineMenu, Signal, Vi,
+    ColumnarMenu, DefaultHinter, Emacs, FileBackedHistory, KeyCode, KeyModifiers, Reedline,
+    ReedlineEvent, ReedlineMenu, Signal, Vi,
 };
 
 use rush_core::config::RushConfig;
@@ -70,10 +70,17 @@ pub fn run() {
         Box::new(Vi::new(insert_bindings, default_vi_normal_keybindings()))
     };
 
+    // Autosuggestions: fish-style ghost text from history
+    let hinter = Box::new(
+        DefaultHinter::default()
+            .with_style(nu_ansi_term::Style::new().fg(nu_ansi_term::Color::DarkGray))
+    );
+
     let mut editor = Reedline::create()
         .with_edit_mode(edit_mode)
         .with_history(Box::new(history))
         .with_completer(completer)
+        .with_hinter(hinter)
         .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
         .with_highlighter(Box::new(RushHighlighter))
         .with_validator(Box::new(RushValidator))
@@ -129,6 +136,7 @@ pub fn run() {
                 crate::run_line(&mut evaluator, trimmed);
                 let elapsed = start.elapsed();
 
+                // Timing for slow commands
                 if show_timing && elapsed.as_millis() > 500 {
                     let secs = elapsed.as_secs_f64();
                     if secs >= 60.0 {
@@ -137,6 +145,13 @@ pub fn run() {
                         eprintln!("{}  {mins}m{rem:.1}s{}", detected_theme.muted, detected_theme.reset);
                     } else {
                         eprintln!("{}  {secs:.1}s{}", detected_theme.muted, detected_theme.reset);
+                    }
+                }
+
+                // Training hints after failed commands
+                if evaluator.exit_code != 0 {
+                    if let Some(hint) = rush_core::hints::hint_for_command(trimmed, evaluator.exit_code) {
+                        eprintln!("{}  {hint}{}", detected_theme.muted, detected_theme.reset);
                     }
                 }
             }
