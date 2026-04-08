@@ -547,17 +547,35 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
 // ── set ─────────────────────────────────────────────────────────────
 
 fn handle_set(args: &str) {
+    let mut config = rush_core::config::RushConfig::load();
+
     if args.is_empty() {
-        println!("Shell settings:");
-        println!("  edit_mode: vi");
-        println!();
-        println!("Usage: set <option> <value>");
+        config.display();
         return;
     }
+
+    // set -e / set +e / set -x / set +x shortcuts
     match args {
-        "vi" => println!("Edit mode: vi (default)"),
-        "emacs" => eprintln!("set: emacs mode not yet implemented in Rust port"),
-        _ => eprintln!("set: unknown option '{args}'"),
+        "-e" => { config.set("stop_on_error", "true"); }
+        "+e" => { config.set("stop_on_error", "false"); }
+        "-x" => { config.set("trace_commands", "true"); }
+        "+x" => { config.set("trace_commands", "false"); }
+        "vi" => { config.set("vi", ""); }
+        "emacs" => { config.set("emacs", ""); }
+        _ => {
+            // set key value
+            let parts: Vec<&str> = args.splitn(2, char::is_whitespace).collect();
+            let key = parts[0];
+            let value = parts.get(1).unwrap_or(&"");
+            if !config.set(key, value) {
+                eprintln!("set: unknown option '{key}'");
+                return;
+            }
+        }
+    }
+
+    if let Err(e) = config.save() {
+        eprintln!("set: failed to save config: {e}");
     }
 }
 
