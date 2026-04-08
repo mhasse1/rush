@@ -319,11 +319,13 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
 #[derive(Debug)]
 enum Redirect {
     StdoutWrite(String),     // > file
+    StdoutClobber(String),   // >| file (override noclobber)
     StdoutAppend(String),    // >> file
     StdinRead(String),       // < file
     StderrWrite(String),     // 2> file
     StderrAppend(String),    // 2>> file
     StderrToStdout,          // 2>&1
+    FdClose(i32),            // N<&- or N>&-
 }
 
 /// Extract redirections from argument list. Supports multiple redirections.
@@ -333,6 +335,16 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
     let mut i = 0;
 
     while i < parts.len() {
+        // N>&- or N<&- (close fd)
+        if (parts[i].ends_with(">&-") || parts[i].ends_with("<&-")) && parts[i].len() >= 3 {
+            let fd_str = &parts[i][..parts[i].len() - 3];
+            if let Ok(fd) = fd_str.parse::<i32>() {
+                redirects.push(Redirect::FdClose(fd));
+                i += 1;
+                continue;
+            }
+        }
+
         // 2>&1
         if parts[i] == "2>&1" {
             redirects.push(Redirect::StderrToStdout);
@@ -362,6 +374,11 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
         // >> file
         else if parts[i] == ">>" && i + 1 < parts.len() {
             redirects.push(Redirect::StdoutAppend(parts[i + 1].clone()));
+            i += 2;
+        }
+        // >| file (clobber override)
+        else if parts[i] == ">|" && i + 1 < parts.len() {
+            redirects.push(Redirect::StdoutClobber(parts[i + 1].clone()));
             i += 2;
         }
         // > file
@@ -408,6 +425,17 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
     for redirect in redirects {
         match redirect {
             Redirect::StdoutWrite(path) => {
+                // Respect noclobber (set -C): refuse to overwrite existing file
+                if flags::noclobber() && std::path::Path::new(path).exists() {
+                    return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: cannot overwrite existing file (noclobber)"), exit_code: 1 };
+                }
+                match std::fs::File::create(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StdoutClobber(path) => {
+                // >| always overwrites regardless of noclobber
                 match std::fs::File::create(path) {
                     Ok(f) => stdout_file = Some(f),
                     Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
@@ -439,8 +467,16 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
             }
             Redirect::StderrToStdout => {
                 // 2>&1 — stderr goes wherever stdout goes
-                // If stdout is a file, dup it; otherwise both inherit
                 stderr_cfg = Stdio::inherit(); // simplified — both to terminal
+            }
+            Redirect::FdClose(fd) => {
+                // Close a file descriptor — set to null
+                match fd {
+                    0 => { stdin_file = None; stdin_cfg = Stdio::null(); }
+                    1 => { stdout_file = None; stdout_cfg = Stdio::null(); }
+                    2 => { stderr_file = None; stderr_cfg = Stdio::null(); }
+                    _ => {} // other fds not supported via Stdio
+                }
             }
         }
     }
@@ -658,6 +694,47 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
 
     while let Some(c) = chars.next() {
         match c {
+            // $'...' ANSI-C quoting
+            '$' if !in_single && !in_double && chars.peek() == Some(&'\'') => {
+                chars.next(); // consume '
+                was_quoted = true;
+                while let Some(ch) = chars.next() {
+                    if ch == '\'' { break; }
+                    if ch == '\\' {
+                        match chars.next() {
+                            Some('n') => current.push('\n'),
+                            Some('t') => current.push('\t'),
+                            Some('r') => current.push('\r'),
+                            Some('\\') => current.push('\\'),
+                            Some('\'') => current.push('\''),
+                            Some('"') => current.push('"'),
+                            Some('a') => current.push('\x07'),
+                            Some('b') => current.push('\x08'),
+                            Some('f') => current.push('\x0C'),
+                            Some('v') => current.push('\x0B'),
+                            Some('0') => current.push('\0'),
+                            Some('e') => current.push('\x1b'),
+                            Some('x') => {
+                                // \xHH hex byte
+                                let mut hex = String::new();
+                                for _ in 0..2 {
+                                    if let Some(&h) = chars.peek() {
+                                        if h.is_ascii_hexdigit() { hex.push(chars.next().unwrap()); }
+                                        else { break; }
+                                    }
+                                }
+                                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                                    current.push(byte as char);
+                                }
+                            }
+                            Some(other) => { current.push('\\'); current.push(other); }
+                            None => current.push('\\'),
+                        }
+                    } else {
+                        current.push(ch);
+                    }
+                }
+            }
             '\'' if !in_double => {
                 in_single = !in_single;
                 was_quoted = true;
@@ -1025,10 +1102,28 @@ fn expand_tilde_only(arg: &str) -> String {
     if arg == "~" {
         return std::env::var("HOME").unwrap_or_else(|_| "~".to_string());
     }
+    if arg == "~+" {
+        return std::env::var("PWD").unwrap_or_else(|_|
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        );
+    }
+    if arg == "~-" {
+        return std::env::var("OLDPWD").unwrap_or_default();
+    }
     if arg.starts_with("~/") {
         if let Ok(home) = std::env::var("HOME") {
             return format!("{home}{}", &arg[1..]);
         }
+    }
+    if arg.starts_with("~+/") {
+        let pwd = std::env::var("PWD").unwrap_or_else(|_|
+            std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
+        );
+        return format!("{pwd}{}", &arg[2..]);
+    }
+    if arg.starts_with("~-/") {
+        let oldpwd = std::env::var("OLDPWD").unwrap_or_default();
+        return format!("{oldpwd}{}", &arg[2..]);
     }
     arg.to_string()
 }
@@ -1092,54 +1187,12 @@ fn split_on_pipe(line: &str) -> Vec<String> {
     segments
 }
 
-/// Parse a command string into words, handling quotes.
+/// Parse a command string into words, handling quotes including $'...'.
 pub fn parse_command_line(line: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut chars = line.chars().peekable();
-    let mut in_single = false;
-    let mut in_double = false;
-
-    while let Some(c) = chars.next() {
-        match c {
-            '\'' if !in_double => {
-                in_single = !in_single;
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-            }
-            '\\' if !in_single => {
-                // Backslash escaping (works in double-quoted and unquoted)
-                if let Some(&next) = chars.peek() {
-                    if in_double {
-                        match next {
-                            '"' | '\\' | '$' | '`' => {
-                                current.push(chars.next().unwrap());
-                            }
-                            _ => {
-                                current.push('\\');
-                            }
-                        }
-                    } else {
-                        // Unquoted: backslash-space = literal space, etc.
-                        current.push(chars.next().unwrap());
-                    }
-                }
-            }
-            ' ' | '\t' if !in_single && !in_double => {
-                if !current.is_empty() {
-                    parts.push(std::mem::take(&mut current));
-                }
-            }
-            _ => {
-                current.push(c);
-            }
-        }
-    }
-    if !current.is_empty() {
-        parts.push(current);
-    }
-    parts
+    parse_command_line_with_quote_info(line)
+        .into_iter()
+        .map(|(word, _)| word)
+        .collect()
 }
 
 // ── PATH Lookup ─────────────────────────────────────────────────────
@@ -1493,6 +1546,42 @@ mod tests {
     }
 
     #[test]
+    // ── ANSI-C quoting ────────────────────────────────────────────
+
+    #[test]
+    fn dollar_single_quote_escapes() {
+        let result = parse_command_line("echo $'hello\\nworld'");
+        assert_eq!(result, vec!["echo", "hello\nworld"]);
+    }
+
+    #[test]
+    fn dollar_single_quote_tab() {
+        let result = parse_command_line("echo $'a\\tb'");
+        assert_eq!(result, vec!["echo", "a\tb"]);
+    }
+
+    #[test]
+    fn dollar_single_quote_hex() {
+        let result = parse_command_line("echo $'\\x41'");
+        assert_eq!(result, vec!["echo", "A"]); // 0x41 = 'A'
+    }
+
+    // ── Tilde ~+ ~- ────────────────────────────────────────────────
+
+    #[test]
+    fn tilde_plus() {
+        let pwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
+        unsafe { std::env::set_var("PWD", &pwd); }
+        assert_eq!(expand_tilde_only("~+"), pwd);
+    }
+
+    #[test]
+    fn tilde_minus() {
+        unsafe { std::env::set_var("OLDPWD", "/tmp"); }
+        assert_eq!(expand_tilde_only("~-"), "/tmp");
+        unsafe { std::env::remove_var("OLDPWD"); }
+    }
+
     fn param_prefix_strip() {
         unsafe { std::env::set_var("_TEST_PATH", "/usr/local/bin") };
         assert_eq!(expand_parameter("_TEST_PATH#*/"), "usr/local/bin"); // shortest: just "/"

@@ -56,6 +56,9 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "exec" => { handle_exec(args); true }
         "eval" => { handle_eval(evaluator, args); true }
         "trap" => { rush_core::trap::handle_trap(args); true }
+        "umask" => { handle_umask(args); true }
+        "hash" => { true } // no-op: we don't cache command locations
+        "readonly" => { handle_readonly(evaluator, args); true }
         "jobs" => { JOB_TABLE.with(|jt| jt.borrow().list()); true }
         "fg" => {
             let code = JOB_TABLE.with(|jt| {
@@ -785,6 +788,49 @@ fn handle_eval(evaluator: &mut Evaluator, args: &str) {
     }
     // Route through the same dispatch as any other command
     crate::run_line(evaluator, args);
+}
+
+// ── umask ───────────────────────────────────────────────────────────
+
+fn handle_umask(args: &str) {
+    #[cfg(unix)]
+    {
+        if args.is_empty() {
+            // Display current umask
+            let current = unsafe { libc::umask(0) };
+            unsafe { libc::umask(current); } // restore
+            println!("{:04o}", current);
+        } else {
+            // Set umask
+            if let Ok(mask) = u32::from_str_radix(args.trim(), 8) {
+                unsafe { libc::umask(mask as libc::mode_t); }
+            } else {
+                eprintln!("umask: invalid octal number '{args}'");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        eprintln!("umask: not supported on this platform");
+    }
+}
+
+// ── readonly ────────────────────────────────────────────────────────
+
+fn handle_readonly(evaluator: &mut Evaluator, args: &str) {
+    if args.is_empty() || args == "-p" {
+        // List readonly variables (we don't track this yet — stub)
+        println!("(no readonly variables)");
+        return;
+    }
+    // readonly VAR=value or readonly VAR
+    // For now, just set the variable (tracking immutability requires env changes)
+    if let Some((name, value)) = args.split_once('=') {
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        evaluator.env.set(name.trim(), rush_core::value::Value::String(value.to_string()));
+        // TODO: mark as readonly in env
+    }
+    eprintln!("readonly: immutability tracking not yet implemented");
 }
 
 // ── init.rush loading ───────────────────────────────────────────────

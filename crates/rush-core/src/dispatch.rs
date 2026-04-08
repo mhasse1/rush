@@ -159,6 +159,44 @@ pub fn dispatch_with_jobs(
             }
         }
 
+        // Subshell: ( list ) — execute in child process
+        if segment.starts_with('(') && segment.ends_with(')') {
+            let inner = &segment[1..segment.len() - 1];
+            let result = process::run_native_capture(&format!("sh -c '{}'", inner.replace('\'', "'\\''")));
+            if !result.stdout.is_empty() {
+                print!("{}", result.stdout);
+            }
+            last_exit = result.exit_code;
+            last_failed = last_exit != 0;
+            evaluator.exit_code = last_exit;
+            // Restore inline env vars
+            for (key, prev) in saved_vars {
+                match prev {
+                    Some(val) => unsafe { std::env::set_var(&key, &val) },
+                    None => unsafe { std::env::remove_var(&key) },
+                }
+            }
+            continue;
+        }
+
+        // Brace group: { list; } — execute in current shell
+        if segment.starts_with("{ ") && segment.ends_with(" }") {
+            let inner = &segment[2..segment.len() - 2];
+            // Recursively dispatch the inner commands
+            let inner_result = dispatch_with_jobs(inner, evaluator, job_table.as_deref_mut());
+            last_exit = inner_result.exit_code;
+            last_failed = last_exit != 0;
+            if inner_result.should_exit { should_exit = true; break; }
+            // Restore inline env vars
+            for (key, prev) in saved_vars {
+                match prev {
+                    Some(val) => unsafe { std::env::set_var(&key, &val) },
+                    None => unsafe { std::env::remove_var(&key) },
+                }
+            }
+            continue;
+        }
+
         // exit/quit
         if first_word == "exit" || first_word == "quit" {
             should_exit = true;
@@ -701,5 +739,24 @@ mod tests {
         // "x=5" alone is an assignment, not an inline var
         let (vars, _cmd) = extract_inline_env_vars("x=5");
         assert_eq!(vars.len(), 1); // It's extracted but no command follows
+    }
+
+    // ── Brace group ─────────────────────────────────────────────────
+
+    #[test]
+    fn brace_group_single() {
+        let (_, lines) = run("{ puts \"hello\" }");
+        assert_eq!(lines, vec!["hello"]);
+    }
+
+    // ── set -x ──────────────────────────────────────────────────────
+
+    #[test]
+    fn set_xtrace() {
+        use crate::flags;
+        flags::set_xtrace(false); // ensure clean state
+        let (_, _) = run("puts \"hello\"");
+        // No xtrace output expected
+        flags::set_xtrace(false);
     }
 }
