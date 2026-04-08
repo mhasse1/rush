@@ -71,6 +71,7 @@ pub fn run() {
 
     let prompt = RushPrompt::new();
     let show_timing = config.show_timing;
+    let mut last_cmd: Option<String> = None;
 
     // REPL loop
     loop {
@@ -82,6 +83,17 @@ pub fn run() {
                 if trimmed.is_empty() {
                     continue;
                 }
+
+                // History expansion: !!, !$, !N
+                let expanded = expand_history(trimmed, &last_cmd);
+                let trimmed = expanded.as_deref().unwrap_or(trimmed);
+
+                // --help routing: "file --help" → "help file"
+                let trimmed = route_help(trimmed);
+                let trimmed = trimmed.as_ref();
+
+                // Track last command for !! and !$
+                last_cmd = Some(trimmed.to_string());
 
                 // Shell builtins
                 if builtins::handle(&mut evaluator, trimmed) {
@@ -112,5 +124,71 @@ pub fn run() {
                 break;
             }
         }
+    }
+}
+
+/// Expand history references: !!, !$, !N
+fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
+    if !line.contains('!') {
+        return None;
+    }
+
+    let last = last_cmd.as_deref().unwrap_or("");
+
+    if line == "!!" {
+        if !last.is_empty() {
+            println!("{last}");
+            return Some(last.to_string());
+        }
+        return None;
+    }
+
+    // !$ — last argument of previous command
+    if line.contains("!$") {
+        let last_arg = last.split_whitespace().last().unwrap_or("");
+        let expanded = line.replace("!$", last_arg);
+        println!("{expanded}");
+        return Some(expanded);
+    }
+
+    // !N — Nth command from history (read from file)
+    if line.starts_with('!') && line.len() > 1 {
+        let rest = &line[1..];
+        if let Ok(n) = rest.parse::<usize>() {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let history_path = format!("{home}/.config/rush/history");
+            if let Ok(content) = std::fs::read_to_string(&history_path) {
+                let lines: Vec<&str> = content.lines().collect();
+                if n > 0 && n <= lines.len() {
+                    let cmd = lines[n - 1].to_string();
+                    println!("{cmd}");
+                    return Some(cmd);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Route "--help" flag to help system: "file --help" → "help file"
+fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
+    if line.ends_with(" --help") || line.ends_with(" -h") {
+        let word = line.split_whitespace().next().unwrap_or("");
+        // Map common keywords to help topics
+        let topic = match word.to_lowercase().as_str() {
+            "file" => "file",
+            "dir" => "dir",
+            "time" => "time",
+            "if" | "while" | "for" | "unless" | "until" | "loop" | "case" => "control-flow",
+            "def" | "return" => "functions",
+            "class" | "attr" => "classes",
+            "ai" => "ai",
+            "where" | "select" | "sort" | "objectify" | "as" | "from" => "pipes",
+            _ => return std::borrow::Cow::Borrowed(line),
+        };
+        std::borrow::Cow::Owned(format!("help {topic}"))
+    } else {
+        std::borrow::Cow::Borrowed(line)
     }
 }
