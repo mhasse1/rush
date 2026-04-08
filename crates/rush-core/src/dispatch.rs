@@ -160,9 +160,14 @@ pub fn dispatch_with_jobs(
         }
 
         // Subshell: ( list ) — execute in child process
+        // Uses Rush's own binary so subshell gets Rush syntax
         if segment.starts_with('(') && segment.ends_with(')') {
             let inner = &segment[1..segment.len() - 1];
-            let result = process::run_native_capture(&format!("sh -c '{}'", inner.replace('\'', "'\\''")));
+            // Try to find our own binary
+            let rush_bin = std::env::current_exe()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "rush".to_string());
+            let result = process::run_native_capture(&format!("{rush_bin} -c '{}'", inner.replace('\'', "'\\''")));
             if !result.stdout.is_empty() {
                 print!("{}", result.stdout);
             }
@@ -457,6 +462,8 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
     let mut current_op = ChainOp::None;
     let mut in_single = false;
     let mut in_double = false;
+    let mut brace_depth: i32 = 0; // track { } for brace groups
+    let mut paren_depth: i32 = 0; // track ( ) for subshells
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
 
@@ -484,6 +491,19 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
 
         if ch == '\'' { in_single = true; current.push(ch); i += 1; continue; }
         if ch == '"' { in_double = true; current.push(ch); i += 1; continue; }
+
+        // Track brace/paren depth for { } and ( )
+        if ch == '{' { brace_depth += 1; }
+        if ch == '}' { brace_depth -= 1; }
+        if ch == '(' { paren_depth += 1; }
+        if ch == ')' { paren_depth -= 1; }
+
+        // Don't split on operators inside braces or parens
+        if brace_depth > 0 || paren_depth > 0 {
+            current.push(ch);
+            i += 1;
+            continue;
+        }
 
         // Check for && and ||
         if ch == '&' && i + 1 < chars.len() && chars[i + 1] == '&' {

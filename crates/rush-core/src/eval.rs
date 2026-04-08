@@ -476,17 +476,39 @@ impl<'a> Evaluator<'a> {
                 whens,
                 else_body,
             } => {
+                use crate::ast::CaseTerminator;
                 let subj = self.eval_node(subject)?;
-                for (pattern, when_body) in whens {
-                    let pat = self.eval_node(pattern)?;
-                    if subj == pat {
-                        return self.exec(when_body);
+                let mut matched = false;
+                let mut last_result = Value::Nil;
+
+                for (pattern, when_body, terminator) in whens.iter() {
+                    let should_run = if matched {
+                        true // fallthrough from previous match
+                    } else {
+                        let pat = self.eval_node(pattern)?;
+                        subj == pat
+                    };
+
+                    if should_run {
+                        last_result = self.exec(when_body)?;
+                        match terminator {
+                            CaseTerminator::Break => return Ok(last_result),
+                            CaseTerminator::Fallthrough => {
+                                matched = true; // run next body unconditionally
+                            }
+                            CaseTerminator::ContinueTesting => {
+                                matched = false; // test remaining patterns
+                            }
+                        }
                     }
                 }
-                if let Some(eb) = else_body {
-                    return self.exec(eb);
+
+                if !matched {
+                    if let Some(eb) = else_body {
+                        return self.exec(eb);
+                    }
                 }
-                Ok(Value::Nil)
+                Ok(last_result)
             }
 
             Node::ClassDef {

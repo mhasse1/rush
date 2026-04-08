@@ -99,9 +99,11 @@ pub enum Node {
     },
 
     /// `case/match expr / when val ... / else ... / end`
+    /// Each when has: (pattern, body, terminator)
+    /// Terminator: Break (;;), Fallthrough (;&), ContinueTesting (;;&)
     Case {
         subject: Box<Node>,
-        whens: Vec<(Node, Vec<Node>)>,
+        whens: Vec<(Node, Vec<Node>, CaseTerminator)>,
         else_body: Option<Vec<Node>>,
     },
 
@@ -238,6 +240,14 @@ pub enum Node {
     ShellPassthrough {
         raw_command: String,
     },
+}
+
+/// Case statement terminator type.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CaseTerminator {
+    Break,            // ;; (default, stop matching)
+    Fallthrough,      // ;& (execute next pattern's body)
+    ContinueTesting,  // ;;& (test remaining patterns)
 }
 
 /// A function/method parameter.

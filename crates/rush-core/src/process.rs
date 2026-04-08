@@ -490,14 +490,12 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
                 // 2>&1 — stderr goes wherever stdout goes
                 stderr_cfg = Stdio::inherit(); // simplified — both to terminal
             }
-            Redirect::FdDup(dst, src) => {
-                // Duplicate fd src to fd dst
-                // Common case: 1>&2 (stdout to stderr), 2>&1 (stderr to stdout)
-                match (*dst, *src) {
-                    (1, 2) => { /* stdout → wherever stderr goes — complex with Stdio */ }
-                    (2, 1) => { /* same as StderrToStdout */ }
-                    _ => {} // other fd dups need raw dup2
-                }
+            Redirect::FdDup(_dst, _src) => {
+                // fd duplication: N>&M needs dup2() in the child process.
+                // For the common case 2>&1, we handle it via StderrToStdout.
+                // General case requires pre_exec with raw dup2, which we do
+                // for foreground process setup. For now, map known patterns:
+                // (handled by StderrToStdout detection above)
             }
             Redirect::FdClose(fd) => {
                 // Close a file descriptor — set to null
@@ -546,7 +544,7 @@ fn run_cmd_with_stdio(program: &str, args: &[&str], stdin: Stdio, stdout: Stdio,
 /// This is the shell expansion pipeline: parse → tilde → glob.
 /// Quoted words are never glob-expanded (matching bash/zsh behavior).
 /// Full POSIX expansion pipeline:
-/// env_vars (on whole line) → parse → brace → tilde → glob → quote_removal
+/// env_vars (on whole line) → parse → brace → IFS split → tilde → glob → quote_removal
 fn parse_and_expand(line: &str) -> Vec<String> {
     // Expand $VAR, ${VAR:-default}, and $((arithmetic)) on whole line first
     // (before word splitting, so $((2 + 3 * 4)) works as one expression)
@@ -555,6 +553,23 @@ fn parse_and_expand(line: &str) -> Vec<String> {
     let mut result = Vec::new();
 
     for (word, was_quoted) in parts {
+        // 0. IFS field splitting on unquoted words
+        // If a word contains whitespace and wasn't quoted, IFS split it
+        let ifs = std::env::var("IFS").unwrap_or_else(|_| " \t\n".to_string());
+        let words_after_ifs: Vec<(String, bool)> = if !was_quoted && !ifs.is_empty() {
+            // Only split if the word looks like it came from expansion (contains IFS chars)
+            let has_ifs = word.chars().any(|c| ifs.contains(c));
+            if has_ifs && word.contains(' ') {
+                // IFS split: whitespace IFS chars collapse, non-whitespace delimit
+                ifs_split(&word, &ifs).into_iter().map(|w| (w, false)).collect()
+            } else {
+                vec![(word, was_quoted)]
+            }
+        } else {
+            vec![(word, was_quoted)]
+        };
+
+        for (word, was_quoted) in words_after_ifs {
         // 1. Brace expansion (unquoted only): {a,b,c} → a b c
         let brace_expanded = if !was_quoted && word.contains('{') && word.contains('}') {
             expand_braces(&word)
@@ -589,9 +604,57 @@ fn parse_and_expand(line: &str) -> Vec<String> {
                 result.push(expanded);
             }
         }
+        } // end IFS word loop
     }
 
     result
+}
+
+/// IFS field splitting per POSIX rules.
+/// Whitespace IFS chars collapse (leading/trailing stripped).
+/// Non-whitespace IFS chars delimit (adjacent = empty field).
+fn ifs_split(word: &str, ifs: &str) -> Vec<String> {
+    if ifs.is_empty() {
+        return vec![word.to_string()];
+    }
+
+    let is_ifs_ws = |c: char| ifs.contains(c) && (c == ' ' || c == '\t' || c == '\n');
+    let is_ifs_char = |c: char| ifs.contains(c);
+
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = word.chars().collect();
+    let mut i = 0;
+
+    // Strip leading IFS whitespace
+    while i < chars.len() && is_ifs_ws(chars[i]) {
+        i += 1;
+    }
+
+    while i < chars.len() {
+        let c = chars[i];
+        if is_ifs_char(c) {
+            // This character is an IFS delimiter
+            if !current.is_empty() || !is_ifs_ws(c) {
+                fields.push(std::mem::take(&mut current));
+            }
+            // Skip consecutive IFS whitespace
+            if is_ifs_ws(c) {
+                while i + 1 < chars.len() && is_ifs_ws(chars[i + 1]) {
+                    i += 1;
+                }
+            }
+        } else {
+            current.push(c);
+        }
+        i += 1;
+    }
+
+    if !current.is_empty() {
+        fields.push(current);
+    }
+
+    fields
 }
 
 /// Brace expansion: {a,b,c} → a b c, pre{a,b}post → prea preb

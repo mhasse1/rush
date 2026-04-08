@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast;
 use crate::value::Value;
@@ -28,6 +28,7 @@ pub struct Environment {
     scopes: Vec<HashMap<String, Value>>,
     pub functions: HashMap<String, Function>,
     pub classes: HashMap<String, ClassDef>,
+    readonly: HashSet<String>,
 }
 
 impl Environment {
@@ -36,6 +37,7 @@ impl Environment {
             scopes: vec![HashMap::new()],
             functions: HashMap::new(),
             classes: HashMap::new(),
+            readonly: HashSet::new(),
         }
     }
 
@@ -61,22 +63,37 @@ impl Environment {
         None
     }
 
-    /// Set a variable in the nearest scope where it exists, or the current scope.
-    pub fn set(&mut self, name: &str, value: Value) {
+    /// Set a variable. Returns false if readonly.
+    pub fn set(&mut self, name: &str, value: Value) -> bool {
+        if self.readonly.contains(name) {
+            eprintln!("rush: {name}: readonly variable");
+            return false;
+        }
         // Search existing scopes
         for scope in self.scopes.iter_mut().rev() {
             if scope.contains_key(name) {
                 scope.insert(name.to_string(), value);
-                return;
+                return true;
             }
         }
         // Not found — define in current (innermost) scope
         self.scopes.last_mut().unwrap().insert(name.to_string(), value);
+        true
     }
 
     /// Set in the current scope only (for function params, loop vars).
     pub fn set_local(&mut self, name: &str, value: Value) {
         self.scopes.last_mut().unwrap().insert(name.to_string(), value);
+    }
+
+    /// Mark a variable as readonly.
+    pub fn mark_readonly(&mut self, name: &str) {
+        self.readonly.insert(name.to_string());
+    }
+
+    /// Check if a variable is readonly.
+    pub fn is_readonly(&self, name: &str) -> bool {
+        self.readonly.contains(name)
     }
 
     /// Register a user-defined function.

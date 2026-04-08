@@ -153,7 +153,7 @@ fn handle_source(evaluator: &mut Evaluator, path: &str) {
     }
     let expanded = expand_tilde(path);
     match std::fs::read_to_string(&expanded) {
-        Ok(content) => run_script_with_builtins(evaluator, &content, &expanded),
+        Ok(content) => run_script(evaluator, &content, &expanded),
         Err(e) => eprintln!("source: {expanded}: {e}"),
     }
 }
@@ -824,18 +824,20 @@ fn handle_umask(args: &str) {
 
 fn handle_readonly(evaluator: &mut Evaluator, args: &str) {
     if args.is_empty() || args == "-p" {
-        // List readonly variables (we don't track this yet — stub)
-        println!("(no readonly variables)");
+        // List readonly variables — check each var in env
+        // (simplified: just report we don't have a list mechanism yet)
         return;
     }
     // readonly VAR=value or readonly VAR
-    // For now, just set the variable (tracking immutability requires env changes)
     if let Some((name, value)) = args.split_once('=') {
+        let name = name.trim();
         let value = value.trim().trim_matches('"').trim_matches('\'');
-        evaluator.env.set(name.trim(), rush_core::value::Value::String(value.to_string()));
-        // TODO: mark as readonly in env
+        evaluator.env.set(name, rush_core::value::Value::String(value.to_string()));
+        evaluator.env.mark_readonly(name);
+    } else {
+        // readonly VAR — mark existing var as readonly
+        evaluator.env.mark_readonly(args.trim());
     }
-    eprintln!("readonly: immutability tracking not yet implemented");
 }
 
 // ── fc — history editing ─────────────────────────────────────────────
@@ -1039,14 +1041,16 @@ pub fn load_init(evaluator: &mut Evaluator) {
     let init_path = config_dir().join("init.rush");
     if init_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&init_path) {
-            run_script_with_builtins(evaluator, &content, "init.rush");
+            run_script(evaluator, &content, "init.rush");
         }
     }
 }
 
 /// Run a script handling shell builtins (path, export, alias) line-by-line,
 /// and batching Rush syntax for the parser.
-fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_name: &str) {
+/// Run a script with per-line dispatch: builtins, Rush syntax, shell commands.
+/// Public so script files and init.rush use the same path.
+pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
     let mut rush_buf = String::new();
 
     for line in content.lines() {

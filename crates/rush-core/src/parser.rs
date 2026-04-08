@@ -540,7 +540,7 @@ impl Parser {
             self.skip_newlines();
             let when_body =
                 self.parse_body(&[TokenType::When, TokenType::Else, TokenType::End])?;
-            whens.push((pattern, when_body));
+            whens.push((pattern, when_body, crate::ast::CaseTerminator::Break));
         }
 
         let else_body = if self.check(TokenType::Else) {

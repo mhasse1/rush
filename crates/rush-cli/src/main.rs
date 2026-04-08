@@ -92,18 +92,9 @@ fn main() {
                 ));
             }
 
-            match parser::parse(&input) {
-                Ok(nodes) => {
-                    if let Err(e) = evaluator.exec_toplevel(&nodes) {
-                        eprintln!("rush: {e}");
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("rush: {e}");
-                    std::process::exit(1);
-                }
-            }
+            // Per-line dispatch: handles builtins, Rush syntax, shell commands,
+            // heredocs, and mixed content — same as init.rush
+            builtins::run_script(&mut evaluator, &input, file);
             std::process::exit(evaluator.exit_code);
         }
     }
