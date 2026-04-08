@@ -52,6 +52,8 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "o" | "open" => { handle_open(args); true }
         "reload" => { handle_reload(evaluator, args); true }
         "init" => { handle_init(); true }
+        "printf" => { handle_printf(args); true }
+        "mark" | "---" => { handle_mark(args); true }
         ":" | "true" => { evaluator.exit_code = 0; true }
         "false" => { evaluator.exit_code = 1; true }
         "command" => { handle_command(evaluator, args); true }
@@ -886,6 +888,70 @@ fn handle_kill_job(args: &str) {
                 eprintln!("kill: {spec}: no such job");
             }
         });
+    }
+}
+
+// ── printf — formatted output ────────────────────────────────────────
+
+fn handle_printf(args: &str) {
+    if args.is_empty() {
+        return;
+    }
+    // Parse with shell quoting awareness
+    let parsed = rush_core::process::parse_command_line(args);
+    if parsed.is_empty() {
+        return;
+    }
+    let fmt = &parsed[0];
+    let values: Vec<&str> = parsed[1..].iter().map(|s| s.as_str()).collect();
+
+    let mut val_idx = 0;
+    let mut output = String::new();
+    let chars: Vec<char> = fmt.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            match chars[i + 1] {
+                'n' => output.push('\n'),
+                't' => output.push('\t'),
+                'r' => output.push('\r'),
+                '\\' => output.push('\\'),
+                _ => { output.push('\\'); output.push(chars[i + 1]); }
+            }
+            i += 2;
+        } else if chars[i] == '%' && i + 1 < chars.len() {
+            let val = values.get(val_idx).unwrap_or(&"");
+            val_idx += 1;
+            match chars[i + 1] {
+                's' => output.push_str(val),
+                'd' => output.push_str(&val.parse::<i64>().unwrap_or(0).to_string()),
+                'f' => output.push_str(&format!("{:.6}", val.parse::<f64>().unwrap_or(0.0))),
+                '%' => { output.push('%'); val_idx -= 1; }
+                _ => { output.push('%'); output.push(chars[i + 1]); val_idx -= 1; }
+            }
+            i += 2;
+        } else {
+            output.push(chars[i]);
+            i += 1;
+        }
+    }
+
+    print!("{output}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+}
+
+// ── mark — visual separator ─────────────────────────────────────────
+
+fn handle_mark(args: &str) {
+    let width = std::env::var("COLUMNS").and_then(|s| s.parse().map_err(|_| std::env::VarError::NotPresent)).unwrap_or(80);
+    if args.is_empty() || args == "---" {
+        println!("{}", "─".repeat(width));
+    } else {
+        let label = args.trim_matches('"').trim_matches('\'');
+        let pad = width.saturating_sub(label.len() + 4);
+        println!("── {} {}", label, "─".repeat(pad));
     }
 }
 
