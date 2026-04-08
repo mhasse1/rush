@@ -98,6 +98,24 @@ pub fn run() {
     println!("{}rush v{version} — a modern-day warrior{}", detected_theme.muted, detected_theme.reset);
     println!("{}Rust engine | {mode} mode | Tab | Ctrl+R | {theme_name} {color_info}{}", detected_theme.muted, detected_theme.reset);
 
+    // First-run welcome
+    let config_path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
+        .join(".config").join("rush").join("config.json");
+    if !config_path.exists() {
+        println!();
+        println!("{}Welcome to Rush! Quick tips:{}", detected_theme.prompt_git_branch, detected_theme.reset);
+        println!("{}  alias ll='ls -la'          Define alias (--save to persist){}", detected_theme.muted, detected_theme.reset);
+        println!("{}  path add ~/bin             Add to PATH (--save to persist){}", detected_theme.muted, detected_theme.reset);
+        println!("{}  set emacs                  Switch to emacs mode{}", detected_theme.muted, detected_theme.reset);
+        println!("{}  setbg #282828 --save       Set terminal background{}", detected_theme.muted, detected_theme.reset);
+        println!("{}  help                       Show all commands{}", detected_theme.muted, detected_theme.reset);
+        // Create empty config so this only shows once
+        std::fs::create_dir_all(config_path.parent().unwrap()).ok();
+        if let Ok(cfg) = serde_json::to_string_pretty(&config) {
+            std::fs::write(&config_path, cfg).ok();
+        }
+    }
+
     let mut prompt = RushPrompt::new(detected_theme.clone());
     println!();
 
