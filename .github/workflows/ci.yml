@@ -66,9 +66,40 @@ jobs:
           name: test-results-${{ matrix.os }}
           path: dotnet/Rush.Tests/TestResults/*.trx
 
+  # Rust build and test
+  rust-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test
+
+      - name: Upload binary
+        if: success()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: rush-rust-${{ matrix.target }}
+          path: target/release/rush-cli
+
   # Create a GitHub issue when CI fails on main
   create-issue-on-failure:
-    needs: build-and-test
+    needs: [build-and-test, rust-build]
     if: failure() && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

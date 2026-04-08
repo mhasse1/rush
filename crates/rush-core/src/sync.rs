@@ -390,7 +390,7 @@ fn pull_ssh(target: &str) -> bool {
         }
     }
 
-    ok
+    true
 }
 
 // ── Path transport ──────────────────────────────────────────────────
