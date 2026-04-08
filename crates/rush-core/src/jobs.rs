@@ -274,6 +274,16 @@ impl JobTable {
         }
     }
 
+    /// Public access to resolve_job_spec.
+    pub fn resolve_job_spec_pub(&self, spec: Option<&str>) -> Option<usize> {
+        self.resolve_job_spec(spec)
+    }
+
+    /// Get a job by ID (read-only).
+    pub fn get_job(&self, id: usize) -> Option<&Job> {
+        self.jobs.get(&id)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.jobs.is_empty()
     }

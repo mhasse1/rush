@@ -78,6 +78,10 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
             });
             true
         }
+        "kill" if args.contains('%') => {
+            handle_kill_job(args);
+            true
+        }
         "wait" => {
             let code = JOB_TABLE.with(|jt| {
                 jt.borrow_mut().wait(if args.is_empty() { None } else { Some(args) })
@@ -837,6 +841,48 @@ fn handle_readonly(evaluator: &mut Evaluator, args: &str) {
     } else {
         // readonly VAR — mark existing var as readonly
         evaluator.env.mark_readonly(args.trim());
+    }
+}
+
+// ── kill %jobid ─────────────────────────────────────────────────────
+
+fn handle_kill_job(args: &str) {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let mut signal = rush_core::platform::Sig::Term; // default SIGTERM
+    let mut job_spec = None;
+
+    for part in &parts {
+        if part.starts_with('-') && !part.starts_with('%') {
+            // Signal specification: -9, -KILL, -SIGTERM
+            match part.to_uppercase().trim_start_matches('-').trim_start_matches("SIG") {
+                "9" | "KILL" => signal = rush_core::platform::Sig::Kill,
+                "15" | "TERM" => signal = rush_core::platform::Sig::Term,
+                "2" | "INT" => signal = rush_core::platform::Sig::Int,
+                "1" | "HUP" => signal = rush_core::platform::Sig::Hup,
+                "3" | "QUIT" => signal = rush_core::platform::Sig::Quit,
+                "18" | "CONT" => signal = rush_core::platform::Sig::Cont,
+                _ => {}
+            }
+        } else if part.starts_with('%') {
+            job_spec = Some(*part);
+        }
+    }
+
+    if let Some(spec) = job_spec {
+        JOB_TABLE.with(|jt| {
+            let mut table = jt.borrow_mut();
+            if let Some(id) = table.resolve_job_spec_pub(Some(spec)) {
+                if let Some(job) = table.get_job(id) {
+                    let p = rush_core::platform::current();
+                    p.kill_pg(job.pgid, signal);
+                    eprintln!("[{id}]  Killed                  {}", job.command);
+                } else {
+                    eprintln!("kill: {spec}: no such job");
+                }
+            } else {
+                eprintln!("kill: {spec}: no such job");
+            }
+        });
     }
 }
 

@@ -327,6 +327,7 @@ enum Redirect {
     StderrToStdout,          // 2>&1
     FdDup(i32, i32),         // N>&M or N<&M (dup fd M to fd N)
     FdClose(i32),            // N<&- or N>&-
+    ReadWrite(String),       // N<>file (open for read+write)
 }
 
 /// Extract redirections from argument list. Supports multiple redirections.
@@ -364,6 +365,13 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
                 i += 1;
                 continue;
             }
+        }
+
+        // <> file (read+write)
+        if parts[i] == "<>" && i + 1 < parts.len() {
+            redirects.push(Redirect::ReadWrite(parts[i + 1].clone()));
+            i += 2;
+            continue;
         }
 
         // 2>&1
@@ -489,6 +497,16 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
             Redirect::StderrToStdout => {
                 // 2>&1 — stderr goes wherever stdout goes
                 stderr_cfg = Stdio::inherit(); // simplified — both to terminal
+            }
+            Redirect::ReadWrite(path) => {
+                match std::fs::OpenOptions::new().read(true).write(true).create(true).open(path) {
+                    Ok(f) => {
+                        // For <>, we'd need to dup the fd for both stdin and stdout.
+                        // Simplified: open for stdin (most common use case for lock files)
+                        stdin_file = Some(f);
+                    }
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
             }
             Redirect::FdDup(_dst, _src) => {
                 // fd duplication: N>&M needs dup2() in the child process.
@@ -883,6 +901,12 @@ fn expand_tilde(arg: &str) -> String {
     expand_tilde_only(arg)
 }
 
+/// Public wrapper for tests.
+pub fn expand_env_vars_pub(arg: &str) -> String { expand_env_vars(arg) }
+
+/// Public wrapper for IFS split tests.
+pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
+
 /// Expand $VAR, ${VAR}, ${VAR:-default}, ${VAR:=default}, ${#VAR},
 /// ${VAR%pattern}, ${VAR#pattern}, and $((arithmetic)) in a string.
 fn expand_env_vars(arg: &str) -> String {
@@ -919,6 +943,23 @@ fn expand_env_vars(arg: &str) -> String {
                     i += 1;
                 }
                 result.push_str(&eval_arithmetic(&expr));
+                continue;
+            }
+
+            // $(command) — command substitution (single paren, not double)
+            if chars[i + 1] == '(' && !(i + 2 < chars.len() && chars[i + 2] == '(') {
+                i += 2; // skip $(
+                let mut cmd = String::new();
+                let mut depth: i32 = 1;
+                while i < chars.len() && depth > 0 {
+                    if chars[i] == '(' { depth += 1; }
+                    else if chars[i] == ')' { depth -= 1; }
+                    if depth > 0 { cmd.push(chars[i]); }
+                    i += 1;
+                }
+                // Execute command and capture stdout
+                let output = run_native_capture(&cmd);
+                result.push_str(output.stdout.trim_end());
                 continue;
             }
 
@@ -967,6 +1008,12 @@ fn expand_env_vars(arg: &str) -> String {
                             .unwrap_or_else(|| "0".into())
                     }
                     "LINENO" => std::env::var("RUSH_LINENO").unwrap_or_else(|_| "0".into()),
+                    "PPID" => {
+                        #[cfg(unix)]
+                        { unsafe { libc::getppid() }.to_string() }
+                        #[cfg(not(unix))]
+                        { "0".to_string() }
+                    }
                     _ => std::env::var(&var_name).unwrap_or_default(),
                 };
                 result.push_str(&value);

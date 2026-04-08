@@ -203,6 +203,15 @@ pub fn dispatch_with_jobs(
             continue;
         }
 
+        // Core POSIX builtins handled directly in dispatch
+        if first_word == ":" {
+            last_exit = 0;
+            last_failed = false;
+            evaluator.exit_code = 0;
+            for (key, prev) in saved_vars { match prev { Some(val) => unsafe { std::env::set_var(&key, &val) }, None => unsafe { std::env::remove_var(&key) } } }
+            continue;
+        }
+
         // exit/quit
         if first_word == "exit" || first_word == "quit" {
             should_exit = true;
