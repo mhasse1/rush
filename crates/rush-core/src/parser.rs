@@ -222,8 +222,16 @@ impl Parser {
     fn parse_for(&mut self) -> ParseResult<Node> {
         self.pos += 1; // skip 'for'
         let variable = self.expect(TokenType::Identifier)?.value;
-        self.expect(TokenType::In)?;
-        let collection = self.parse_expression()?;
+
+        // "for name" without "in" → iterate over ARGV (positional params)
+        let collection = if self.check(TokenType::In) {
+            self.pos += 1; // skip 'in'
+            self.parse_expression()?
+        } else {
+            // Default: iterate over ARGV
+            Node::VariableRef { name: "ARGV".to_string() }
+        };
+
         self.skip_newlines();
         let body = self.parse_body(&[TokenType::End])?;
         self.expect(TokenType::End)?;

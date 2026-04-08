@@ -325,6 +325,7 @@ enum Redirect {
     StderrWrite(String),     // 2> file
     StderrAppend(String),    // 2>> file
     StderrToStdout,          // 2>&1
+    FdDup(i32, i32),         // N>&M or N<&M (dup fd M to fd N)
     FdClose(i32),            // N<&- or N>&-
 }
 
@@ -340,6 +341,26 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
             let fd_str = &parts[i][..parts[i].len() - 3];
             if let Ok(fd) = fd_str.parse::<i32>() {
                 redirects.push(Redirect::FdClose(fd));
+                i += 1;
+                continue;
+            }
+        }
+
+        // N>&M or N<&M (general fd duplication)
+        if (parts[i].contains(">&") || parts[i].contains("<&"))
+            && !parts[i].ends_with("&-")
+            && parts[i] != "2>&1"
+        {
+            // Parse N>&M
+            let (before, after) = if let Some(p) = parts[i].find(">&") {
+                (&parts[i][..p], &parts[i][p + 2..])
+            } else if let Some(p) = parts[i].find("<&") {
+                (&parts[i][..p], &parts[i][p + 2..])
+            } else {
+                ("", "")
+            };
+            if let (Ok(dst), Ok(src)) = (before.parse::<i32>(), after.parse::<i32>()) {
+                redirects.push(Redirect::FdDup(dst, src));
                 i += 1;
                 continue;
             }
@@ -468,6 +489,15 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
             Redirect::StderrToStdout => {
                 // 2>&1 — stderr goes wherever stdout goes
                 stderr_cfg = Stdio::inherit(); // simplified — both to terminal
+            }
+            Redirect::FdDup(dst, src) => {
+                // Duplicate fd src to fd dst
+                // Common case: 1>&2 (stdout to stderr), 2>&1 (stderr to stdout)
+                match (*dst, *src) {
+                    (1, 2) => { /* stdout → wherever stderr goes — complex with Stdio */ }
+                    (2, 1) => { /* same as StderrToStdout */ }
+                    _ => {} // other fd dups need raw dup2
+                }
             }
             Redirect::FdClose(fd) => {
                 // Close a file descriptor — set to null

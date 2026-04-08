@@ -59,6 +59,11 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "umask" => { handle_umask(args); true }
         "hash" => { true } // no-op: we don't cache command locations
         "readonly" => { handle_readonly(evaluator, args); true }
+        "shift" => { handle_shift(evaluator, args); true }
+        "getopts" => { handle_getopts(evaluator, args); true }
+        "ulimit" => { handle_ulimit(args); true }
+        "times" => { handle_times(); true }
+        "fc" => { handle_fc(evaluator, args); true }
         "jobs" => { JOB_TABLE.with(|jt| jt.borrow().list()); true }
         "fg" => {
             let code = JOB_TABLE.with(|jt| {
@@ -831,6 +836,201 @@ fn handle_readonly(evaluator: &mut Evaluator, args: &str) {
         // TODO: mark as readonly in env
     }
     eprintln!("readonly: immutability tracking not yet implemented");
+}
+
+// ── fc — history editing ─────────────────────────────────────────────
+
+fn handle_fc(evaluator: &mut Evaluator, args: &str) {
+    let history_path = config_dir().join("history");
+    let content = std::fs::read_to_string(&history_path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+
+    if args.is_empty() || args == "-l" {
+        // List last 16 history entries
+        let start = lines.len().saturating_sub(16);
+        for (i, line) in lines[start..].iter().enumerate() {
+            println!("{:5}  {line}", start + i + 1);
+        }
+        return;
+    }
+
+    if args.starts_with("-l ") {
+        // fc -l first [last]
+        let parts: Vec<&str> = args[3..].split_whitespace().collect();
+        let first: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(lines.len().saturating_sub(16));
+        let last: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(lines.len());
+        let first = first.saturating_sub(1).min(lines.len());
+        let last = last.min(lines.len());
+        for (i, line) in lines[first..last].iter().enumerate() {
+            println!("{:5}  {line}", first + i + 1);
+        }
+        return;
+    }
+
+    if args == "-e -" || args.starts_with("-s") {
+        // fc -s [pat=rep] [cmd] — re-execute last command
+        if let Some(last) = lines.last() {
+            println!("{last}");
+            crate::run_line(evaluator, last);
+        }
+        return;
+    }
+
+    eprintln!("fc: usage: fc [-l] [first [last]] | fc -s [cmd]");
+}
+
+// ── shift — shift positional parameters ──────────────────────────────
+
+fn handle_shift(evaluator: &mut Evaluator, args: &str) {
+    let n: usize = args.trim().parse().unwrap_or(1);
+    if let Some(rush_core::value::Value::Array(ref argv)) = evaluator.env.get("ARGV").cloned() {
+        let new_argv: Vec<rush_core::value::Value> = argv.iter().skip(n).cloned().collect();
+        evaluator.env.set("ARGV", rush_core::value::Value::Array(new_argv));
+        evaluator.exit_code = 0;
+    } else {
+        evaluator.exit_code = 1;
+    }
+}
+
+// ── getopts — option parsing for scripts ────────────────────────────
+
+fn handle_getopts(evaluator: &mut Evaluator, args: &str) {
+    // getopts optstring name [arg...]
+    // Simplified: parse next option from ARGV
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.len() < 2 {
+        eprintln!("getopts: usage: getopts optstring name [args...]");
+        evaluator.exit_code = 1;
+        return;
+    }
+
+    let optstring = parts[0];
+    let name = parts[1];
+
+    // Get OPTIND (1-based index into args)
+    let optind: usize = evaluator.env.get("OPTIND")
+        .and_then(|v| v.to_int())
+        .unwrap_or(1) as usize;
+
+    // Get args (from ARGV or remaining parts)
+    let argv: Vec<String> = if parts.len() > 2 {
+        parts[2..].iter().map(|s| s.to_string()).collect()
+    } else {
+        evaluator.env.get("ARGV")
+            .and_then(|v| if let rush_core::value::Value::Array(arr) = v {
+                Some(arr.iter().map(|v| v.to_rush_string()).collect())
+            } else { None })
+            .unwrap_or_default()
+    };
+
+    if optind > argv.len() {
+        evaluator.exit_code = 1;
+        return;
+    }
+
+    let arg = &argv[optind - 1];
+    if !arg.starts_with('-') || arg == "-" || arg == "--" {
+        evaluator.exit_code = 1;
+        return;
+    }
+
+    let opt = &arg[1..2]; // first option char
+    evaluator.env.set(name, rush_core::value::Value::String(opt.to_string()));
+
+    // Check if option takes an argument
+    if let Some(pos) = optstring.find(opt) {
+        if optstring.get(pos + 1..pos + 2) == Some(":") {
+            // Option takes argument
+            if arg.len() > 2 {
+                evaluator.env.set("OPTARG", rush_core::value::Value::String(arg[2..].to_string()));
+            } else if optind < argv.len() {
+                evaluator.env.set("OPTARG", rush_core::value::Value::String(argv[optind].clone()));
+                evaluator.env.set("OPTIND", rush_core::value::Value::Int(optind as i64 + 2));
+                evaluator.exit_code = 0;
+                return;
+            }
+        }
+    }
+
+    evaluator.env.set("OPTIND", rush_core::value::Value::Int(optind as i64 + 1));
+    evaluator.exit_code = 0;
+}
+
+// ── ulimit — resource limits ────────────────────────────────────────
+
+fn handle_ulimit(args: &str) {
+    #[cfg(unix)]
+    {
+        if args.is_empty() || args == "-f" {
+            // Default: show file size limit
+            let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrlimit(libc::RLIMIT_FSIZE, &mut rlim); }
+            if rlim.rlim_cur == libc::RLIM_INFINITY {
+                println!("unlimited");
+            } else {
+                println!("{}", rlim.rlim_cur / 512); // in 512-byte blocks
+            }
+        } else if args == "-a" {
+            // Show all limits
+            let limits = [
+                ("core file size", libc::RLIMIT_CORE),
+                ("data seg size", libc::RLIMIT_DATA),
+                ("file size", libc::RLIMIT_FSIZE),
+                ("max memory size", libc::RLIMIT_RSS),
+                ("open files", libc::RLIMIT_NOFILE),
+                ("stack size", libc::RLIMIT_STACK),
+                ("cpu time", libc::RLIMIT_CPU),
+            ];
+            for (name, resource) in &limits {
+                let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+                unsafe { libc::getrlimit(*resource, &mut rlim); }
+                let val = if rlim.rlim_cur == libc::RLIM_INFINITY {
+                    "unlimited".to_string()
+                } else {
+                    rlim.rlim_cur.to_string()
+                };
+                println!("{name:20} {val}");
+            }
+        } else if args == "-n" {
+            let mut rlim: libc::rlimit = unsafe { std::mem::zeroed() };
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim); }
+            println!("{}", rlim.rlim_cur);
+        } else {
+            eprintln!("ulimit: usage: ulimit [-a|-f|-n] [limit]");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        eprintln!("ulimit: not supported on this platform");
+    }
+}
+
+// ── times — process times ───────────────────────────────────────────
+
+fn handle_times() {
+    #[cfg(unix)]
+    {
+        let mut tms: libc::tms = unsafe { std::mem::zeroed() };
+        unsafe { libc::times(&mut tms); }
+        let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+        println!("{}m{:.3}s {}m{:.3}s",
+            (tms.tms_utime as f64 / ticks / 60.0) as u64,
+            (tms.tms_utime as f64 / ticks) % 60.0,
+            (tms.tms_stime as f64 / ticks / 60.0) as u64,
+            (tms.tms_stime as f64 / ticks) % 60.0,
+        );
+        println!("{}m{:.3}s {}m{:.3}s",
+            (tms.tms_cutime as f64 / ticks / 60.0) as u64,
+            (tms.tms_cutime as f64 / ticks) % 60.0,
+            (tms.tms_cstime as f64 / ticks / 60.0) as u64,
+            (tms.tms_cstime as f64 / ticks) % 60.0,
+        );
+    }
+    #[cfg(not(unix))]
+    {
+        println!("0m0.000s 0m0.000s");
+        println!("0m0.000s 0m0.000s");
+    }
 }
 
 // ── init.rush loading ───────────────────────────────────────────────
