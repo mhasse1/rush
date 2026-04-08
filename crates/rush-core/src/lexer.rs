@@ -259,17 +259,44 @@ impl Lexer {
         let start = self.pos;
         self.pos += 1; // skip opening "
         let mut value = String::from('"');
+        let mut interp_depth = 0; // track #{...} nesting
 
-        while self.pos < self.source.len() && self.ch() != '"' {
-            if self.ch() == '\\' && self.pos + 1 < self.source.len() {
-                value.push(self.ch());
-                self.pos += 1;
-                value.push(self.ch());
-                self.pos += 1;
-            } else {
-                value.push(self.ch());
-                self.pos += 1;
+        while self.pos < self.source.len() {
+            let ch = self.ch();
+
+            // Only end string at " when not inside #{...}
+            if ch == '"' && interp_depth == 0 {
+                break;
             }
+
+            if ch == '\\' && self.pos + 1 < self.source.len() {
+                value.push(ch);
+                self.pos += 1;
+                value.push(self.ch());
+                self.pos += 1;
+                continue;
+            }
+
+            // Track #{...} interpolation depth
+            if ch == '#' && self.peek(1) == Some('{') && interp_depth == 0 {
+                interp_depth = 1;
+                value.push(ch);
+                self.pos += 1;
+                value.push(self.ch()); // {
+                self.pos += 1;
+                continue;
+            }
+
+            if interp_depth > 0 {
+                if ch == '{' {
+                    interp_depth += 1;
+                } else if ch == '}' {
+                    interp_depth -= 1;
+                }
+            }
+
+            value.push(ch);
+            self.pos += 1;
         }
 
         if self.pos < self.source.len() {
@@ -864,5 +891,34 @@ mod tests {
         let tokens = lex(r#""hello \"world\"""#);
         assert_eq!(tokens[0].token_type, StringLiteral);
         assert_eq!(tokens[0].value, r#""hello \"world\"""#);
+    }
+
+    // ── Interpolation with nested quotes ────────────────────────────
+
+    #[test]
+    fn interpolation_with_quotes_inside() {
+        // "Evens: #{evens.join(", ")}" — the ", " should NOT end the string
+        let input = r#""result: #{x.join(", ")}""#;
+        let tokens = lex(input);
+        assert_eq!(tokens[0].token_type, StringLiteral);
+        // Should be a single string token, not split
+        assert_eq!(tokens[0].value, input);
+        assert_eq!(tokens[1].token_type, Eof);
+    }
+
+    #[test]
+    fn interpolation_with_method_call() {
+        let input = r#""count: #{arr.length}""#;
+        let tokens = lex(input);
+        assert_eq!(tokens[0].token_type, StringLiteral);
+        assert_eq!(tokens[0].value, input);
+    }
+
+    #[test]
+    fn nested_braces_in_interpolation() {
+        let input = r#""val: #{{a: 1}.keys}""#;
+        let tokens = lex(input);
+        assert_eq!(tokens[0].token_type, StringLiteral);
+        assert_eq!(tokens[0].value, input);
     }
 }
