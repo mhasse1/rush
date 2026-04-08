@@ -589,9 +589,17 @@ fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_nam
     for line in content.lines() {
         let trimmed = line.trim();
 
-        // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with('#') {
+        // Comments → pass to Rush buf (parser skips them)
+        if trimmed.starts_with('#') {
+            rush_buf.push_str(line);
             rush_buf.push('\n');
+            continue;
+        }
+
+        // Blank lines → flush Rush buf (isolate parse errors per block)
+        if trimmed.is_empty() {
+            flush_rush_buf(evaluator, &rush_buf, source_name);
+            rush_buf.clear();
             continue;
         }
 
@@ -599,17 +607,8 @@ fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_nam
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
         if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source") {
             // Flush any accumulated Rush code first
-            if !rush_buf.trim().is_empty() {
-                match rush_core::parser::parse(&rush_buf) {
-                    Ok(nodes) => {
-                        if let Err(e) = evaluator.exec_toplevel(&nodes) {
-                            eprintln!("{source_name}: {e}");
-                        }
-                    }
-                    Err(e) => eprintln!("{source_name}: {e}"),
-                }
-                rush_buf.clear();
-            }
+            flush_rush_buf(evaluator, &rush_buf, source_name);
+            rush_buf.clear();
             // Handle the builtin line
             handle(evaluator, trimmed);
         } else {
@@ -619,14 +618,23 @@ fn run_script_with_builtins(evaluator: &mut Evaluator, content: &str, source_nam
     }
 
     // Flush remaining Rush code
-    if !rush_buf.trim().is_empty() {
-        match rush_core::parser::parse(&rush_buf) {
-            Ok(nodes) => {
-                if let Err(e) = evaluator.exec_toplevel(&nodes) {
-                    eprintln!("{source_name}: {e}");
-                }
+    flush_rush_buf(evaluator, &rush_buf, source_name);
+}
+
+fn flush_rush_buf(evaluator: &mut Evaluator, buf: &str, source_name: &str) {
+    let trimmed = buf.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    match rush_core::parser::parse(trimmed) {
+        Ok(nodes) => {
+            if let Err(e) = evaluator.exec_toplevel(&nodes) {
+                eprintln!("{source_name}: {e}");
             }
-            Err(e) => eprintln!("{source_name}: {e}"),
+        }
+        Err(e) => {
+            // Don't abort the whole init.rush on a single parse error
+            eprintln!("{source_name}: {e}");
         }
     }
 }
