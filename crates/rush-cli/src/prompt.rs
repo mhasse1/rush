@@ -8,12 +8,12 @@ use std::borrow::Cow;
 ///   {cursor}
 /// ```
 pub struct RushPrompt {
-    theme: &'static Theme,
+    theme: Theme,
     last_exit_code: i32,
 }
 
 impl RushPrompt {
-    pub fn new(theme: &'static Theme) -> Self {
+    pub fn new(theme: Theme) -> Self {
         Self { theme, last_exit_code: 0 }
     }
 
@@ -22,7 +22,7 @@ impl RushPrompt {
     }
 
     fn build_info_line(&self) -> String {
-        let t = self.theme;
+        let t = &self.theme;
         let mut line = String::with_capacity(256);
 
         // Exit status: ✓ or ✗ [code]

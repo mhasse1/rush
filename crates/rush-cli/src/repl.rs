@@ -29,6 +29,11 @@ pub fn run() {
     let config = RushConfig::load();
 
     // Initialize theme (dark/light detection, LS_COLORS, GREP_COLORS)
+    // Check for per-project .rushbg
+    if let Some(bg) = theme::load_rushbg() {
+        unsafe { std::env::set_var("RUSH_BG", &bg) };
+    }
+
     let detected_theme = theme::initialize();
 
     let mut output = StdOutput;
@@ -74,7 +79,6 @@ pub fn run() {
         .with_validator(Box::new(RushValidator))
         .with_ansi_colors(true);
 
-    let mut prompt = RushPrompt::new(detected_theme);
     let show_timing = config.show_timing;
     let mut last_cmd: Option<String> = None;
 
@@ -82,8 +86,12 @@ pub fn run() {
     let version = "0.1.0";
     let mode = if config.edit_mode == "emacs" { "emacs" } else { "vi" };
     let theme_name = if detected_theme.is_dark { "dark" } else { "light" };
+    let has_256 = detected_theme.bg_rgb.is_some();
+    let color_info = if has_256 { "256-color" } else { "16-color" };
     println!("{}rush v{version} — a modern-day warrior{}", detected_theme.muted, detected_theme.reset);
-    println!("{}Rust engine | {mode} mode | Tab | Ctrl+R | {theme_name}{}", detected_theme.muted, detected_theme.reset);
+    println!("{}Rust engine | {mode} mode | Tab | Ctrl+R | {theme_name} {color_info}{}", detected_theme.muted, detected_theme.reset);
+
+    let mut prompt = RushPrompt::new(detected_theme.clone());
     println!();
 
     // REPL loop

@@ -23,6 +23,8 @@ pub struct RushConfig {
     #[serde(default = "default_auto")]
     pub ai_model: String,
     #[serde(default)]
+    pub bg: String,
+    #[serde(default)]
     pub aliases: HashMap<String, String>,
 }
 
@@ -43,6 +45,7 @@ impl Default for RushConfig {
             trace_commands: false,
             ai_provider: "anthropic".into(),
             ai_model: "auto".into(),
+            bg: String::new(),
             aliases: HashMap::new(),
         }
     }
@@ -92,6 +95,7 @@ impl RushConfig {
             "trace_commands" | "tracecommands" => self.trace_commands.to_string(),
             "ai_provider" | "aiprovider" => self.ai_provider.clone(),
             "ai_model" | "aimodel" => self.ai_model.clone(),
+            "bg" => self.bg.clone(),
             _ => String::new(),
         }
     }
@@ -133,6 +137,10 @@ impl RushConfig {
             }
             "ai_model" | "aimodel" => {
                 self.ai_model = value.to_string();
+                true
+            }
+            "bg" => {
+                self.bg = value.to_string();
                 true
             }
             _ => false,

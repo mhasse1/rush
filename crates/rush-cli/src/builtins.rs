@@ -42,6 +42,11 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "path" => { handle_path(args); true }
         "help" => { handle_help(evaluator, args); true }
         "set" => { handle_set(args); true }
+        "setbg" => { handle_setbg(args); true }
+        ".." => { handle_cd(evaluator, ".."); true }
+        "..." => { handle_cd(evaluator, "../.."); true }
+        "...." => { handle_cd(evaluator, "../../.."); true }
+        "which" | "type" => { handle_which(args); true }
         _ => false,
     }
 }
@@ -567,6 +572,81 @@ fn handle_set(args: &str) {
 
     if let Err(e) = config.save() {
         eprintln!("set: failed to save config: {e}");
+    }
+}
+
+// ── setbg ───────────────────────────────────────────────────────────
+
+fn handle_setbg(args: &str) {
+    if args.is_empty() || args == "reset" {
+        // Reset to default
+        unsafe { std::env::remove_var("RUSH_BG") };
+        // Restore terminal default background
+        print!("\x1b]111\x07"); // OSC 111: reset bg
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        println!("Background reset.");
+        return;
+    }
+
+    let save = args.contains("--save");
+    let local = args.contains("--local");
+    let hex = args.split_whitespace()
+        .find(|w| w.starts_with('#') || w.chars().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or(args.split_whitespace().next().unwrap_or(""));
+
+    let hex = if hex.starts_with('#') { hex.to_string() } else { format!("#{hex}") };
+
+    match rush_core::theme::set_background(&hex, true) {
+        Some(theme) => {
+            // Re-set color env vars with new theme
+            rush_core::theme::set_native_color_env_vars(&theme);
+            println!("Background set to {hex} ({})", if theme.is_dark { "dark" } else { "light" });
+
+            if save {
+                let mut config = rush_core::config::RushConfig::load();
+                config.set("bg", &hex);
+                config.save().ok();
+            }
+            if local {
+                std::fs::write(".rushbg", &hex).ok();
+            }
+        }
+        None => eprintln!("setbg: invalid hex color '{hex}'"),
+    }
+}
+
+// ── which / type ────────────────────────────────────────────────────
+
+fn handle_which(name: &str) {
+    if name.is_empty() {
+        eprintln!("which: usage: which <command>");
+        return;
+    }
+
+    // Check builtins
+    let builtins = [
+        "cd", "export", "unset", "source", "clear", "exit", "quit", "pwd",
+        "alias", "unalias", "pushd", "popd", "dirs", "history", "path",
+        "help", "set", "setbg", "which", "type",
+    ];
+    if builtins.contains(&name) {
+        println!("{name}: shell builtin");
+        return;
+    }
+
+    // Check aliases
+    ALIASES.with(|a| {
+        if let Some(exp) = a.borrow().get(name) {
+            println!("{name}: aliased to '{exp}'");
+        }
+    });
+
+    // Check PATH
+    if let Some(path) = rush_core::process::which(name) {
+        println!("{path}");
+    } else {
+        eprintln!("{name}: not found");
     }
 }
 
