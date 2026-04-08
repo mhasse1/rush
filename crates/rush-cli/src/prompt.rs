@@ -117,33 +117,15 @@ impl Prompt for RushPrompt {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn chrono_hhmm() -> String {
-    #[cfg(unix)]
-    {
-        unsafe {
-            let t = libc::time(std::ptr::null_mut());
-            let mut tm: libc::tm = std::mem::zeroed();
-            libc::localtime_r(&t, &mut tm);
-            format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        "??:??".to_string()
-    }
+    rush_core::platform::current().local_time_hhmm()
 }
 
 fn short_hostname() -> String {
-    rush_core::llm::get_hostname()
-        .split('.')
-        .next()
-        .unwrap_or("unknown")
-        .to_string()
+    rush_core::platform::current().hostname()
 }
 
 fn is_ssh_session() -> bool {
-    std::env::var("SSH_CONNECTION").is_ok()
-        || std::env::var("SSH_TTY").is_ok()
-        || std::env::var("SSH_CLIENT").is_ok()
+    rush_core::platform::current().is_ssh()
 }
 
 fn short_cwd() -> String {

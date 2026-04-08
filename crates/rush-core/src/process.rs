@@ -1,46 +1,11 @@
 use std::process::{Command, Stdio};
 
-// ── Process Group Management ────────────────────────────────────────
-
-/// Whether a command should run in foreground (gets terminal) or background.
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[allow(dead_code)]
-pub enum JobMode {
-    Foreground,
-    Background,
-}
-
-/// Set up child process for proper shell job control.
-/// Called between fork() and exec() via pre_exec.
-#[cfg(unix)]
-unsafe fn setup_child_process(pgid: u32, foreground: bool) {
-    unsafe {
-        // Put child in its own process group (or the pipeline's group)
-        libc::setpgid(0, pgid as libc::pid_t);
-
-        if foreground {
-            // Give this process group the terminal
-            libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp());
-        }
-
-        // Reset signal dispositions to default for the child
-        // Per POSIX: foreground jobs must get SIG_DFL so they respond to signals
-        libc::signal(libc::SIGINT, libc::SIG_DFL);
-        libc::signal(libc::SIGQUIT, libc::SIG_DFL);
-        libc::signal(libc::SIGTSTP, libc::SIG_DFL);
-        libc::signal(libc::SIGTTIN, libc::SIG_DFL);
-        libc::signal(libc::SIGTTOU, libc::SIG_DFL);
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
-}
+use crate::platform;
 
 /// Reclaim terminal control after a foreground job completes.
-#[cfg(unix)]
 pub fn reclaim_terminal() {
-    unsafe {
-        let shell_pgid = libc::getpgrp();
-        libc::tcsetpgrp(libc::STDIN_FILENO, shell_pgid);
-    }
+    let p = platform::current();
+    p.reclaim_terminal();
 }
 
 /// Result of running an external command.
@@ -62,14 +27,17 @@ pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    // Set up child process group and signal dispositions
+    // Set up child process group and signal dispositions via platform
     #[cfg(unix)]
-    unsafe {
+    {
         use std::os::unix::process::CommandExt;
-        cmd.pre_exec(|| {
-            setup_child_process(0, true); // pgid=0 → own group, foreground
-            Ok(())
-        });
+        unsafe {
+            cmd.pre_exec(|| {
+                let p = platform::current();
+                p.setup_foreground_child();
+                Ok(())
+            });
+        }
     }
 
     match cmd.status() {
@@ -161,13 +129,8 @@ pub fn spawn_background(line: &str) -> Result<(u32, u32), String> {
         use std::os::unix::process::CommandExt;
         unsafe {
             cmd.pre_exec(|| {
-                libc::setpgid(0, 0);
-                libc::signal(libc::SIGINT, libc::SIG_IGN);
-                libc::signal(libc::SIGQUIT, libc::SIG_IGN);
-                libc::signal(libc::SIGTSTP, libc::SIG_DFL);
-                libc::signal(libc::SIGTTIN, libc::SIG_DFL);
-                libc::signal(libc::SIGTTOU, libc::SIG_DFL);
-                libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+                let p = platform::current();
+                p.setup_background_child();
                 Ok(())
             });
         }

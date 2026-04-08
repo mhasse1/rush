@@ -4,6 +4,7 @@
 //! process group with SIGINT/SIGQUIT set to SIG_IGN (per POSIX).
 
 use std::collections::HashMap;
+use crate::platform::{self, Sig, WaitResult};
 
 /// Job state.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,37 +60,26 @@ impl JobTable {
     /// Returns list of jobs that changed state.
     pub fn reap(&mut self) -> Vec<(usize, String, JobState)> {
         let mut changed = Vec::new();
+        let p = platform::current();
 
-        #[cfg(unix)]
-        {
-            for job in self.jobs.values_mut() {
-                if job.state != JobState::Running {
-                    continue;
-                }
+        for job in self.jobs.values_mut() {
+            if job.state != JobState::Running {
+                continue;
+            }
 
-                let mut status: libc::c_int = 0;
-                let result = unsafe {
-                    libc::waitpid(
-                        job.pid as libc::pid_t,
-                        &mut status,
-                        libc::WNOHANG | libc::WUNTRACED,
-                    )
-                };
-
-                if result == job.pid as libc::pid_t {
-                    if libc::WIFEXITED(status) {
-                        let code = libc::WEXITSTATUS(status);
+            if let Some(result) = p.try_wait_pid(job.pid) {
+                match result {
+                    WaitResult::Exited(code) => {
                         job.state = JobState::Done(code);
-                        changed.push((job.id, job.command.clone(), job.state));
-                    } else if libc::WIFSIGNALED(status) {
-                        let sig = libc::WTERMSIG(status);
+                    }
+                    WaitResult::Signaled(sig) => {
                         job.state = JobState::Done(128 + sig);
-                        changed.push((job.id, job.command.clone(), job.state));
-                    } else if libc::WIFSTOPPED(status) {
+                    }
+                    WaitResult::Stopped(_) => {
                         job.state = JobState::Stopped;
-                        changed.push((job.id, job.command.clone(), job.state));
                     }
                 }
+                changed.push((job.id, job.command.clone(), job.state));
             }
         }
 
@@ -144,46 +134,41 @@ impl JobTable {
     pub fn foreground(&mut self, job_spec: Option<&str>) -> Option<i32> {
         let id = self.resolve_job_spec(job_spec)?;
         let job = self.jobs.get_mut(&id)?;
+        let p = platform::current();
 
         eprintln!("{}", job.command);
 
-        #[cfg(unix)]
-        {
-            let pgid = job.pgid as libc::pid_t;
-
-            // Resume if stopped
-            if job.state == JobState::Stopped {
-                unsafe { libc::kill(-pgid, libc::SIGCONT); }
-                job.state = JobState::Running;
-            }
-
-            // Give terminal to job's process group
-            unsafe { libc::tcsetpgrp(libc::STDIN_FILENO, pgid); }
-
-            // Wait for it
-            let mut status: libc::c_int = 0;
-            unsafe { libc::waitpid(pgid, &mut status, libc::WUNTRACED); }
-
-            // Reclaim terminal
-            crate::process::reclaim_terminal();
-
-            if libc::WIFEXITED(status) {
-                let code = libc::WEXITSTATUS(status);
-                self.jobs.remove(&id);
-                return Some(code);
-            } else if libc::WIFSTOPPED(status) {
-                job.state = JobState::Stopped;
-                eprintln!("\n[{id}]+  Stopped                 {}", job.command);
-                return Some(148); // 128 + SIGTSTP(20) on macOS
-            } else if libc::WIFSIGNALED(status) {
-                let sig = libc::WTERMSIG(status);
-                self.jobs.remove(&id);
-                return Some(128 + sig);
-            }
+        // Resume if stopped
+        if job.state == JobState::Stopped {
+            p.kill_pg(job.pgid, Sig::Cont);
+            job.state = JobState::Running;
         }
 
-        self.jobs.remove(&id);
-        Some(0)
+        // Give terminal to job's process group
+        p.set_foreground_pgid(job.pgid);
+
+        // Wait for it
+        let result = p.wait_pid(job.pid);
+
+        // Reclaim terminal
+        p.reclaim_terminal();
+
+        match result {
+            WaitResult::Exited(code) => {
+                self.jobs.remove(&id);
+                Some(code)
+            }
+            WaitResult::Stopped(_) => {
+                let job = self.jobs.get_mut(&id).unwrap();
+                job.state = JobState::Stopped;
+                eprintln!("\n[{id}]+  Stopped                 {}", job.command);
+                Some(result.exit_code())
+            }
+            WaitResult::Signaled(sig) => {
+                self.jobs.remove(&id);
+                Some(128 + sig)
+            }
+        }
     }
 
     /// Resume a job in the background.
@@ -209,10 +194,8 @@ impl JobTable {
             return false;
         }
 
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(job.pgid as libc::pid_t), libc::SIGCONT);
-        }
+        let p = platform::current();
+        p.kill_pg(job.pgid, Sig::Cont);
 
         job.state = JobState::Running;
         job.background = true;
@@ -245,29 +228,11 @@ impl JobTable {
             None => return 127,
         };
 
-        #[cfg(unix)]
-        {
-            let pid = job.pid as libc::pid_t;
-            let mut status: libc::c_int = 0;
-            unsafe { libc::waitpid(pid, &mut status, 0); }
-
-            let code = if libc::WIFEXITED(status) {
-                libc::WEXITSTATUS(status)
-            } else if libc::WIFSIGNALED(status) {
-                128 + libc::WTERMSIG(status)
-            } else {
-                1
-            };
-
-            self.jobs.remove(&id);
-            return code;
-        }
-
-        #[cfg(not(unix))]
-        {
-            self.jobs.remove(&id);
-            0
-        }
+        let p = platform::current();
+        let result = p.wait_pid(job.pid);
+        let code = result.exit_code();
+        self.jobs.remove(&id);
+        code
     }
 
     /// Resolve a job spec (%N, %%, or None for current).
@@ -300,18 +265,12 @@ impl JobTable {
 
     /// Send SIGHUP to all jobs on shell exit (POSIX requirement).
     pub fn shutdown(&mut self) {
-        #[cfg(unix)]
-        {
-            for job in self.jobs.values() {
-                unsafe {
-                    let pgid = -(job.pgid as libc::pid_t);
-                    if job.state == JobState::Stopped {
-                        // Stopped jobs need SIGCONT to receive SIGHUP
-                        libc::kill(pgid, libc::SIGCONT);
-                    }
-                    libc::kill(pgid, libc::SIGHUP);
-                }
+        let p = platform::current();
+        for job in self.jobs.values() {
+            if job.state == JobState::Stopped {
+                p.kill_pg(job.pgid, Sig::Cont);
             }
+            p.kill_pg(job.pgid, Sig::Hup);
         }
     }
 
