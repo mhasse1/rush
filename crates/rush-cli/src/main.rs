@@ -64,6 +64,12 @@ fn main() {
         return;
     }
 
+    // rush --mcp-ssh: MCP SSH gateway mode
+    if args.get(1).is_some_and(|a| a == "--mcp-ssh") {
+        rush_core::mcp_ssh::run();
+        return;
+    }
+
     // rush -c "command": execute and exit
     if args.get(1).is_some_and(|a| a == "-c") {
         if let Some(cmd) = args.get(2) {
