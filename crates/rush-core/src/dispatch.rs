@@ -63,6 +63,13 @@ pub fn dispatch(
             unsafe { std::env::set_var(key, val) };
         }
 
+        // Step 2b: Check for ! negation
+        let (negate, segment) = if segment.starts_with("! ") {
+            (true, &segment[2..])
+        } else {
+            (false, segment)
+        };
+
         let first_word = segment.split_whitespace().next().unwrap_or("");
 
         // exit/quit
@@ -127,6 +134,13 @@ pub fn dispatch(
             if !result.stderr.is_empty() {
                 eprintln!("{}", result.stderr);
             }
+        }
+
+        // Apply ! negation
+        if negate {
+            last_exit = if last_exit == 0 { 1 } else { 0 };
+            last_failed = last_exit != 0;
+            evaluator.exit_code = last_exit;
         }
 
         // Restore inline env vars

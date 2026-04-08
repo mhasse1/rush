@@ -85,10 +85,10 @@ pub fn run_native(line: &str) -> CommandResult {
     let program = &parts[0];
     let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
-    if let Some(redirect) = &redirects {
-        run_with_redirect(program, &args, redirect)
-    } else {
+    if redirects.is_empty() {
         run_command(program, &args)
+    } else {
+        run_with_redirects(program, &args, &redirects)
     }
 }
 
@@ -236,25 +236,25 @@ enum Redirect {
 }
 
 /// Extract redirections from argument list. Supports multiple redirections.
-fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Option<Redirect>) {
-    let mut redirect = None;
+fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
+    let mut redirects = Vec::new();
     let mut clean = Vec::new();
     let mut i = 0;
 
     while i < parts.len() {
         // 2>&1
         if parts[i] == "2>&1" {
-            redirect = Some(Redirect::StderrToStdout);
+            redirects.push(Redirect::StderrToStdout);
             i += 1;
         }
         // 2>> file
         else if parts[i] == "2>>" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StderrAppend(parts[i + 1].clone()));
+            redirects.push(Redirect::StderrAppend(parts[i + 1].clone()));
             i += 2;
         }
         // 2> file
         else if parts[i] == "2>" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StderrWrite(parts[i + 1].clone()));
+            redirects.push(Redirect::StderrWrite(parts[i + 1].clone()));
             i += 2;
         }
         // 2>/dev/null or 2>file (no space)
@@ -262,34 +262,34 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Option<Redirect>) {
             let rest = &parts[i][2..];
             if rest.starts_with('>') {
                 // 2>>file
-                redirect = Some(Redirect::StderrAppend(rest[1..].to_string()));
+                redirects.push(Redirect::StderrAppend(rest[1..].to_string()));
             } else {
-                redirect = Some(Redirect::StderrWrite(rest.to_string()));
+                redirects.push(Redirect::StderrWrite(rest.to_string()));
             }
             i += 1;
         }
         // >> file
         else if parts[i] == ">>" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StdoutAppend(parts[i + 1].clone()));
+            redirects.push(Redirect::StdoutAppend(parts[i + 1].clone()));
             i += 2;
         }
         // > file
         else if parts[i] == ">" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StdoutWrite(parts[i + 1].clone()));
+            redirects.push(Redirect::StdoutWrite(parts[i + 1].clone()));
             i += 2;
         }
         // < file
         else if parts[i] == "<" && i + 1 < parts.len() {
-            redirect = Some(Redirect::StdinRead(parts[i + 1].clone()));
+            redirects.push(Redirect::StdinRead(parts[i + 1].clone()));
             i += 2;
         }
         // >file (no space)
         else if parts[i].starts_with(">>") && parts[i].len() > 2 {
-            redirect = Some(Redirect::StdoutAppend(parts[i][2..].to_string()));
+            redirects.push(Redirect::StdoutAppend(parts[i][2..].to_string()));
             i += 1;
         }
         else if parts[i].starts_with('>') && parts[i].len() > 1 {
-            redirect = Some(Redirect::StdoutWrite(parts[i][1..].to_string()));
+            redirects.push(Redirect::StdoutWrite(parts[i][1..].to_string()));
             i += 1;
         }
         else {
@@ -298,76 +298,70 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Option<Redirect>) {
         }
     }
 
-    (clean, redirect)
+    (clean, redirects)
 }
 
-/// Run a command with I/O redirection.
-fn run_with_redirect(program: &str, args: &[&str], redirect: &Redirect) -> CommandResult {
-    match redirect {
-        Redirect::StdoutWrite(path) | Redirect::StdoutAppend(path) => {
-            let file = if matches!(redirect, Redirect::StdoutAppend(_)) {
-                std::fs::OpenOptions::new().create(true).append(true).open(path)
-            } else {
-                std::fs::File::create(path)
-            };
-            match file {
-                Ok(file) => run_cmd_with_stdio(program, args, Stdio::inherit(), Stdio::from(file), Stdio::inherit()),
-                Err(e) => CommandResult {
-                    stdout: String::new(),
-                    stderr: format!("rush: {path}: {e}"),
-                    exit_code: 1,
-                },
+/// Run a command with I/O redirections (supports multiple).
+fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> CommandResult {
+    // Build stdio from redirections
+    let mut stdin_cfg = Stdio::inherit();
+    let mut stdout_cfg = Stdio::inherit();
+    let mut stderr_cfg = Stdio::inherit();
+
+    // We need to open files and convert to Stdio
+    // Process redirections left to right (POSIX order)
+    let mut stdin_file: Option<std::fs::File> = None;
+    let mut stdout_file: Option<std::fs::File> = None;
+    let mut stderr_file: Option<std::fs::File> = None;
+
+    for redirect in redirects {
+        match redirect {
+            Redirect::StdoutWrite(path) => {
+                match std::fs::File::create(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
             }
-        }
-        Redirect::StdinRead(path) => {
-            match std::fs::File::open(path) {
-                Ok(file) => run_cmd_with_stdio(program, args, Stdio::from(file), Stdio::inherit(), Stdio::inherit()),
-                Err(e) => CommandResult {
-                    stdout: String::new(),
-                    stderr: format!("rush: {path}: {e}"),
-                    exit_code: 1,
-                },
+            Redirect::StdoutAppend(path) => {
+                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
             }
-        }
-        Redirect::StderrWrite(path) | Redirect::StderrAppend(path) => {
-            let file = if matches!(redirect, Redirect::StderrAppend(_)) {
-                std::fs::OpenOptions::new().create(true).append(true).open(path)
-            } else {
-                std::fs::File::create(path)
-            };
-            match file {
-                Ok(file) => run_cmd_with_stdio(program, args, Stdio::inherit(), Stdio::inherit(), Stdio::from(file)),
-                Err(e) => CommandResult {
-                    stdout: String::new(),
-                    stderr: format!("rush: {path}: {e}"),
-                    exit_code: 1,
-                },
+            Redirect::StdinRead(path) => {
+                match std::fs::File::open(path) {
+                    Ok(f) => stdin_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
             }
-        }
-        Redirect::StderrToStdout => {
-            // 2>&1: merge stderr into stdout
-            match Command::new(program)
-                .args(args)
-                .stdin(Stdio::inherit())
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit()) // Both go to same fd
-                .status()
-            {
-                Ok(status) => CommandResult {
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    exit_code: status.code().unwrap_or(-1),
-                },
-                Err(e) => CommandResult {
-                    stdout: String::new(),
-                    stderr: format!("rush: {program}: {e}"),
-                    exit_code: 127,
-                },
+            Redirect::StderrWrite(path) => {
+                match std::fs::File::create(path) {
+                    Ok(f) => stderr_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StderrAppend(path) => {
+                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(f) => stderr_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StderrToStdout => {
+                // 2>&1 — stderr goes wherever stdout goes
+                // If stdout is a file, dup it; otherwise both inherit
+                stderr_cfg = Stdio::inherit(); // simplified — both to terminal
             }
         }
     }
+
+    if let Some(f) = stdin_file { stdin_cfg = Stdio::from(f); }
+    if let Some(f) = stdout_file { stdout_cfg = Stdio::from(f); }
+    if let Some(f) = stderr_file { stderr_cfg = Stdio::from(f); }
+
+    run_cmd_with_stdio(program, args, stdin_cfg, stdout_cfg, stderr_cfg)
 }
 
+// Keep old single-redirect function for test compatibility
 fn run_cmd_with_stdio(program: &str, args: &[&str], stdin: Stdio, stdout: Stdio, stderr: Stdio) -> CommandResult {
     match Command::new(program)
         .args(args)
@@ -804,7 +798,8 @@ mod tests {
         let parts = vec!["echo".into(), "hello".into(), ">".into(), "out.txt".into()];
         let (clean, redir) = extract_redirections(parts);
         assert_eq!(clean, vec!["echo", "hello"]);
-        assert!(matches!(redir, Some(Redirect::StdoutWrite(f)) if f == "out.txt"));
+        assert_eq!(redir.len(), 1);
+        assert!(matches!(&redir[0], Redirect::StdoutWrite(f) if f == "out.txt"));
     }
 
     #[test]
@@ -812,7 +807,7 @@ mod tests {
         let parts = vec!["cmd".into(), "2>".into(), "/dev/null".into()];
         let (clean, redir) = extract_redirections(parts);
         assert_eq!(clean, vec!["cmd"]);
-        assert!(matches!(redir, Some(Redirect::StderrWrite(f)) if f == "/dev/null"));
+        assert!(matches!(&redir[0], Redirect::StderrWrite(f) if f == "/dev/null"));
     }
 
     #[test]
@@ -820,7 +815,7 @@ mod tests {
         let parts = vec!["cmd".into(), "2>/dev/null".into()];
         let (clean, redir) = extract_redirections(parts);
         assert_eq!(clean, vec!["cmd"]);
-        assert!(matches!(redir, Some(Redirect::StderrWrite(f)) if f == "/dev/null"));
+        assert!(matches!(&redir[0], Redirect::StderrWrite(f) if f == "/dev/null"));
     }
 
     #[test]
@@ -828,7 +823,17 @@ mod tests {
         let parts = vec!["cmd".into(), "2>&1".into()];
         let (clean, redir) = extract_redirections(parts);
         assert_eq!(clean, vec!["cmd"]);
-        assert!(matches!(redir, Some(Redirect::StderrToStdout)));
+        assert!(matches!(&redir[0], Redirect::StderrToStdout));
+    }
+
+    #[test]
+    fn extract_multiple_redirects() {
+        let parts = vec!["cmd".into(), ">".into(), "out.txt".into(), "2>".into(), "err.txt".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert_eq!(redir.len(), 2);
+        assert!(matches!(&redir[0], Redirect::StdoutWrite(f) if f == "out.txt"));
+        assert!(matches!(&redir[1], Redirect::StderrWrite(f) if f == "err.txt"));
     }
 
     // ── Glob expansion ──────────────────────────────────────────────

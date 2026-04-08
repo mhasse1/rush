@@ -47,6 +47,12 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "..." => { handle_cd(evaluator, "../.."); true }
         "...." => { handle_cd(evaluator, "../../.."); true }
         "which" | "type" => { handle_which(args); true }
+        ":" | "true" => { evaluator.exit_code = 0; true }
+        "false" => { evaluator.exit_code = 1; true }
+        "command" => { handle_command(evaluator, args); true }
+        "read" => { handle_read(evaluator, args); true }
+        "exec" => { handle_exec(args); true }
+        "eval" => { handle_eval(evaluator, args); true }
         _ => false,
     }
 }
@@ -648,6 +654,113 @@ fn handle_which(name: &str) {
     } else {
         eprintln!("{name}: not found");
     }
+}
+
+// ── command — bypass functions/aliases, run external ────────────────
+
+fn handle_command(evaluator: &mut Evaluator, args: &str) {
+    if args.is_empty() {
+        eprintln!("command: usage: command [-v|-V] name [args]");
+        return;
+    }
+
+    // command -v name → like which (POSIX)
+    if args.starts_with("-v ") || args.starts_with("-V ") {
+        let name = args[3..].trim();
+        handle_which(name);
+        return;
+    }
+
+    // command name args → run as external, skip functions/aliases
+    let result = rush_core::process::run_native(args);
+    evaluator.exit_code = result.exit_code;
+    if !result.stderr.is_empty() {
+        eprintln!("{}", result.stderr);
+    }
+}
+
+// ── read — read line from stdin into variable ───────────────────────
+
+fn handle_read(evaluator: &mut Evaluator, args: &str) {
+    let mut prompt = None;
+    let mut var_name = "REPLY".to_string();
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    let mut i = 0;
+    while i < parts.len() {
+        match parts[i] {
+            "-p" if i + 1 < parts.len() => {
+                prompt = Some(parts[i + 1]);
+                i += 2;
+            }
+            name => {
+                var_name = name.to_string();
+                i += 1;
+            }
+        }
+    }
+
+    if let Some(p) = prompt {
+        use std::io::Write;
+        print!("{p} ");
+        std::io::stdout().flush().ok();
+    }
+
+    let mut line = String::new();
+    match std::io::stdin().read_line(&mut line) {
+        Ok(0) => {
+            evaluator.exit_code = 1; // EOF
+        }
+        Ok(_) => {
+            let value = line.trim_end_matches('\n').trim_end_matches('\r');
+            evaluator.env.set(&var_name, rush_core::value::Value::String(value.to_string()));
+            evaluator.exit_code = 0;
+        }
+        Err(_) => {
+            evaluator.exit_code = 1;
+        }
+    }
+}
+
+// ── exec — replace process ──────────────────────────────────────────
+
+fn handle_exec(args: &str) {
+    if args.is_empty() {
+        return; // exec with no args = apply redirections (not implemented)
+    }
+    let parts = rush_core::process::parse_command_line(args);
+    if parts.is_empty() {
+        return;
+    }
+
+    // On Unix, exec replaces the process
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut cmd = std::process::Command::new(&parts[0]);
+        for arg in &parts[1..] {
+            cmd.arg(arg);
+        }
+        let err = cmd.exec(); // does not return on success
+        eprintln!("exec: {}: {err}", parts[0]);
+        std::process::exit(127);
+    }
+
+    #[cfg(not(unix))]
+    {
+        eprintln!("exec: not supported on this platform");
+    }
+}
+
+// ── eval — concatenate and execute ──────────────────────────────────
+
+fn handle_eval(evaluator: &mut Evaluator, args: &str) {
+    if args.is_empty() {
+        evaluator.exit_code = 0;
+        return;
+    }
+    // Route through the same dispatch as any other command
+    crate::run_line(evaluator, args);
 }
 
 // ── init.rush loading ───────────────────────────────────────────────
