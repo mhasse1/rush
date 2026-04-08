@@ -579,7 +579,9 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
             println!("  ai -m gpt-4 \"question\"      Specify model");
             println!();
             println!("Providers: anthropic, openai, gemini, ollama");
-            println!("Set API keys: export ANTHROPIC_API_KEY=...");
+            println!("Set API keys:");
+            println!("  set --secret ANTHROPIC_API_KEY \"sk-...\"");
+            println!("  set --secret OPENAI_API_KEY \"sk-...\"");
         }
         _ => {
             eprintln!("help: unknown topic '{topic}'");
@@ -601,6 +603,39 @@ fn handle_set(args: &str) {
 
     // POSIX set flags
     if rush_core::flags::handle_set_flag(args) {
+        return;
+    }
+
+    // set --secret KEY "value" — save to secrets.rush
+    if args.starts_with("--secret ") {
+        let rest = args[9..].trim();
+        let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
+        if parts.len() == 2 {
+            let key = parts[0];
+            let value = parts[1].trim().trim_matches('"').trim_matches('\'');
+            let secrets_path = config_dir().join("secrets.rush");
+
+            // Set in current env
+            unsafe { std::env::set_var(key, value) };
+
+            // Append to secrets.rush
+            let line = format!("export {key}=\"{value}\"\n");
+            let mut content = std::fs::read_to_string(&secrets_path).unwrap_or_default();
+
+            // Replace if key already exists
+            if content.contains(&format!("export {key}=")) {
+                let new_content: Vec<&str> = content.lines()
+                    .map(|l| if l.starts_with(&format!("export {key}=")) { "" } else { l })
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                content = new_content.join("\n") + "\n";
+            }
+            content.push_str(&line);
+            std::fs::write(&secrets_path, &content).ok();
+            println!("  Saved {key} to secrets.rush");
+        } else {
+            eprintln!("set --secret: usage: set --secret KEY \"value\"");
+        }
         return;
     }
 
