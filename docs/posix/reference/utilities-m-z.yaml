@@ -1,0 +1,548 @@
+# POSIX Utilities M-Z — IEEE Std 1003.1-2024
+# LLM-optimized. Synopsis, options, exit status, key behaviors.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Shell & Utilities, Chapter 3"
+  default_exit: "0=success, >0=error (unless otherwise noted)"
+
+m4:
+  synopsis: "m4 [-s] [-D name[=val]]... [-U name]... [file...]"
+  purpose: "macro processor"
+  xsi: true
+
+mailx: {synopsis: "mailx [-eHiInNv] [-f file] [-u user] | mailx [-dFintv] [-b bcc] [-c cc] [-s subject] addr...", purpose: "mail utility", xsi: true}
+
+make:
+  synopsis: "make [-einpqrSs] [-f makefile]... [-j jobs] [-k] [macro=value]... [target...]"
+  purpose: "build automation"
+  key_options:
+    "-f makefile": "makefile path"
+    "-n": "dry run"
+    "-j jobs": "parallel jobs"
+    "-k": "continue on error"
+    "-s": "silent"
+    "-e": "environment overrides makefile macros"
+  xsi: true
+
+man:
+  synopsis: "man [-k keyword] [section] name..."
+  purpose: "display manual pages"
+  options: {"-k keyword": "search by keyword (apropos)"}
+  xsi: true
+
+mesg:
+  synopsis: "mesg [y|n]"
+  purpose: "control write access to terminal"
+
+mkdir:
+  synopsis: "mkdir [-p] [-m mode] dir..."
+  purpose: "create directories"
+  options:
+    "-p": "create parent directories as needed"
+    "-m mode": "set permission mode"
+
+mkfifo:
+  synopsis: "mkfifo [-m mode] file..."
+  purpose: "create FIFO special files"
+
+more:
+  synopsis: "more [-ceisu] [-n number] [-p command] [-t tagstring] [file...]"
+  purpose: "page through text"
+  xsi: true
+
+mv:
+  synopsis: "mv [-fi] source... target"
+  purpose: "move/rename files"
+  options:
+    "-f": "force (don't prompt)"
+    "-i": "interactive (prompt before overwrite)"
+  behavior:
+    - "within same filesystem: rename (atomic)"
+    - "across filesystems: copy + remove"
+    - "mv dir to existing dir: moves into it"
+
+newgrp: {synopsis: "newgrp [-] [group]", purpose: "change group ID"}
+
+ngettext: {synopsis: "ngettext [-d domain] [-e] [-E] msgid msgid_plural count", purpose: "translated plural messages"}
+
+nice:
+  synopsis: "nice [-n increment] utility [argument...]"
+  purpose: "run command with modified scheduling priority"
+  options: {"-n increment": "nice value adjustment (default: 10)"}
+
+nl:
+  synopsis: "nl [-p] [-b type] [-d delim] [-f type] [-h type] [-i incr] [-l num] [-n format] [-s sep] [-v startnum] [-w width] [file]"
+  purpose: "number lines"
+  types: {a: "all lines", t: "non-empty (default)", n: "none", "pERE": "matching pattern"}
+
+nm: {synopsis: "nm [-APguv] [-t format] [file...]", purpose: "print symbol table", xsi: true}
+
+nohup:
+  synopsis: "nohup utility [argument...]"
+  purpose: "run command immune to hangups"
+  behavior:
+    - "SIGHUP set to SIG_IGN"
+    - "stdout redirected to nohup.out if terminal"
+    - "stderr redirected to stdout if terminal"
+  exit: {126: "found but not executable", 127: "not found"}
+
+od:
+  synopsis: "od [-v] [-A address_base] [-j skip] [-N count] [-t type_string]... [file...]"
+  purpose: "octal dump"
+  options:
+    "-A base": "address base: d(decimal), o(octal), x(hex), n(none)"
+    "-j skip": "skip bytes"
+    "-N count": "dump count bytes"
+    "-t type": "output type: a(named char), c(char), d[size](signed), f[size](float), o[size](octal), u[size](unsigned), x[size](hex)"
+    "-v": "verbose (no duplicate suppression)"
+
+paste:
+  synopsis: "paste [-s] [-d list] [file...]"
+  purpose: "merge lines of files"
+  options:
+    "-d list": "delimiter characters (cycled)"
+    "-s": "serial (paste lines of each file, not across files)"
+
+patch:
+  synopsis: "patch [-blNRsu] [-c|-e|-n|-u] [-d dir] [-D define] [-i patchfile] [-o outfile] [-p num] [-r rejectfile] [file]"
+  purpose: "apply diff to files"
+  key_options:
+    "-p num": "strip num leading path components"
+    "-R": "reverse patch"
+    "-N": "skip already applied"
+    "-b": "backup original"
+    "-i patchfile": "read patch from file"
+  formats: "unified (-u), context (-c), normal, ed (-e)"
+
+pathchk:
+  synopsis: "pathchk [-pP] pathname..."
+  purpose: "check pathname validity"
+  options:
+    "-p": "check against POSIX portable rules"
+    "-P": "additionally check for empty components and leading -"
+
+pax:
+  synopsis: "pax [-cdnv] [-f archive] [-o options]... [-p string]... [-s replstr]... [pattern...]"
+  purpose: "portable archive interchange (read/write/copy)"
+  modes: "list (default), read (-r), write (-w), copy (-rw)"
+  formats: "cpio, ustar, pax"
+
+pr: {synopsis: "pr [+page] [-column] [-adFmrt] [-e[char][gap]] [-h header] [-i[char][gap]] [-l lines] [-n[char][width]] [-o margin] [-s[char]] [-w width] [file...]", purpose: "paginate for printing"}
+
+printf:
+  synopsis: "printf format [argument...]"
+  purpose: "formatted output"
+  conversions:
+    "%d/%i": "signed decimal integer"
+    "%u": "unsigned decimal"
+    "%o": "unsigned octal"
+    "%x/%X": "unsigned hex"
+    "%f/%F": "floating point"
+    "%e/%E": "scientific notation"
+    "%g/%G": "shorter of %f or %e"
+    "%s": "string"
+    "%c": "single character"
+    "%b": "string with backslash escapes (\\n, \\t, etc.; \\c stops output)"
+    "%%": "literal %"
+  escapes: "\\\\, \\a, \\b, \\f, \\n, \\r, \\t, \\v, \\0ddd (octal)"
+  format_spec: "%[flags][width][.precision]conversion"
+  flags: "- (left align), + (sign), space (space for +), # (alternate form), 0 (zero pad)"
+  behavior: "format reused cyclically if more args than conversions"
+  integer_prefix: "leading ' or \" uses character code value"
+  exit: {0: success, ">0": error}
+
+prs: {synopsis: "prs [-a] [-d dataspec] [-r[SID]] file...", purpose: "SCCS print", xsi: true}
+
+ps:
+  synopsis: "ps [-aA] [-defl] [-G grouplist] [-g grouplist] [-n namelist] [-o format]... [-p proclist] [-t termlist] [-U userlist] [-u userlist]"
+  purpose: "report process status"
+  key_options:
+    "-e/-A": "all processes"
+    "-f": "full format"
+    "-l": "long format"
+    "-o format": "custom output (pid,ppid,comm,args,stat,time,etc.)"
+    "-p proclist": "specific PIDs"
+    "-u userlist": "by effective UID"
+  default: "processes associated with controlling terminal"
+
+pwd:
+  synopsis: "pwd [-L|-P]"
+  purpose: "print working directory"
+  options:
+    "-L": "logical (with symlinks, default)"
+    "-P": "physical (resolved)"
+
+read:
+  synopsis: "read [-r] var..."
+  purpose: "read line from stdin into variables"
+  options: {"-r": "raw (don't treat backslash as escape)"}
+  behavior:
+    - "splits line by IFS into variables"
+    - "last variable gets remainder"
+    - "fewer words than vars: extra vars set to empty"
+    - "without -r: backslash-newline = continuation"
+  exit: {0: success, ">0": "EOF or error"}
+
+readlink:
+  synopsis: "readlink [-fn] file"
+  purpose: "display symlink target or canonical path"
+  options:
+    "-f": "canonicalize (resolve all symlinks, like realpath)"
+    "-n": "no trailing newline"
+
+realpath:
+  synopsis: "realpath [-eEm] file..."
+  purpose: "resolve pathname to absolute canonical form"
+
+renice:
+  synopsis: "renice -n increment [-g|-p|-u] ID..."
+  purpose: "alter process priority"
+
+rm:
+  synopsis: "rm [-fiRr] file..."
+  purpose: "remove files"
+  options:
+    "-f": "force (no prompt, no error for nonexistent)"
+    "-i": "interactive (prompt before each removal)"
+    "-r/-R": "recursive"
+  warning: "rm -rf / behavior is implementation-defined"
+
+rmdel: {synopsis: "rmdel -r SID file...", purpose: "SCCS remove delta", xsi: true}
+
+rmdir:
+  synopsis: "rmdir [-p] dir..."
+  purpose: "remove empty directories"
+  options: {"-p": "remove parent directories too if empty"}
+
+sact: {synopsis: "sact file...", purpose: "SCCS activity", xsi: true}
+sccs: {synopsis: "sccs [-r] [-d path] [-p path] command [options] [file...]", purpose: "SCCS frontend", xsi: true}
+
+sed:
+  synopsis: "sed [-En] [-e script]... [-f scriptfile]... [file...]"
+  purpose: "stream editor"
+  options:
+    "-E": "extended regex (ERE)"
+    "-n": "suppress default output"
+    "-e script": "add editing commands"
+    "-f scriptfile": "read commands from file"
+  addresses:
+    "n": "line number"
+    "$": "last line"
+    "/regex/": "pattern match"
+    "addr1,addr2": "range (inclusive)"
+    "!": "negate address"
+  commands:
+    "s/re/repl/[flags]": "substitute (flags: g=global, n=nth, i=case-insensitive, p=print, w=write)"
+    "d": "delete pattern space"
+    "D": "delete to first newline, restart"
+    "p": "print pattern space"
+    "P": "print to first newline"
+    "a\\text": "append text after current line"
+    "i\\text": "insert text before current line"
+    "c\\text": "replace line(s) with text"
+    "q": "quit"
+    "r file": "read and append file"
+    "w file": "write pattern space to file"
+    "y/src/dst/": "transliterate characters"
+    "n": "output pattern space, read next line"
+    "N": "append next line to pattern space"
+    "g": "replace pattern space with hold space"
+    "G": "append hold space to pattern space"
+    "h": "replace hold space with pattern space"
+    "H": "append pattern space to hold space"
+    "x": "exchange pattern and hold spaces"
+    "b [label]": "branch to label"
+    "t [label]": "branch if substitution made"
+    ":label": "define label"
+    "=": "print line number"
+  replacement_special:
+    "&": "matched text"
+    "\\n": "nth group (1-9)"
+  note: "in-place edit (-i) is NOT in POSIX"
+
+sh:
+  synopsis: "sh [-abCefhimnuvx] [-o option]... [+abCefhimnuvx] [+o option]... [command_file [argument...]] | sh -c [-abCefhimnuvx] [-o option]... command_string [command_name [argument...]] | sh -s [-abCefhimnuvx] [-o option]... [argument...]"
+  purpose: "POSIX shell"
+  note: "see shell-language.yaml for complete shell specification"
+
+sleep:
+  synopsis: "sleep time"
+  purpose: "suspend execution"
+  operand: "non-negative decimal integer or float (seconds)"
+
+sort:
+  synopsis: "sort [-m] [-o output] [-bdfinru] [-t char] [-k keydef]... [file...]"
+  purpose: "sort lines"
+  options:
+    "-b": "ignore leading blanks"
+    "-d": "dictionary order (alphanumeric + blank)"
+    "-f": "fold lowercase to uppercase"
+    "-i": "ignore non-printable"
+    "-k keydef": "sort key: field[.char][type][,field[.char][type]]"
+    "-m": "merge presorted files"
+    "-n": "numeric sort"
+    "-o file": "output file (can be input file)"
+    "-r": "reverse"
+    "-t char": "field separator"
+    "-u": "unique (suppress duplicates)"
+    "-c": "check sorted order"
+    "-C": "check sorted order (silent)"
+  key_types: "b d f i n r (applied per key field)"
+  exit: {0: "success or sorted (with -c)", 1: "unsorted (with -c)", ">1": error}
+  note: "locale affects collation; LC_ALL=C for byte order"
+
+split:
+  synopsis: "split [-l line_count] [-a suffix_length] [file [name]]"
+  purpose: "split file into pieces"
+  options:
+    "-l n": "lines per piece (default: 1000)"
+    "-a n": "suffix length (default: 2)"
+  default_prefix: "x (xaa, xab, xac, ...)"
+
+strings: {synopsis: "strings [-a] [-n number] [-t format] [file...]", purpose: "find printable strings in binary files"}
+strip: {synopsis: "strip file...", purpose: "remove symbols from object files", xsi: true}
+
+stty:
+  synopsis: "stty [-a|-g] | stty operand..."
+  purpose: "set/get terminal characteristics"
+  options:
+    "-a": "report all settings"
+    "-g": "report in machine-readable format"
+  note: "controls termios flags (see environment.yaml terminal section)"
+
+tabs: {synopsis: "tabs [-n|-a|-a2|-c|-c2|-f|-p|-s|-u] [+m[n]] [-T type]", purpose: "set terminal tabs"}
+
+tail:
+  synopsis: "tail [-f] [-c number|-n number] [file]"
+  purpose: "copy last part of file"
+  options:
+    "-f": "follow (output appended data)"
+    "-c number": "byte count"
+    "-n number": "line count (default: 10)"
+  prefix: "+n = from line/byte n; -n or n = last n"
+
+talk: {synopsis: "talk user[@host] [ttyname]", purpose: "two-way terminal chat", xsi: true}
+
+tee:
+  synopsis: "tee [-ai] [file...]"
+  purpose: "duplicate stdin to stdout and files"
+  options:
+    "-a": "append to files"
+    "-i": "ignore SIGINT"
+
+test:
+  synopsis: "test [expression] | [ [expression] ]"
+  purpose: "evaluate conditional expression"
+  file_tests:
+    "-b file": "block special"
+    "-c file": "character special"
+    "-d file": "directory"
+    "-e file": "exists"
+    "-f file": "regular file"
+    "-g file": "setgid set"
+    "-h/-L file": "symlink"
+    "-p file": "FIFO"
+    "-r file": "readable"
+    "-s file": "size > 0"
+    "-S file": "socket"
+    "-t fd": "fd is terminal"
+    "-u file": "setuid set"
+    "-w file": "writable"
+    "-x file": "executable"
+  file_comparison:
+    "f1 -ef f2": "same inode"
+    "f1 -nt f2": "f1 newer"
+    "f1 -ot f2": "f1 older"
+  string_tests:
+    "-n s": "length > 0"
+    "-z s": "length = 0"
+    "s1 = s2": "equal"
+    "s1 != s2": "not equal"
+    "s1 > s2": "collates after"
+    "s1 < s2": "collates before"
+  numeric_tests: "-eq -ne -gt -ge -lt -le"
+  operators: "! (NOT)"
+  note: "-a (AND) and -o (OR) removed in POSIX 2024; use shell && || instead"
+  exit: {0: true, 1: false, ">1": error}
+
+time:
+  synopsis: "time [-p] utility [argument...]"
+  purpose: "time command execution"
+  options: {"-p": "POSIX portable output format"}
+  output: "real, user, sys times to stderr"
+
+timeout:
+  synopsis: "timeout [-fps] [-k time] [-s signal] time utility [argument...]"
+  purpose: "run command with time limit"
+  options:
+    "-k time": "send SIGKILL after grace period"
+    "-s signal": "signal to send (default: SIGTERM)"
+    "-f": "send signal to foreground process group"
+
+touch:
+  synopsis: "touch [-acm] [-r ref_file] [-t time] [-d date_time] file..."
+  purpose: "change file timestamps"
+  options:
+    "-a": "access time only"
+    "-c": "don't create file if missing"
+    "-m": "modification time only"
+    "-r ref_file": "use timestamps from ref_file"
+    "-t time": "[[CC]YY]MMDDhhmm[.SS]"
+    "-d date_time": "ISO 8601 format"
+
+tput:
+  synopsis: "tput [-T type] operand..."
+  purpose: "initialize terminal or query terminfo"
+  operands: "terminfo capability names (clear, cols, lines, etc.)"
+
+tr:
+  synopsis: "tr [-c|-C] [-s] string1 string2 | tr -d [-c|-C] string1 | tr -ds [-c|-C] string1 string2"
+  purpose: "translate/delete characters"
+  options:
+    "-c": "complement values of string1"
+    "-C": "complement characters of string1"
+    "-d": "delete matching characters"
+    "-s": "squeeze repeated characters"
+  string_notation:
+    "c-c": "character range"
+    "[:class:]": "character class"
+    "[=equiv=]": "equivalence class"
+    "[x*n]": "repeat x n times (string2 only)"
+    "\\ooo": "octal escape"
+    "\\a \\b \\f \\n \\r \\t \\v": "standard escapes"
+
+true:
+  synopsis: "true"
+  purpose: "return true (exit 0)"
+  exit: {0: always}
+
+tsort:
+  synopsis: "tsort [file]"
+  purpose: "topological sort"
+  input: "pairs of strings (partial order)"
+
+tty:
+  synopsis: "tty [-s]"
+  purpose: "print terminal name"
+  options: {"-s": "silent (exit status only)"}
+  exit: {0: "is a terminal", 1: "not a terminal"}
+
+type:
+  synopsis: "type name..."
+  purpose: "describe command type"
+  output: "alias, function, builtin, file path, or not found"
+
+ulimit:
+  synopsis: "ulimit [-HSacdfmnstv] [limit]"
+  purpose: "get/set resource limits"
+  key_resources:
+    "-c": "core file size"
+    "-d": "data segment size"
+    "-f": "file size (default)"
+    "-m": "memory size"
+    "-n": "open files"
+    "-s": "stack size"
+    "-t": "CPU time"
+    "-v": "virtual memory"
+  flags: {"-H": "hard limit", "-S": "soft limit"}
+
+umask:
+  synopsis: "umask [-S] [mask]"
+  purpose: "get/set file creation mask"
+  options: {"-S": "symbolic output"}
+  format: "octal (e.g., 022) or symbolic (e.g., u=rwx,g=rx,o=rx)"
+
+unalias:
+  synopsis: "unalias alias-name... | unalias -a"
+  purpose: "remove aliases"
+  options: {"-a": "remove all"}
+
+uname:
+  synopsis: "uname [-amnrsv]"
+  purpose: "print system information"
+  options:
+    "-a": "all information"
+    "-m": "machine hardware"
+    "-n": "network hostname"
+    "-r": "OS release"
+    "-s": "OS name (default)"
+    "-v": "OS version"
+
+uncompress: {synopsis: "uncompress [-cfv] [file...]", purpose: "uncompress files", xsi: true}
+unexpand: {synopsis: "unexpand [-a] [-t tablist] [file...]", purpose: "convert spaces to tabs"}
+unget: {synopsis: "unget [-ns] [-r SID] file...", purpose: "SCCS unget", xsi: true}
+
+uniq:
+  synopsis: "uniq [-c|-d|-u] [-f fields] [-s chars] [input_file [output_file]]"
+  purpose: "report/filter repeated lines"
+  options:
+    "-c": "count occurrences"
+    "-d": "only duplicates"
+    "-u": "only unique lines"
+    "-f fields": "skip fields"
+    "-s chars": "skip characters"
+  note: "input must be sorted for global dedup; only detects adjacent duplicates"
+
+unlink:
+  synopsis: "unlink file"
+  purpose: "remove directory entry"
+  note: "simpler than rm; exactly one argument"
+
+uucp: {synopsis: "uucp [-cCdfjmr] [-n user] source... destination", purpose: "UNIX-to-UNIX copy", xsi: true}
+uudecode: {synopsis: "uudecode [-o outfile] [file]", purpose: "decode uuencoded file"}
+uuencode: {synopsis: "uuencode [-m] [file] decode_pathname", purpose: "encode binary file"}
+uustat: {synopsis: "uustat [-q|-k jobid|-r jobid]", purpose: "UUCP status", xsi: true}
+uux: {synopsis: "uux [-jnp] command-string", purpose: "remote UNIX execution", xsi: true}
+
+val: {synopsis: "val -T | val [-s] [-m mrlist] [-r SID] [-y[type]] file...", purpose: "validate SCCS file", xsi: true}
+
+vi:
+  synopsis: "vi [-rR] [-c command] [-t tagstring] [-w size] [file...]"
+  purpose: "screen-oriented text editor"
+  xsi: true
+
+wait:
+  synopsis: "wait [pid...]"
+  purpose: "wait for process completion"
+  exit: "exit status of last waited process; 127 if unknown PID"
+
+wc:
+  synopsis: "wc [-c|-m] [-lw] [file...]"
+  purpose: "word, line, character count"
+  options:
+    "-c": "byte count"
+    "-m": "character count"
+    "-l": "line count"
+    "-w": "word count"
+  default: "-clw"
+
+what: {synopsis: "what [-s] file...", purpose: "identify SCCS strings", xsi: true}
+who: {synopsis: "who [-mTu]", purpose: "show who is logged in", xsi: true}
+write: {synopsis: "write user [ttyname]", purpose: "write message to user terminal", xsi: true}
+
+xargs:
+  synopsis: "xargs [-prtx] [-E eofstr|-0] [-I replstr|-L number|-n number] [-s size] [utility [argument...]]"
+  purpose: "construct argument lists and execute"
+  options:
+    "-0": "null-delimited input (use with find -print0)"
+    "-E eofstr": "logical EOF string"
+    "-I replstr": "insert mode (one invocation per arg)"
+    "-L number": "args per invocation"
+    "-n number": "max args per invocation"
+    "-p": "prompt before execution"
+    "-r": "don't run if no input"
+    "-s size": "max command line size"
+    "-t": "trace commands to stderr"
+    "-x": "exit if size exceeded"
+  default_utility: "echo"
+  batching: "groups args up to ARG_MAX - 2048"
+  exit: {0: success, 123: "invocation returned 1-125", 124: "invocation returned 255", 125: "error", 126: "not executable", 127: "not found"}
+
+xgettext: {synopsis: "xgettext [-ajn] [-c tag] [-d domain] [-k keyword]... [-m prefix] [-M suffix] [-p dir] [-s] [file...]", purpose: "extract translatable strings"}
+
+yacc: {synopsis: "yacc [-dltv] [-b prefix] [-p prefix] grammar", purpose: "generate LALR parser", xsi: true}
+
+zcat:
+  synopsis: "zcat [file...]"
+  purpose: "uncompress to stdout"
+  note: "equivalent to uncompress -c"

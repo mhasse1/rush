@@ -1,0 +1,507 @@
+# POSIX Shell Command Language — IEEE Std 1003.1-2024
+# LLM-optimized reference. Complete normative rules.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Shell & Utilities, Chapter 2"
+  scope: "Shell syntax, semantics, and built-in utilities"
+
+# ─── Quoting ───
+
+quoting:
+  backslash:
+    rule: "preserves literal value of next character"
+    exception: "backslash-newline = line continuation (removed)"
+  single_quotes:
+    rule: "preserves literal value of ALL enclosed characters"
+    constraint: "cannot contain single quote"
+  double_quotes:
+    rule: "preserves literals except $ ` \\ which retain special meaning"
+    special_inside: "$ (expansion), ` (command sub), \\ (escape for $ ` \" \\ newline only)"
+  dollar_single_quotes:
+    syntax: "$'...'"
+    escapes:
+      "\\\\": "backslash"
+      "\\'": "single quote"
+      "\\\"": "double quote"
+      "\\n": "newline"
+      "\\t": "tab"
+      "\\r": "carriage return"
+      "\\a": "alert"
+      "\\b": "backspace"
+      "\\f": "form feed"
+      "\\v": "vertical tab"
+      "\\xHH": "hex byte"
+      "\\ddd": "octal byte (1-3 digits)"
+
+# ─── Reserved Words ───
+
+reserved_words:
+  always: ["!", "{", "}", "case", "do", "done", "elif", "else", "esac", "fi", "for", "if", "in", "then", "until", "while"]
+  context_dependent: ["[[", "]]", "function", "namespace", "select", "time"]
+  rule: "recognized only when unquoted and in command-word position"
+
+# ─── Parameters and Variables ───
+
+parameters:
+  positional:
+    "$1" through "$9": "directly accessible"
+    "${10}+": "must use braces for multi-digit"
+    set_by: "shell invocation arguments, set builtin, function calls"
+
+  special:
+    "$@": "all positional params; in quotes each becomes separate field"
+    "$*": "all positional params; in quotes joined by first char of IFS"
+    "$#": "count of positional parameters"
+    "$?": "exit status of most recent pipeline"
+    "$-": "current option flags"
+    "$$": "PID of shell (not subshell)"
+    "$!": "PID of most recent background command"
+    "$0": "shell/script name"
+
+  shell_variables:
+    ENV: "startup file for interactive shell"
+    HOME: "tilde expansion target"
+    IFS: "field splitting chars (default: space tab newline)"
+    PATH: "command search path"
+    PS1: "primary prompt (default: '$ ')"
+    PS2: "continuation prompt (default: '> ')"
+    PS4: "trace prompt (default: '+ ')"
+    PWD: "current directory"
+    LINENO: "current line number"
+    PPID: "parent PID (read-only)"
+    OPTARG: "getopts argument"
+    OPTIND: "getopts index"
+    RANDOM: "random number (0-32767)"
+    SECONDS: "elapsed seconds"
+
+# ─── Word Expansions (in order) ───
+
+expansions:
+  order:
+    - tilde_expansion
+    - parameter_expansion
+    - command_substitution
+    - arithmetic_expansion
+    - field_splitting
+    - pathname_expansion
+    - quote_removal
+
+  tilde_expansion:
+    "~": "$HOME"
+    "~user": "user's home directory"
+    "~+": "$PWD"
+    "~-": "$OLDPWD"
+    context: "only at word start or after unquoted colon in assignments"
+
+  parameter_expansion:
+    "${param}": "value of param"
+    "${param:-word}": "use word if param unset or null"
+    "${param-word}": "use word if param unset (null OK)"
+    "${param:=word}": "assign word if param unset or null"
+    "${param=word}": "assign word if param unset"
+    "${param:?word}": "error if param unset or null"
+    "${param?word}": "error if param unset"
+    "${param:+word}": "use word if param set and non-null"
+    "${param+word}": "use word if param set"
+    "${#param}": "string length"
+    "${param%pattern}": "remove shortest suffix match"
+    "${param%%pattern}": "remove longest suffix match"
+    "${param#pattern}": "remove shortest prefix match"
+    "${param##pattern}": "remove longest prefix match"
+
+  command_substitution:
+    modern: "$(command)"
+    legacy: "`command`"
+    behavior: "stdout captured, trailing newlines stripped"
+    nesting: "$(cmd1 $(cmd2)) works; backtick nesting requires escaping"
+
+  arithmetic_expansion:
+    syntax: "$((expression))"
+    type: "signed long integer"
+    operators: "C arithmetic operators (+ - * / % << >> & | ^ ~ ! && || == != < > <= >= ?: = += etc.)"
+    variables: "shell variables expanded (unset/empty = 0)"
+
+  field_splitting:
+    trigger: "unquoted results of parameter/command/arithmetic expansion"
+    empty_IFS: "no splitting occurs at all"
+    default_IFS: "space, tab, newline (all whitespace)"
+
+    ifs_character_classes:
+      IFS_whitespace: "space, tab, newline (any char in IFS that is also in this set)"
+      IFS_non_whitespace: "any IFS character that is NOT space/tab/newline"
+
+    algorithm:
+      - "1. if IFS is unset, behave as if IFS = <space><tab><newline>"
+      - "2. if IFS is set but empty string, no splitting"
+      - "3. leading/trailing IFS whitespace characters are stripped (ignored)"
+      - "4. IFS whitespace sequences collapse to a single delimiter"
+      - "5. each IFS non-whitespace character is a field delimiter by itself"
+      - "6. IFS non-whitespace adjacent to IFS whitespace: whitespace absorbed into the delimiter"
+      - "7. two adjacent IFS non-whitespace characters produce an empty field between them"
+      - "8. IFS non-whitespace at start/end of string produces an empty field at that edge"
+
+    examples:
+      - "IFS=: ; var='a::b' → 3 fields: 'a', '', 'b' (empty between adjacent :)"
+      - "IFS=: ; var=':a:' → 3 fields: '', 'a', '' (empty at start and end)"
+      - "IFS=' :'; var=' a : b ' → 2 fields: 'a', 'b' (whitespace stripped/collapsed, : absorbed)"
+      - "IFS=' '; var='  a  b  ' → 2 fields: 'a', 'b' (whitespace collapses, leading/trailing stripped)"
+      - "IFS=; var='a b' → 1 field: 'a b' (empty IFS = no splitting)"
+      - "unset IFS; var='a  b' → 2 fields: 'a', 'b' (unset = default whitespace behavior)"
+
+    critical_distinction: |
+      IFS whitespace is COLLAPSING (sequences merge, leading/trailing stripped).
+      IFS non-whitespace is DELIMITING (each occurrence marks a boundary, empty fields possible).
+      This is why IFS=: splits 'a::b' into 3 fields but IFS=' ' splits 'a  b' into 2.
+
+  pathname_expansion:
+    "*": "matches any string including empty"
+    "?": "matches any single character"
+    "[...]": "bracket expression (character class)"
+    disabled_by: "set -f (noglob)"
+    dot_files: "patterns must explicitly start with . to match dotfiles"
+    no_match: "pattern left unchanged (implementation may treat as error)"
+
+  quote_removal:
+    rule: "all unquoted \\, ', \" from quoting are removed"
+    last_step: true
+
+# ─── Redirection ───
+
+redirection:
+  input: "[n]<file (default n=0)"
+  output: "[n]>file (default n=1)"
+  output_clobber: "[n]>|file (override noclobber)"
+  append: "[n]>>file"
+  here_document: "[n]<<[-]delimiter"
+  here_doc_rules:
+    delimiter_matching:
+      - "body continues until a line consists ONLY of the delimiter (no leading/trailing chars)"
+      - "delimiter is formed by performing quote removal on the word after << (quotes affect expansion, not matching)"
+    tab_stripping:
+      - "<<-delimiter: leading TAB characters stripped from each body line AND from the delimiter line"
+      - "only tabs, never spaces; allows indented here-docs in functions/loops"
+    expansion_rules:
+      unquoted_delimiter: |
+        When delimiter word has NO quoting (e.g., <<EOF), the body is subject to:
+        parameter expansion ($var, ${var}), command substitution $(cmd),
+        arithmetic expansion $((expr)), and backslash escaping (\$, \\, \`).
+        This is the same expansion as double-quoted strings.
+      quoted_delimiter: |
+        When ANY part of delimiter word is quoted (<<'EOF', <<"EOF", <<\EOF,
+        <<E'O'F — any quoting on any character), the entire body is literal.
+        No expansions or escaping performed. Treated like single-quoted text.
+    nesting:
+      - "multiple here-docs can be specified on the same line: cmd <<A <<B"
+      - "bodies appear in order, each terminated by its own delimiter"
+      - "here-doc body is read at parse time, not execution time"
+    edge_cases:
+      - "empty delimiter ('') is valid — terminated by empty line"
+      - "body can be completely empty (delimiter on line immediately after <<)"
+      - "here-doc in pipeline: cat <<EOF | grep x"
+  fd_dup_input: "[n]<&word (duplicate input fd)"
+  fd_dup_output: "[n]>&word (duplicate output fd)"
+  fd_close: "[n]<&- or [n]>&- (close fd)"
+  read_write: "[n]<>file (open for both)"
+  ordering: "redirections processed left to right"
+  fd_default: "0 for input operations, 1 for output operations"
+
+# ─── Commands ───
+
+commands:
+  simple_command:
+    form: "[assignments] [redirections] [command [args]]"
+    processing:
+      - "1. identify assignments and redirections"
+      - "2. expand command word"
+      - "3. perform redirections"
+      - "4. expand assignments"
+    no_command: "assignments affect current environment"
+    with_command: "assignments affect command's environment only (unless special builtin)"
+
+  pipeline:
+    syntax: "[!] command1 | command2 [| command3 ...]"
+    behavior: "stdout of each piped to stdin of next"
+    exit_status: "exit status of last command"
+    negation: "! inverts exit status (0↔non-zero)"
+    subshell: "each command in pipeline MAY run in subshell (implementation-defined which ones)"
+
+  list:
+    sequential: "cmd1 ; cmd2 (run in order)"
+    background: "cmd1 & (run async)"
+    and: "cmd1 && cmd2 (cmd2 only if cmd1 succeeds)"
+    or: "cmd1 || cmd2 (cmd2 only if cmd1 fails)"
+    precedence: "&& and || are equal, left-to-right; ; and & are equal, lower than &&/||"
+
+  compound_commands:
+    if:
+      syntax: "if list; then list; [elif list; then list;]... [else list;] fi"
+    while:
+      syntax: "while list; do list; done"
+      exit: "exit status of last command in body; 0 if body never executed"
+    until:
+      syntax: "until list; do list; done"
+      exit: "exit status of last command in body; 0 if body never executed"
+    for:
+      syntax: "for name [in word...]; do list; done"
+      default: "if 'in word...' omitted, iterates over positional params"
+      exit: "exit status of last command; 0 if no items"
+    case:
+      syntax: "case word in [pattern [| pattern]...) list ;;]... esac"
+      terminators:
+        ";;": "break out of case"
+        ";&": "fall through to next pattern's commands"
+        ";;&": "continue testing remaining patterns"
+      pattern: "uses pathname expansion rules (*, ?, [...])"
+    grouping_brace: "{ list; } — runs in current shell"
+    grouping_subshell: "( list ) — runs in subshell"
+
+  function_definition:
+    syntax: "name() compound-command [redirections]"
+    behavior: "positional params set to function args; $0 unchanged"
+    return: "return [n] exits function with status n"
+    scope: "functions share variables with caller (no local scope by default)"
+
+# ─── Exit Status ───
+
+exit_status:
+  success: 0
+  general_error: ">0"
+  command_not_found: 127
+  found_not_executable: 126
+  signal_death: ">128 (typically 128+signal_number)"
+  syntax_error: "varies; non-interactive shell exits"
+
+# ─── Shell Execution Environment ───
+
+execution_environment:
+  inherited: "open files, umask, cwd, signal dispositions, env vars"
+  subshell: "copy of environment; changes do not affect parent"
+  variable_assignment_with_builtin: "persists in current shell if special builtin"
+  variable_assignment_with_regular: "affects command environment only"
+
+# ─── Pattern Matching (fnmatch-style) ───
+
+pattern_matching:
+  context: "pathname expansion, case statement"
+  "*": "any string (including empty)"
+  "?": "any single character"
+  "[...]": "character class"
+  "[!...]": "negated character class"
+  note: "character classes follow bracket expression rules from regex chapter"
+
+# ─── Special Built-In Utilities ───
+
+special_builtins:
+  list: [".", ":", "break", "continue", "eval", "exec", "exit", "export", "readonly", "return", "set", "shift", "times", "trap", "unset"]
+  special_properties:
+    - "variable assignments persist after command completes"
+    - "redirection errors cause non-interactive shell to exit"
+    - "syntax/expansion errors cause non-interactive shell to exit"
+    - "found before PATH search and before functions"
+
+  behaviors:
+    ".": "source file — execute commands from file in current environment"
+    ":": "null command — always returns 0"
+    break: "exit from for/while/until loop"
+    continue: "next iteration of loop"
+    eval: "concatenate args and execute as shell input"
+    exec:
+      with_command: "replace shell with command (no fork)"
+      without_command: "redirections affect current shell"
+    exit: "exit shell with status (default: $?)"
+    export: "mark variables for child process inheritance; -p lists"
+    readonly: "mark variables unmodifiable; -p lists"
+    return: "exit function or . script with status"
+    set:
+      options:
+        "-a": "allexport — export all assigned variables"
+        "-b": "notify — report background job completion immediately"
+        "-C": "noclobber — prevent > from overwriting existing files"
+        "-e": "errexit — exit on non-zero pipeline status"
+        "-f": "noglob — disable pathname expansion"
+        "-h": "hashall — remember command locations"
+        "-m": "monitor — enable job control"
+        "-n": "noexec — read commands but don't execute (syntax check)"
+        "-o option": "set named option"
+        "-u": "nounset — treat unset variables as error"
+        "-v": "verbose — print input lines as read"
+        "-x": "xtrace — print commands before execution"
+      "--": "unset positional params if no args follow"
+      "-- args": "set positional params to args"
+    shift: "shift positional params left by n (default 1)"
+    times: "print accumulated user and system times"
+    trap:
+      syntax: "trap [action] [signal...]"
+      actions:
+        "command": "execute on signal"
+        "''": "ignore signal"
+        "-": "reset to default"
+      signals: "signal names or numbers; 0 or EXIT = shell exit"
+    unset:
+      "-v name": "unset variable"
+      "-f name": "unset function"
+
+# ─── Regular Built-In Utilities ───
+
+regular_builtins:
+  note: "found before PATH search; may be implemented as built-in or external"
+  list: ["alias", "bg", "cd", "command", "false", "fc", "fg", "getopts", "hash", "jobs", "kill", "newgrp", "pwd", "read", "true", "type", "ulimit", "umask", "unalias", "wait"]
+
+  command_builtin:
+    synopsis: "command [-p] command_name [args...] | command [-v|-V] command_name"
+    purpose: "execute a command, suppressing shell function lookup"
+    behavior:
+      default: |
+        Searches for command_name using the normal command search order
+        BUT skips shell functions. This means: special builtins, then
+        regular builtins, then PATH search. Functions are never found.
+        Use case: calling the real 'cd' when a function named 'cd' exists.
+      "-p": "use a default PATH guaranteed to find standard utilities (the system default, not user's PATH)"
+      "-v": |
+        Write a string indicating how command_name would be interpreted.
+        Output: pathname for external commands, 'alias name=value' for aliases,
+        the name itself for builtins/functions/keywords. Exit 0 if found, >0 if not.
+      "-V": |
+        Verbose description: 'name is a shell builtin', 'name is an alias for ...',
+        'name is a function', 'name is /usr/bin/name', etc.
+    critical_properties:
+      - "variable assignments with 'command special_builtin' do NOT persist (command demotes special builtins)"
+      - "errors with 'command special_builtin' do NOT exit non-interactive shell"
+      - "command -v is the portable way to test if a command exists (preferred over 'which')"
+      - "command -p utility is the portable way to find the standard version of a utility"
+
+# ─── Error Handling ───
+
+error_handling:
+  non_interactive_shell:
+    exits_on:
+      - "syntax errors"
+      - "special builtin errors"
+      - "variable assignment errors (with special builtins)"
+      - "expansion errors (with errexit or special builtins)"
+    continues_on:
+      - "regular command failures (unless errexit)"
+      - "pipeline failures (unless errexit)"
+
+  interactive_shell:
+    exits_on: "only via exit builtin or fatal signal"
+    continues_on: "most errors; displays diagnostic"
+
+  errexit_exceptions:
+    - "condition of if/while/until"
+    - "left side of && or ||"
+    - "pipeline with ! prefix"
+    - "any command in a pipeline except the last"
+
+# ─── Token Recognition Rules ───
+
+token_recognition:
+  rule_summary:
+    - "end of input → return current token"
+    - "operator start → delimit previous token, begin operator"
+    - "backslash → escape next character"
+    - "single quote → read until closing single quote"
+    - "double quote → read until closing double quote (respecting escapes)"
+    - "$ or ` → begin expansion"
+    - "unquoted blank → delimit token"
+    - "# at word start → comment to end of line"
+    - "previous char was operator part → check if still valid operator"
+    - "newline → delimit token; return NEWLINE"
+
+  alias_substitution:
+    when: |
+      After token recognition completes, before parsing. Specifically:
+      when a token is recognized as a WORD and it is in a position where
+      a reserved word or command name could appear (i.e., command position —
+      first word of a simple command, or after a control operator like ;, |, &&, ||, &).
+    mechanism:
+      - "1. token recognized as a WORD in command position"
+      - "2. if word matches an alias name, replace with alias value"
+      - "3. re-scan the replacement text for further alias expansion"
+      - "4. loop detection: if a word being expanded matches the alias currently being expanded, stop (no infinite recursion)"
+      - "5. if alias value ends with a blank character, the NEXT word is also checked for alias expansion"
+    not_expanded:
+      - "quoted words (any quoting prevents alias recognition)"
+      - "words not in command position (arguments, assignments)"
+      - "in non-interactive shells, unless shell option enables it"
+    timing: "alias substitution is purely textual, before parsing; the parser sees the expanded text"
+
+# ─── Shell Grammar (key productions) ───
+
+grammar:
+  operators:
+    control: ["&&", "||", ";;", ";&", ";;&", ";", "&", "|", "(", ")", "\n"]
+    redirection: ["<", ">", ">>", "<<", "<<-", "<&", ">&", "<>", ">|"]
+  io_number: "digit(s) immediately before < or >"
+  word: "token that is not an operator"
+  assignment_word: "word matching NAME=VALUE pattern before command name"
+
+# ─── Job Control ───
+
+job_control:
+  overview: |
+    Job control allows users to selectively stop (suspend) and restart (resume)
+    processes. Enabled by set -m (monitor mode), which is the default for
+    interactive shells. Requires a controlling terminal.
+
+  process_groups:
+    definition: "each pipeline executes in its own process group"
+    foreground: "one process group at a time has terminal access (foreground group)"
+    background: "all other process groups in the session are background groups"
+    creation: |
+      The shell creates a new process group for each pipeline. The first
+      process in the pipeline becomes the process group leader (its PID = PGID).
+      The shell calls setpgid() to place each child into the pipeline's group.
+
+  terminal_control:
+    foreground_group: |
+      The shell calls tcsetpgrp() to grant the foreground process group
+      access to the controlling terminal. Only the foreground group can
+      read from or (if TOSTOP set) write to the terminal.
+    background_read: "SIGTTIN sent to entire process group → group stops"
+    background_write: "if TOSTOP set, SIGTTOU sent → group stops; otherwise write proceeds"
+    shell_reclaims: |
+      When foreground job completes or is suspended, shell calls tcsetpgrp()
+      to reclaim the terminal for its own process group before prompting.
+
+  signals:
+    SIGTSTP: "Ctrl+Z → sent to foreground process group → suspends job"
+    SIGCONT: "sent by fg/bg builtins to resume a stopped job"
+    SIGINT: "Ctrl+C → sent to foreground process group"
+    SIGQUIT: "Ctrl+\\ → sent to foreground process group"
+    SIGHUP: |
+      On shell exit, SIGHUP sent to all jobs (stopped jobs also get SIGCONT
+      so they wake up and receive the SIGHUP). Jobs started with nohup or
+      disown (non-POSIX) are exempt.
+    SIGTTIN: "sent to background job that tries to read from terminal"
+    SIGTTOU: "sent to background job that tries to write to terminal (if TOSTOP)"
+
+  job_lifecycle:
+    foreground: "command (no &) → shell waits; Ctrl+Z suspends → shell regains terminal"
+    background: "command & → shell doesn't wait; job runs in background process group"
+    suspend: "Ctrl+Z sends SIGTSTP → job stops; shell reports '[N]+ Stopped command'"
+    resume_fg: "fg [%jobid] → send SIGCONT, give terminal to job's group, wait"
+    resume_bg: "bg [%jobid] → send SIGCONT, job continues in background"
+
+  job_identifiers:
+    "%N": "job number N"
+    "%string": "job whose command starts with string"
+    "%?string": "job whose command contains string"
+    "%%": "current job (most recently suspended or backgrounded)"
+    "%+": "same as %%"
+    "%-": "previous job"
+
+  shell_responsibilities:
+    - "create new process group per pipeline (setpgid)"
+    - "set foreground group on terminal (tcsetpgrp) before waiting"
+    - "reclaim terminal after foreground job completes/suspends"
+    - "track job state changes via waitpid(WNOHANG | WUNTRACED | WCONTINUED)"
+    - "report completed/stopped jobs before next prompt (or immediately if set -b)"
+    - "send SIGHUP + SIGCONT to stopped jobs on shell exit"
+    - "ignore SIGTSTP, SIGTTIN, SIGTTOU in the shell itself (so shell doesn't stop)"
+
+  race_conditions: |
+    Both parent (shell) and child must call setpgid() to avoid races where
+    the child execs before the shell has set up the process group. The shell
+    must set the process group of the first child AND call tcsetpgrp() before
+    any child in the pipeline can read from the terminal.

@@ -1,0 +1,448 @@
+# POSIX Headers Reference — IEEE Std 1003.1-2024
+# LLM-optimized. Key types, constants, and function declarations per header.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Base Definitions, Chapter 14"
+  total_headers: 82
+
+# ─── Core System Types ───
+
+sys_types.h:
+  types:
+    blkcnt_t: "file block count"
+    blksize_t: "block size"
+    clock_t: "clock ticks"
+    clockid_t: "clock ID"
+    dev_t: "device ID"
+    gid_t: "group ID"
+    id_t: "general ID (pid, uid, gid)"
+    ino_t: "file serial number"
+    mode_t: "file mode bits"
+    nlink_t: "link count"
+    off_t: "file offset"
+    pid_t: "process ID"
+    size_t: "unsigned size"
+    ssize_t: "signed size (or -1)"
+    suseconds_t: "microseconds"
+    time_t: "time in seconds since epoch"
+    timer_t: "timer ID"
+    uid_t: "user ID"
+    pthread_t: "thread ID"
+    pthread_attr_t: "thread attributes"
+    pthread_mutex_t: "mutex"
+    pthread_mutexattr_t: "mutex attributes"
+    pthread_cond_t: "condition variable"
+    pthread_condattr_t: "condition attributes"
+    pthread_key_t: "thread-specific data key"
+    pthread_once_t: "one-time initialization"
+    pthread_rwlock_t: "read-write lock"
+    pthread_rwlockattr_t: "rwlock attributes"
+    pthread_barrier_t: "barrier"
+    pthread_barrierattr_t: "barrier attributes"
+    pthread_spinlock_t: "spin lock"
+
+# ─── File I/O ───
+
+fcntl.h:
+  structs:
+    flock: "l_type, l_whence, l_start, l_len, l_pid"
+    f_owner_ex: "type, pid"
+  open_flags: [O_RDONLY, O_WRONLY, O_RDWR, O_EXEC, O_SEARCH, O_APPEND, O_CREAT, O_EXCL, O_NOCTTY, O_NOFOLLOW, O_TRUNC, O_DIRECTORY, O_CLOEXEC, O_CLOFORK, O_NONBLOCK, O_DSYNC, O_RSYNC, O_SYNC, O_TTY_INIT]
+  fcntl_cmds: [F_DUPFD, F_DUPFD_CLOEXEC, F_DUPFD_CLOFORK, F_GETFD, F_SETFD, F_GETFL, F_SETFL, F_GETLK, F_SETLK, F_SETLKW, F_OFD_GETLK, F_OFD_SETLK, F_OFD_SETLKW, F_GETOWN, F_SETOWN]
+  fd_flags: [FD_CLOEXEC, FD_CLOFORK]
+  lock_types: [F_RDLCK, F_WRLCK, F_UNLCK]
+  at_flags: [AT_FDCWD, AT_EACCESS, AT_SYMLINK_NOFOLLOW, AT_SYMLINK_FOLLOW, AT_REMOVEDIR]
+  functions: [creat, fcntl, open, openat, posix_fadvise, posix_fallocate]
+
+sys_stat.h:
+  struct_stat:
+    st_dev: "device ID"
+    st_ino: "inode"
+    st_mode: "file mode"
+    st_nlink: "hard link count"
+    st_uid: "owner UID"
+    st_gid: "owner GID"
+    st_rdev: "device ID (special files)"
+    st_size: "file size bytes"
+    st_atim: "last access (timespec)"
+    st_mtim: "last modification (timespec)"
+    st_ctim: "last status change (timespec)"
+    st_blksize: "preferred I/O block size"
+    st_blocks: "allocated 512-byte blocks"
+  file_type_mask: "S_IFMT"
+  file_types: {S_IFBLK: block, S_IFCHR: char, S_IFIFO: fifo, S_IFREG: regular, S_IFDIR: directory, S_IFLNK: symlink, S_IFSOCK: socket}
+  type_macros: [S_ISBLK, S_ISCHR, S_ISDIR, S_ISFIFO, S_ISREG, S_ISLNK, S_ISSOCK]
+  permission_bits:
+    owner: {S_IRWXU: 0700, S_IRUSR: 0400, S_IWUSR: 0200, S_IXUSR: 0100}
+    group: {S_IRWXG: 070, S_IRGRP: 040, S_IWGRP: 020, S_IXGRP: 010}
+    other: {S_IRWXO: 07, S_IROTH: 04, S_IWOTH: 02, S_IXOTH: 01}
+    special: {S_ISUID: 04000, S_ISGID: 02000, S_ISVTX: 01000}
+  functions: [chmod, fchmod, fchmodat, fstat, fstatat, futimens, lstat, mkdir, mkdirat, mkfifo, mkfifoat, mknod, mknodat, stat, umask, utimensat]
+
+# ─── Standard I/O ───
+
+stdio.h:
+  types: [FILE, fpos_t]
+  constants:
+    EOF: "-1 (or negative)"
+    NULL: "null pointer"
+    BUFSIZ: ">=256"
+    FOPEN_MAX: ">=8"
+    FILENAME_MAX: "max filename length"
+    TMP_MAX: ">=25"
+    L_tmpnam: "temp name buffer size"
+    SEEK_SET: 0
+    SEEK_CUR: 1
+    SEEK_END: 2
+    _IOFBF: "fully buffered"
+    _IOLBF: "line buffered"
+    _IONBF: "unbuffered"
+  streams: [stdin, stdout, stderr]
+  key_functions:
+    file_ops: [fopen, freopen, fclose, fflush, fdopen]
+    read: [fgetc, fgets, fread, getc, getchar, getdelim, getline, ungetc]
+    write: [fputc, fputs, fwrite, putc, putchar, puts]
+    formatted: [fprintf, printf, snprintf, sprintf, fscanf, scanf, sscanf]
+    position: [fseek, ftell, fgetpos, fsetpos, rewind]
+    wide: [fgetwc, fgetws, fputwc, fputws, fwprintf, fwscanf]
+    misc: [feof, ferror, clearerr, fileno, remove, rename, tmpfile, tmpnam, fmemopen, open_memstream]
+    locking: [flockfile, ftrylockfile, funlockfile]
+
+# ─── General Utilities ───
+
+stdlib.h:
+  constants:
+    EXIT_SUCCESS: 0
+    EXIT_FAILURE: "non-zero"
+    RAND_MAX: ">=32767"
+    MB_CUR_MAX: "max bytes in multibyte char for current locale"
+  types: [div_t, ldiv_t, lldiv_t]
+  key_functions:
+    memory: [malloc, calloc, realloc, free, aligned_alloc, posix_memalign]
+    process: [exit, _Exit, abort, atexit, at_quick_exit, quick_exit, system]
+    conversion: [atoi, atol, atof, strtol, strtoul, strtod, strtoimax, strtoumax]
+    random: [rand, srand, drand48, lrand48, mrand48, srand48]
+    search_sort: [qsort, bsearch]
+    environment: [getenv, setenv, unsetenv, putenv]
+    path: [realpath, mkdtemp, mkstemp]
+    multibyte: [mblen, mbtowc, wctomb, mbstowcs, wcstombs]
+    misc: [abs, labs, llabs, div, ldiv, lldiv]
+
+# ─── String Operations ───
+
+string.h:
+  copy: [memcpy, memmove, strcpy, strncpy, strlcat, strlcpy]
+  concat: [strcat, strncat]
+  compare: [memcmp, strcmp, strncmp, strcoll, strxfrm]
+  search: [memchr, strchr, strrchr, strstr, strpbrk, strcspn, strspn, strtok, memmem]
+  other: [memset, strlen, strerror, strerror_r, strsignal, strdup, strndup]
+
+strings.h:
+  functions: [strcasecmp, strncasecmp, ffs]
+
+# ─── Process Control ───
+
+unistd.h:
+  constants:
+    file_descriptors: {STDIN_FILENO: 0, STDOUT_FILENO: 1, STDERR_FILENO: 2}
+    access: [F_OK, R_OK, W_OK, X_OK]
+    seek: [SEEK_SET, SEEK_CUR, SEEK_END, SEEK_HOLE, SEEK_DATA]
+    lockf: [F_LOCK, F_TEST, F_TLOCK, F_ULOCK]
+  key_functions:
+    process: [fork, _Fork, execl, execle, execlp, execv, execve, execvp, fexecve, _exit]
+    file: [close, read, write, pread, pwrite, lseek, dup, dup2, dup3, pipe, pipe2, fsync, fdatasync, ftruncate, truncate]
+    directory: [chdir, fchdir, getcwd, rmdir]
+    ownership: [chown, fchown, lchown, fchownat]
+    identity: [getpid, getppid, getuid, geteuid, getgid, getegid, setuid, seteuid, setgid, setegid, getgroups, getlogin, getlogin_r]
+    session: [setsid, getsid, setpgid, getpgid, getpgrp, tcgetpgrp, tcsetpgrp]
+    link: [link, linkat, unlink, unlinkat, symlink, symlinkat, readlink, readlinkat]
+    terminal: [isatty, ttyname, ttyname_r]
+    config: [sysconf, pathconf, fpathconf, confstr]
+    misc: [access, faccessat, alarm, pause, sleep, nice, sync, getentropy, gethostname, posix_close]
+
+# ─── Signals ───
+
+signal.h:
+  signals:
+    terminate: {SIGABRT: abort, SIGALRM: alarm, SIGFPE: arithmetic, SIGHUP: hangup, SIGINT: interrupt, SIGKILL: "kill (uncatchable)", SIGPIPE: broken_pipe, SIGTERM: termination, SIGUSR1: user1, SIGUSR2: user2, SIGVTALRM: virtual_timer, SIGXCPU: cpu_limit, SIGXFSZ: file_size_limit}
+    abort_with_core: {SIGBUS: bus_error, SIGILL: illegal_instruction, SIGQUIT: quit, SIGSEGV: segfault, SIGSYS: bad_syscall, SIGTRAP: trap}
+    stop: {SIGSTOP: "stop (uncatchable)", SIGTSTP: terminal_stop, SIGTTIN: background_read, SIGTTOU: background_write}
+    ignore_default: {SIGCHLD: child_status, SIGURG: urgent_socket, SIGWINCH: window_resize}
+    continue: {SIGCONT: "continue if stopped"}
+    realtime: "SIGRTMIN through SIGRTMAX (FIFO queued)"
+  actions: [SIG_DFL, SIG_IGN, SIG_ERR]
+  sa_flags: [SA_NOCLDSTOP, SA_NOCLDWAIT, SA_NODEFER, SA_ONSTACK, SA_RESETHAND, SA_RESTART, SA_SIGINFO]
+  mask_ops: [SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK]
+  functions: [sigaction, sigprocmask, sigpending, sigsuspend, sigwait, sigtimedwait, sigqueue, kill, killpg, raise, pthread_kill, pthread_sigmask, sigaddset, sigdelset, sigemptyset, sigfillset, sigismember, sigaltstack, sig2str]
+
+# ─── Sockets ───
+
+sys_socket.h:
+  address_families: [AF_INET, AF_INET6, AF_UNIX, AF_UNSPEC]
+  socket_types: [SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET]
+  socket_options: [SO_ACCEPTCONN, SO_BROADCAST, SO_DEBUG, SO_DONTROUTE, SO_ERROR, SO_KEEPALIVE, SO_LINGER, SO_OOBINLINE, SO_RCVBUF, SO_RCVLOWAT, SO_RCVTIMEO, SO_REUSEADDR, SO_SNDBUF, SO_SNDLOWAT, SO_SNDTIMEO, SO_TYPE]
+  msg_flags: [MSG_CTRUNC, MSG_DONTROUTE, MSG_EOR, MSG_OOB, MSG_NOSIGNAL, MSG_PEEK, MSG_TRUNC, MSG_WAITALL]
+  functions: [accept, bind, connect, getpeername, getsockname, getsockopt, listen, recv, recvfrom, recvmsg, send, sendmsg, sendto, setsockopt, shutdown, socket, socketpair, sockatmark]
+
+netinet_in.h:
+  types: [in_addr_t, in_port_t, struct sockaddr_in, struct sockaddr_in6, struct in_addr, struct in6_addr]
+  constants: [INADDR_ANY, INADDR_BROADCAST, INADDR_LOOPBACK, INET_ADDRSTRLEN, INET6_ADDRSTRLEN, IPPROTO_IP, IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP, IPPROTO_RAW]
+
+netdb.h:
+  structs: [addrinfo, hostent, netent, protoent, servent]
+  functions: [getaddrinfo, freeaddrinfo, gai_strerror, getnameinfo, gethostname, getprotobyname, getservbyname]
+
+arpa_inet.h:
+  functions: [htonl, htons, ntohl, ntohs, inet_addr, inet_ntop, inet_pton]
+
+# ─── Memory Mapping ───
+
+sys_mman.h:
+  protection: [PROT_READ, PROT_WRITE, PROT_EXEC, PROT_NONE]
+  map_flags: [MAP_SHARED, MAP_PRIVATE, MAP_FIXED, MAP_ANONYMOUS, MAP_FAILED]
+  sync_flags: [MS_ASYNC, MS_SYNC, MS_INVALIDATE]
+  lock_flags: [MCL_CURRENT, MCL_FUTURE]
+  functions: [mmap, munmap, mprotect, msync, mlock, mlockall, munlock, munlockall, shm_open, shm_unlink, madvise, posix_madvise]
+
+# ─── Threads ───
+
+pthread.h:
+  constants:
+    creation: [PTHREAD_CREATE_DETACHED, PTHREAD_CREATE_JOINABLE]
+    cancel: [PTHREAD_CANCEL_ENABLE, PTHREAD_CANCEL_DISABLE, PTHREAD_CANCEL_DEFERRED, PTHREAD_CANCEL_ASYNCHRONOUS, PTHREAD_CANCELED]
+    mutex: [PTHREAD_MUTEX_NORMAL, PTHREAD_MUTEX_ERRORCHECK, PTHREAD_MUTEX_RECURSIVE, PTHREAD_MUTEX_DEFAULT, PTHREAD_MUTEX_ROBUST, PTHREAD_MUTEX_STALLED]
+    scope: [PTHREAD_SCOPE_SYSTEM, PTHREAD_SCOPE_PROCESS]
+    process_shared: [PTHREAD_PROCESS_SHARED, PTHREAD_PROCESS_PRIVATE]
+    once: "PTHREAD_ONCE_INIT"
+    initializers: [PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, PTHREAD_RWLOCK_INITIALIZER]
+  key_functions:
+    lifecycle: [pthread_create, pthread_exit, pthread_join, pthread_detach, pthread_self, pthread_equal]
+    cancel: [pthread_cancel, pthread_setcancelstate, pthread_setcanceltype, pthread_testcancel, pthread_cleanup_push, pthread_cleanup_pop]
+    mutex: [pthread_mutex_init, pthread_mutex_destroy, pthread_mutex_lock, pthread_mutex_trylock, pthread_mutex_unlock, pthread_mutex_timedlock, pthread_mutex_clocklock, pthread_mutex_consistent]
+    condition: [pthread_cond_init, pthread_cond_destroy, pthread_cond_wait, pthread_cond_timedwait, pthread_cond_clockwait, pthread_cond_signal, pthread_cond_broadcast]
+    rwlock: [pthread_rwlock_init, pthread_rwlock_destroy, pthread_rwlock_rdlock, pthread_rwlock_wrlock, pthread_rwlock_tryrdlock, pthread_rwlock_trywrlock, pthread_rwlock_unlock]
+    barrier: [pthread_barrier_init, pthread_barrier_destroy, pthread_barrier_wait]
+    spinlock: [pthread_spin_init, pthread_spin_destroy, pthread_spin_lock, pthread_spin_trylock, pthread_spin_unlock]
+    tsd: [pthread_key_create, pthread_key_delete, pthread_getspecific, pthread_setspecific]
+    once: "pthread_once"
+    attributes: [pthread_attr_init, pthread_attr_destroy, pthread_attr_getdetachstate, pthread_attr_setdetachstate, pthread_attr_getstack, pthread_attr_setstack, pthread_attr_getstacksize, pthread_attr_setstacksize]
+    scheduling: [pthread_getschedparam, pthread_setschedparam, pthread_setschedprio]
+    signal: [pthread_kill, pthread_sigmask]
+    misc: [pthread_atfork, pthread_getcpuclockid]
+
+# ─── Process Spawn ───
+
+spawn.h:
+  functions: [posix_spawn, posix_spawnp]
+  file_actions: [posix_spawn_file_actions_init, posix_spawn_file_actions_destroy, posix_spawn_file_actions_addopen, posix_spawn_file_actions_addclose, posix_spawn_file_actions_adddup2, posix_spawn_file_actions_addchdir]
+  attributes: [posix_spawnattr_init, posix_spawnattr_destroy, posix_spawnattr_getflags, posix_spawnattr_setflags, posix_spawnattr_getpgroup, posix_spawnattr_setpgroup, posix_spawnattr_getsigdefault, posix_spawnattr_setsigdefault, posix_spawnattr_getsigmask, posix_spawnattr_setsigmask]
+  flags: [POSIX_SPAWN_RESETIDS, POSIX_SPAWN_SETPGROUP, POSIX_SPAWN_SETSIGDEF, POSIX_SPAWN_SETSIGMASK, POSIX_SPAWN_SETSCHEDPARAM, POSIX_SPAWN_SETSCHEDULER, POSIX_SPAWN_SETSID]
+
+# ─── Wait ───
+
+sys_wait.h:
+  macros:
+    status_test: [WIFEXITED, WIFSIGNALED, WIFSTOPPED, WIFCONTINUED]
+    status_extract: [WEXITSTATUS, WTERMSIG, WSTOPSIG, WCOREDUMP]
+  flags: [WNOHANG, WUNTRACED, WCONTINUED, WEXITED, WSTOPPED, WNOWAIT]
+  functions: [wait, waitpid, waitid]
+  id_types: [P_ALL, P_PGID, P_PID]
+
+# ─── Error Numbers ───
+
+errno.h:
+  note: "errno is thread-local; set by system calls and library functions on error"
+  values:
+    E2BIG: "argument list too long"
+    EACCES: "permission denied"
+    EADDRINUSE: "address in use"
+    EADDRNOTAVAIL: "address not available"
+    EAFNOSUPPORT: "address family not supported"
+    EAGAIN: "resource temporarily unavailable (may equal EWOULDBLOCK)"
+    EALREADY: "connection already in progress"
+    EBADF: "bad file descriptor"
+    EBADMSG: "bad message"
+    EBUSY: "device or resource busy"
+    ECANCELED: "operation canceled"
+    ECHILD: "no child processes"
+    ECONNABORTED: "connection aborted"
+    ECONNREFUSED: "connection refused"
+    ECONNRESET: "connection reset"
+    EDEADLK: "deadlock would occur"
+    EDESTADDRREQ: "destination address required"
+    EDOM: "math argument out of domain"
+    EDQUOT: "disk quota exceeded"
+    EEXIST: "file exists"
+    EFAULT: "bad address"
+    EFBIG: "file too large"
+    EHOSTUNREACH: "host unreachable"
+    EIDRM: "identifier removed"
+    EILSEQ: "invalid byte sequence"
+    EINPROGRESS: "operation in progress"
+    EINTR: "interrupted by signal"
+    EINVAL: "invalid argument"
+    EIO: "I/O error"
+    EISCONN: "socket connected"
+    EISDIR: "is a directory"
+    ELOOP: "too many symlink levels"
+    EMFILE: "too many open files (process)"
+    EMLINK: "too many links"
+    EMSGSIZE: "message too large"
+    ENAMETOOLONG: "filename too long"
+    ENETDOWN: "network down"
+    ENETRESET: "connection aborted by network"
+    ENETUNREACH: "network unreachable"
+    ENFILE: "too many open files (system)"
+    ENOBUFS: "no buffer space"
+    ENODEV: "no such device"
+    ENOENT: "no such file or directory"
+    ENOEXEC: "exec format error"
+    ENOLCK: "no locks available"
+    ENOMEM: "not enough memory"
+    ENOMSG: "no message of desired type"
+    ENOPROTOOPT: "protocol not available"
+    ENOSPC: "no space left on device"
+    ENOSYS: "function not supported"
+    ENOTCONN: "socket not connected"
+    ENOTDIR: "not a directory"
+    ENOTEMPTY: "directory not empty"
+    ENOTRECOVERABLE: "state not recoverable"
+    ENOTSOCK: "not a socket"
+    ENOTSUP: "not supported"
+    ENOTTY: "inappropriate I/O control"
+    ENXIO: "no such device or address"
+    EOPNOTSUPP: "operation not supported on socket"
+    EOVERFLOW: "value too large"
+    EOWNERDEAD: "previous owner died"
+    EPERM: "operation not permitted"
+    EPIPE: "broken pipe"
+    EPROTO: "protocol error"
+    EPROTONOSUPPORT: "protocol not supported"
+    EPROTOTYPE: "wrong protocol type"
+    ERANGE: "result too large/small"
+    EROFS: "read-only filesystem"
+    ESPIPE: "invalid seek"
+    ESRCH: "no such process"
+    ESTALE: "stale handle"
+    ETIMEDOUT: "connection timed out"
+    ETXTBSY: "text file busy"
+    EWOULDBLOCK: "would block (may equal EAGAIN)"
+    EXDEV: "cross-device link"
+
+# ─── Limits ───
+
+limits.h:
+  posix_minimums:
+    _POSIX_ARG_MAX: 4096
+    _POSIX_CHILD_MAX: 25
+    _POSIX_LINK_MAX: 8
+    _POSIX_MAX_CANON: 255
+    _POSIX_MAX_INPUT: 255
+    _POSIX_NAME_MAX: 14
+    _POSIX_NGROUPS_MAX: 8
+    _POSIX_OPEN_MAX: 20
+    _POSIX_PATH_MAX: 256
+    _POSIX_PIPE_BUF: 512
+    _POSIX_SSIZE_MAX: 32767
+    _POSIX_SYMLINK_MAX: 255
+    _POSIX_SYMLOOP_MAX: 8
+    _XOPEN_NAME_MAX: 255
+    _XOPEN_PATH_MAX: 1024
+    _POSIX2_LINE_MAX: 2048
+    _POSIX_RE_DUP_MAX: 255
+    _POSIX_THREAD_KEYS_MAX: 128
+    _POSIX_THREAD_THREADS_MAX: 64
+    _POSIX_SEM_VALUE_MAX: 32767
+  numeric:
+    CHAR_BIT: 8
+    SCHAR_MIN: -128
+    SCHAR_MAX: 127
+    UCHAR_MAX: 255
+    INT_MIN: "<= -2147483648"
+    INT_MAX: ">= 2147483647"
+    UINT_MAX: ">= 4294967295"
+    LONG_MIN: "<= -2147483648"
+    LONG_MAX: ">= 2147483647"
+    LLONG_MIN: "<= -9223372036854775808"
+    LLONG_MAX: ">= 9223372036854775807"
+    LONG_BIT: ">= 32"
+    WORD_BIT: ">= 32"
+
+# ─── Time ───
+
+time.h:
+  types: [clock_t, time_t, timer_t, clockid_t, struct timespec, struct tm, struct itimerspec]
+  clocks: [CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID]
+  functions: [clock_gettime, clock_settime, clock_getres, clock_nanosleep, nanosleep, time, gmtime, gmtime_r, localtime, localtime_r, mktime, strftime, strptime, difftime, timer_create, timer_delete, timer_settime, timer_gettime, timer_getoverrun]
+  epoch: "1970-01-01 00:00:00 UTC"
+  rule: "every day = exactly 86400 seconds"
+
+# ─── Other Important Headers ───
+
+dirent.h:
+  types: [DIR, struct dirent]
+  dirent_fields: [d_ino, d_name]
+  functions: [opendir, fdopendir, readdir, readdir_r, rewinddir, closedir, seekdir, telldir, dirfd]
+
+glob.h:
+  flags: [GLOB_APPEND, GLOB_DOOFFS, GLOB_ERR, GLOB_MARK, GLOB_NOCHECK, GLOB_NOESCAPE, GLOB_NOSORT]
+  errors: [GLOB_ABORTED, GLOB_NOMATCH, GLOB_NOSPACE]
+  functions: [glob, globfree]
+
+regex.h:
+  flags_compile: [REG_EXTENDED, REG_ICASE, REG_NOSUB, REG_NEWLINE, REG_MINIMAL]
+  flags_exec: [REG_NOTBOL, REG_NOTEOL]
+  errors: [REG_NOMATCH, REG_BADPAT, REG_ECOLLATE, REG_ECTYPE, REG_EESCAPE, REG_ESUBREG, REG_EBRACK, REG_EPAREN, REG_EBRACE, REG_BADBR, REG_ERANGE, REG_ESPACE, REG_BADRPT]
+  functions: [regcomp, regexec, regfree, regerror]
+
+poll.h:
+  events: [POLLIN, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDNORM, POLLRDBAND, POLLWRNORM, POLLWRBAND, POLLPRI]
+  functions: [poll]
+
+sys_select.h:
+  macros: [FD_CLR, FD_ISSET, FD_SET, FD_ZERO, FD_SETSIZE]
+  functions: [select, pselect]
+
+sys_resource.h:
+  resources: [RLIMIT_CORE, RLIMIT_CPU, RLIMIT_DATA, RLIMIT_FSIZE, RLIMIT_NOFILE, RLIMIT_STACK, RLIMIT_AS]
+  functions: [getrlimit, setrlimit, getrusage, getpriority, setpriority]
+
+sys_ipc.h:
+  constants: [IPC_CREAT, IPC_EXCL, IPC_NOWAIT, IPC_PRIVATE, IPC_RMID, IPC_SET, IPC_STAT]
+
+sys_shm.h:
+  constants: [SHM_RDONLY, SHM_RND, SHMLBA]
+  functions: [shmat, shmctl, shmdt, shmget]
+
+sys_msg.h:
+  functions: [msgctl, msgget, msgrcv, msgsnd]
+
+sys_sem.h:
+  functions: [semctl, semget, semop]
+
+semaphore.h:
+  constants: [SEM_FAILED]
+  functions: [sem_open, sem_close, sem_unlink, sem_init, sem_destroy, sem_wait, sem_trywait, sem_timedwait, sem_clockwait, sem_post, sem_getvalue]
+
+syslog.h:
+  priorities: [LOG_EMERG, LOG_ALERT, LOG_CRIT, LOG_ERR, LOG_WARNING, LOG_NOTICE, LOG_INFO, LOG_DEBUG]
+  facilities: [LOG_AUTH, LOG_CRON, LOG_DAEMON, LOG_KERN, LOG_LOCAL0..LOG_LOCAL7, LOG_LPR, LOG_MAIL, LOG_NEWS, LOG_SYSLOG, LOG_USER, LOG_UUCP]
+  options: [LOG_CONS, LOG_NDELAY, LOG_NOWAIT, LOG_ODELAY, LOG_PERROR, LOG_PID]
+  functions: [openlog, syslog, closelog, setlogmask]
+
+termios.h:
+  note: "see environment.yaml terminal section for full details"
+  functions: [tcgetattr, tcsetattr, cfgetispeed, cfgetospeed, cfsetispeed, cfsetospeed, tcdrain, tcflow, tcflush, tcsendbreak, tcgetpgrp, tcsetpgrp, tcgetsid, tcgetwinsize, tcsetwinsize]
+
+iconv.h:
+  type: "iconv_t"
+  functions: [iconv_open, iconv, iconv_close]
+
+dlfcn.h:
+  constants: [RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL]
+  functions: [dlopen, dlclose, dlsym, dlerror, dladdr]
+
+wordexp.h:
+  flags: [WRDE_APPEND, WRDE_DOOFFS, WRDE_NOCMD, WRDE_REUSE, WRDE_SHOWERR, WRDE_UNDEF]
+  errors: [WRDE_BADCHAR, WRDE_BADVAL, WRDE_CMDSUB, WRDE_NOSPACE, WRDE_SYNTAX]
+  functions: [wordexp, wordfree]

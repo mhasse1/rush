@@ -1,0 +1,520 @@
+# POSIX Utilities A-L — IEEE Std 1003.1-2024
+# LLM-optimized. Synopsis, options, exit status, key behaviors.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Shell & Utilities, Chapter 3"
+  default_exit: "0=success, >0=error (unless otherwise noted)"
+  default_stderr: "diagnostic messages on error only"
+
+# ─── Complete Utility List (A-L) ───
+# Utilities marked [OB] are obsolescent, [XSI] require XSI conformance
+
+admin: {synopsis: "admin -i[name] -r[rev] ... s.file", purpose: "SCCS admin", xsi: true}
+
+alias:
+  synopsis: "alias [name[=value]...]"
+  purpose: "define or display shell aliases"
+  behavior:
+    - "no args: print all aliases as alias name=value"
+    - "name only: print that alias"
+    - "name=value: define alias"
+  exit: {0: success, ">0": "name not found or error"}
+  note: "session-only unless shell provides persistence"
+
+ar:
+  synopsis: "ar -d[-v] archive file... | ar -m[-abiv]... | ar -p[-sv]... | ar -q[-cv]... | ar -r[-abciuv]... | ar -t[-sv]... | ar -x[-Csv]..."
+  purpose: "create/modify library archives"
+  xsi: true
+
+asa: {synopsis: "asa [file...]", purpose: "interpret carriage control characters", xsi: true}
+
+at:
+  synopsis: "at [-m] [-f file] [-q queuename] timespec | at -r at_job_id... | at -l [-q queuename] | at -b"
+  purpose: "schedule commands for later execution"
+  xsi: true
+
+awk:
+  synopsis: "awk [-F sep] [-v var=val]... 'program' [file...] | awk [-F sep] -f progfile [-f ...]... [-v ...]... [file...]"
+  purpose: "pattern scanning and processing language"
+  options:
+    "-F sep": "field separator (default: whitespace)"
+    "-f progfile": "read program from file"
+    "-v var=val": "set variable before execution"
+  builtin_vars: {NR: "record number", NF: "field count", FNR: "file record number", FS: "field separator", RS: "record separator (default: newline)", OFS: "output field separator", ORS: "output record separator", FILENAME: "current file", ENVIRON: "environment array", RSTART: "match start", RLENGTH: "match length", SUBSEP: "array subscript separator (\\034)"}
+  string_functions: [gsub, sub, index, length, match, split, sprintf, substr, tolower, toupper]
+  math_functions: [atan2, cos, sin, exp, log, sqrt, int, rand, srand]
+  io: ["print [>file|>>file|pipe]", "printf fmt [>file|>>file|pipe]", "getline [var] [<file|pipe]", "close()", "system()"]
+  patterns: [BEGIN, END, "expression", "/regex/", "range,range"]
+  control: [if, else, while, do-while, for, for-in, break, continue, next, nextfile, exit, delete]
+  functions: "function name(params) { body; return [expr] }"
+  arrays: "associative; multi-dim via SUBSEP; (idx) in arr; delete"
+  exit: {0: success, 2: "syntax error", ">0": error}
+
+basename:
+  synopsis: "basename string [suffix]"
+  purpose: "return filename portion of pathname"
+  behavior: "strip directory prefix; if suffix matches, strip it too"
+
+batch: {synopsis: "batch", purpose: "schedule job for low-load execution", note: "like at but system chooses time"}
+
+bc:
+  synopsis: "bc [-l] [file...]"
+  purpose: "arbitrary precision calculator"
+  options: {"-l": "load math library (s, c, a, l, e, j functions); scale=20"}
+
+bg:
+  synopsis: "bg [job_id...]"
+  purpose: "resume stopped job in background"
+  exit: {0: success, ">0": "job not found or job control disabled"}
+
+c17: {synopsis: "c17 [options] file...", purpose: "C language compiler", xsi: true}
+
+cal: {synopsis: "cal [[month] year]", purpose: "print calendar"}
+
+cat:
+  synopsis: "cat [-u] [file...]"
+  purpose: "concatenate and print files"
+  options: {"-u": "unbuffered output"}
+  stdin: "read if no file or file is -"
+  exit: {0: success, ">0": error}
+
+cd:
+  synopsis: "cd [-L|-P] [directory]"
+  purpose: "change working directory"
+  options:
+    "-L": "logical (follow symlinks, default)"
+    "-P": "physical (resolve symlinks)"
+  behavior:
+    - "no arg: cd $HOME"
+    - "- : cd $OLDPWD and print"
+    - "CDPATH searched if directory doesn't start with /"
+  exit: {0: success, ">0": "directory not found"}
+
+cflow: {synopsis: "cflow [-r] [-d num] [-D name[=def]]... [-i incl] [-I dir]... [-U dir]... file...", purpose: "C flow graph", xsi: true}
+
+chgrp:
+  synopsis: "chgrp [-h] [-R [-H|-L|-P]] group file..."
+  purpose: "change file group"
+  options:
+    "-h": "act on symlink itself"
+    "-R": "recursive"
+    "-H": "follow symlink args (with -R)"
+    "-L": "follow all symlinks (with -R)"
+    "-P": "don't follow symlinks (with -R, default)"
+
+chmod:
+  synopsis: "chmod [-R] mode file..."
+  purpose: "change file permissions"
+  mode_symbolic: "who]op[perm — who: u/g/o/a, op: +/-/=, perm: r/w/x/X/s/t"
+  mode_octal: "0-7777 (4=r, 2=w, 1=x; leading digits: 4=suid, 2=sgid, 1=sticky)"
+  options: {"-R": recursive}
+
+chown:
+  synopsis: "chown [-h] [-R [-H|-L|-P]] owner[:group] file..."
+  purpose: "change file owner/group"
+  options: "(same -h -R -H -L -P as chgrp)"
+
+cksum:
+  synopsis: "cksum [-a algorithm] [file...]"
+  purpose: "checksum and byte count"
+  output: "checksum octets filename"
+
+cmp:
+  synopsis: "cmp [-l|-s] file1 file2 [skip1 [skip2]]"
+  purpose: "compare two files byte by byte"
+  options:
+    "-l": "print byte number and differing bytes for each difference"
+    "-s": "silent; exit status only"
+  exit: {0: identical, 1: different, ">1": error}
+
+comm:
+  synopsis: "comm [-123] file1 file2"
+  purpose: "compare sorted files line by line"
+  options:
+    "-1": "suppress column 1 (lines only in file1)"
+    "-2": "suppress column 2 (lines only in file2)"
+    "-3": "suppress column 3 (lines in both)"
+  input: "must be sorted"
+
+command:
+  synopsis: "command [-p] command_name [args...] | command [-v|-V] command_name"
+  purpose: "execute command bypassing shell functions"
+  options:
+    "-p": "use default PATH to find command"
+    "-v": "print command pathname or alias definition"
+    "-V": "verbose description of command type"
+
+compress: {synopsis: "compress [-fv] [-b bits] [file...]", purpose: "compress files (LZW)", xsi: true}
+
+cp:
+  synopsis: "cp [-afipRHLP] source... target"
+  purpose: "copy files"
+  options:
+    "-a": "archive (preserve all: -RpP)"
+    "-f": "force (remove existing if needed)"
+    "-i": "interactive (prompt before overwrite)"
+    "-p": "preserve timestamps, permissions, ownership"
+    "-R": "recursive (copy directories)"
+    "-H": "follow symlink args (with -R)"
+    "-L": "follow all symlinks (with -R)"
+    "-P": "don't follow symlinks (with -R)"
+  behavior: "cp to directory: copies into it; cp to file: overwrites"
+
+crontab:
+  synopsis: "crontab [file] | crontab [-l|-r|-e] [-u user]"
+  purpose: "schedule periodic commands"
+  format: "min hour dom month dow command"
+  fields: "min(0-59) hour(0-23) dom(1-31) month(1-12) dow(0-6,0=Sun)"
+  special: "* = any, n-m = range, n,m = list, */n = step"
+
+csplit:
+  synopsis: "csplit [-ks] [-f prefix] [-n number] file arg..."
+  purpose: "split file by context"
+
+ctags: {synopsis: "ctags [-aBdFtuvwx] [-f tagsfile] file...", purpose: "create tags file", xsi: true}
+
+cut:
+  synopsis: "cut -b list [-n] [file...] | cut -c list [file...] | cut -f list [-d delim] [-s] [file...]"
+  purpose: "cut out fields or columns"
+  options:
+    "-b list": "byte positions"
+    "-c list": "character positions"
+    "-f list": "field numbers (tab-delimited default)"
+    "-d delim": "field delimiter (with -f)"
+    "-s": "suppress lines without delimiter (with -f)"
+  list_format: "N, N-M, N-, -M (1-based, comma-separated)"
+
+cxref: {synopsis: "cxref [-cs] [-o file] [-w num] [-D name[=def]]... file...", purpose: "C cross-reference", xsi: true}
+
+date:
+  synopsis: "date [-u] [+format] | date [-u] mmddhhmm[[cc]yy]"
+  purpose: "display or set date/time"
+  options: {"-u": "UTC"}
+  format: "strftime-style: %Y year, %m month, %d day, %H hour, %M min, %S sec, %a weekday, %b month, %Z timezone, etc."
+
+dd:
+  synopsis: "dd [operand...]"
+  purpose: "convert and copy file"
+  operands:
+    "if=file": "input file"
+    "of=file": "output file"
+    "bs=n": "block size (read+write)"
+    "ibs=n": "input block size"
+    "obs=n": "output block size"
+    "count=n": "copy n input blocks"
+    "skip=n": "skip n input blocks"
+    "seek=n": "skip n output blocks"
+    "conv=ascii": "EBCDIC to ASCII"
+    "conv=ebcdic": "ASCII to EBCDIC"
+    "conv=lcase": "to lowercase"
+    "conv=ucase": "to uppercase"
+    "conv=notrunc": "don't truncate output"
+    "conv=sync": "pad input blocks"
+    "conv=swab": "swap bytes"
+  signal: "SIGUSR1 → print transfer statistics"
+
+delta: {synopsis: "delta [-nps] [-g list] [-m mrlist] [-r SID] [-y[comment]] file...", purpose: "SCCS delta", xsi: true}
+
+df:
+  synopsis: "df [-k] [-P] [-t] [file...]"
+  purpose: "report filesystem disk space"
+  options:
+    "-k": "1024-byte blocks"
+    "-P": "POSIX portable output format"
+
+diff:
+  synopsis: "diff [-c|-e|-f|-u|-C n|-U n] [-br] file1 file2"
+  purpose: "compare files line by line"
+  options:
+    "-c": "context format (3 lines default)"
+    "-C n": "context format with n lines"
+    "-u": "unified format (3 lines default)"
+    "-U n": "unified format with n lines"
+    "-e": "ed script format"
+    "-f": "reverse ed script"
+    "-b": "ignore trailing blanks, compress internal blanks"
+    "-r": "recursive directory comparison"
+  exit: {0: identical, 1: different, ">1": error}
+
+dirname:
+  synopsis: "dirname string"
+  purpose: "return directory portion of pathname"
+
+du:
+  synopsis: "du [-a|-s] [-kx] [-H|-L] [file...]"
+  purpose: "disk usage summary"
+  options:
+    "-a": "all files, not just directories"
+    "-s": "summary only (total per argument)"
+    "-k": "1024-byte blocks"
+    "-x": "don't cross filesystems"
+    "-H": "follow symlink args"
+    "-L": "follow all symlinks"
+
+echo:
+  synopsis: "echo [string...]"
+  purpose: "write arguments to stdout"
+  behavior: "writes args separated by spaces, followed by newline"
+  warning: "escape sequence behavior (\\n, \\t, etc.) is implementation-defined; use printf for portable formatting"
+  exit: {0: success}
+
+ed:
+  synopsis: "ed [-p string] [-s] [file]"
+  purpose: "line-oriented text editor"
+  note: "foundation for sed syntax"
+
+env:
+  synopsis: "env [-i] [name=value]... [utility [argument...]]"
+  purpose: "set environment and execute command"
+  options: {"-i": "start with empty environment"}
+  behavior: "no utility: print current environment"
+
+ex: {synopsis: "ex [-rRsv] [-c command] [-t tagstring] [-w size] [file]", purpose: "vi line mode", xsi: true}
+
+expand:
+  synopsis: "expand [-t tablist] [file...]"
+  purpose: "convert tabs to spaces"
+  options: {"-t tablist": "tab stop positions (comma-separated or single number)"}
+
+expr:
+  synopsis: "expr operand..."
+  purpose: "evaluate expression"
+  operators_by_precedence:
+    - "| (OR: first non-null non-zero)"
+    - "& (AND: first if both non-null non-zero, else 0)"
+    - "= > >= < <= != (comparison)"
+    - "+ - (addition/subtraction)"
+    - "* / % (multiply/divide/modulo)"
+    - ": (regex match: expr : regex → matched chars or \\( \\) group)"
+  exit: {0: "non-null non-zero", 1: "null or zero", 2: "invalid", ">2": error}
+
+false:
+  synopsis: "false"
+  purpose: "return false (exit 1)"
+  exit: {1: always}
+
+fc:
+  synopsis: "fc [-r] [-e editor] [first [last]] | fc -l [-nr] [first [last]] | fc -s [old=new] [first]"
+  purpose: "process command history"
+  options:
+    "-l": "list commands"
+    "-r": "reverse order"
+    "-n": "no line numbers (with -l)"
+    "-s": "re-execute with substitution"
+    "-e editor": "editor to use (default: FCEDIT or EDITOR or ed)"
+
+fg:
+  synopsis: "fg [job_id]"
+  purpose: "bring job to foreground"
+
+file:
+  synopsis: "file [-dhi] [-M file] [-m file] file..."
+  purpose: "determine file type"
+
+find:
+  synopsis: "find [-H|-L] path... [expression]"
+  purpose: "find files matching criteria"
+  options:
+    "-H": "follow symlinks on command line only"
+    "-L": "follow all symlinks"
+  primaries:
+    "-name pattern": "basename matches (fnmatch)"
+    "-iname pattern": "case-insensitive name"
+    "-path pattern": "full path matches"
+    "-type c": "b=block, c=char, d=dir, f=file, l=link, p=pipe, s=socket"
+    "-perm [-]mode": "exact match; - prefix = all bits set"
+    "-user name": "owned by user"
+    "-group name": "owned by group"
+    "-size n[c]": "size in 512-byte blocks; c=bytes"
+    "-newer file": "modified more recently than file"
+    "-mtime n": "modified n days ago (n*86400 seconds)"
+    "-atime n": "accessed n days ago"
+    "-ctime n": "status changed n days ago"
+    "-links n": "has n hard links"
+    "-nouser": "no matching user"
+    "-nogroup": "no matching group"
+    "-print": "print pathname"
+    "-print0": "print with null terminator"
+    "-exec cmd {} ;": "run cmd per file"
+    "-exec cmd {} +": "batch files into cmd"
+    "-ok cmd {} ;": "like -exec but prompt"
+    "-prune": "don't descend into directory"
+    "-depth": "process directory contents before directory"
+    "-mount/-xdev": "don't cross filesystems"
+  operators:
+    "( )": "grouping"
+    "!": "NOT"
+    "-a": "AND (implicit between primaries)"
+    "-o": "OR"
+  default_action: "-print if no -exec/-ok/-print in expression"
+  time_prefix: "+n = more than, -n = less than, n = exactly"
+  exit: {0: "all ok", ">0": error}
+
+fold:
+  synopsis: "fold [-bs] [-w width] [file...]"
+  purpose: "fold long lines"
+  options:
+    "-b": "count bytes not columns"
+    "-s": "break at last blank before width"
+    "-w width": "line width (default: 80)"
+
+fuser: {synopsis: "fuser [-fumMkc] [-signal] file...", purpose: "list PIDs using files", xsi: true}
+
+gencat: {synopsis: "gencat catfile msgfile...", purpose: "generate message catalog"}
+
+get: {synopsis: "get [-begkmnpst] [-c cutoff] [-i list] [-r SID] [-w string] [-x list] [-l[p]] file...", purpose: "SCCS get", xsi: true}
+
+getconf:
+  synopsis: "getconf [-v specification] system_var | getconf [-v specification] path_var pathname"
+  purpose: "get configuration values"
+  note: "queries sysconf(), pathconf() values by name"
+
+getopts:
+  synopsis: "getopts optstring name [arg...]"
+  purpose: "parse positional parameters"
+  behavior:
+    - "optstring: option chars; : after char = requires argument"
+    - "sets name to option char; OPTARG to argument"
+    - "OPTIND advanced; ? for unknown options"
+    - "leading : in optstring = silent error mode"
+  exit: {0: "option found", ">0": "end of options or error"}
+
+gettext:
+  synopsis: "gettext [-d textdomain] [-e] [-n] msgid | gettext -s [-d textdomain] [-e] [-n] msgid..."
+  purpose: "retrieve translated message"
+
+grep:
+  synopsis: "grep [-E|-F] [-c|-l|-q] [-insvx] [-e pattern]... [-f file]... [file...]"
+  purpose: "search files for pattern matches"
+  options:
+    "-E": "extended regex (ERE)"
+    "-F": "fixed strings"
+    "-c": "count matching lines"
+    "-i": "case insensitive"
+    "-l": "list filenames only"
+    "-n": "prefix line numbers"
+    "-q": "quiet (exit status only)"
+    "-s": "suppress file error messages"
+    "-v": "invert match"
+    "-x": "match whole line only"
+    "-e pattern": "specify pattern (multiple allowed)"
+    "-f file": "patterns from file"
+  exit: {0: "match found", 1: "no match", ">1": error}
+
+hash:
+  synopsis: "hash [-r] [utility...]"
+  purpose: "remember command locations"
+  options: {"-r": "forget all"}
+
+head:
+  synopsis: "head [-n number] [file...]"
+  purpose: "copy first part of files"
+  options: {"-n number": "number of lines (default: 10)"}
+
+iconv:
+  synopsis: "iconv [-cs] -f fromcode -t tocode [file...]"
+  purpose: "convert character encoding"
+  options:
+    "-c": "omit invalid characters"
+    "-s": "suppress warnings"
+    "-f fromcode": "source encoding"
+    "-t tocode": "target encoding"
+
+id:
+  synopsis: "id [-G|-g|-u] [-nr] [user]"
+  purpose: "print user/group IDs"
+  options:
+    "-G": "all group IDs"
+    "-g": "effective group ID"
+    "-u": "effective user ID"
+    "-n": "names instead of numbers"
+    "-r": "real IDs instead of effective"
+
+ipcrm: {synopsis: "ipcrm [-q msgid|-Q msgkey] [-s semid|-S semkey] [-m shmid|-M shmkey]", purpose: "remove IPC resources", xsi: true}
+ipcs: {synopsis: "ipcs [-qms] [-a|-bcopt]", purpose: "report IPC status", xsi: true}
+
+jobs:
+  synopsis: "jobs [-l|-p] [job_id...]"
+  purpose: "display status of jobs"
+  options:
+    "-l": "include process IDs"
+    "-p": "process IDs only"
+
+join:
+  synopsis: "join [-a file_number|-v file_number] [-e string] [-o list] [-t char] [-1 field] [-2 field] file1 file2"
+  purpose: "relational join of sorted files"
+  options:
+    "-a n": "also print unpairable lines from file n"
+    "-v n": "only print unpairable lines from file n"
+    "-e string": "replace empty fields"
+    "-o list": "output field list (file.field format)"
+    "-t char": "field separator"
+    "-1 field": "join field of file1 (default: 1)"
+    "-2 field": "join field of file2 (default: 1)"
+  input: "must be sorted on join fields"
+
+kill:
+  synopsis: "kill -s signal_name pid... | kill -l [exit_status] | kill [-signal_name|-signal_number] pid..."
+  purpose: "send signal to process"
+  options:
+    "-s signal": "signal name (e.g., TERM, KILL, HUP)"
+    "-l": "list signal names"
+  operands: "pid (>0=process, 0=process group, -1=all, <-1=abs(pid) group)"
+
+lex: {synopsis: "lex [-t] [-n|-v] [file...]", purpose: "generate lexical analyzer", xsi: true}
+
+link:
+  synopsis: "link file1 file2"
+  purpose: "create hard link (like ln but simpler)"
+
+ln:
+  synopsis: "ln [-fs] [-L|-P] source... target"
+  purpose: "create links"
+  options:
+    "-f": "force (remove existing)"
+    "-s": "symbolic link"
+    "-L": "follow symlinks (for hard links)"
+    "-P": "don't follow symlinks"
+
+locale:
+  synopsis: "locale [-a|-m] | locale [-ck] name..."
+  purpose: "display locale information"
+  options:
+    "-a": "list all available locales"
+    "-m": "list available charmaps"
+    "-c": "category name headers"
+    "-k": "keyword=value format"
+
+localedef: {synopsis: "localedef [-c] [-f charmap] [-i sourcefile] name", purpose: "define locale"}
+
+logger:
+  synopsis: "logger [-is] [-f file] [-p priority] [-t tag] [message...]"
+  purpose: "log messages to syslog"
+
+logname:
+  synopsis: "logname"
+  purpose: "print login name"
+
+lp: {synopsis: "lp [-c] [-d dest] [-m] [-n copies] [-o option]... [-q priority] [-s] [-t title] [-w] [file...]", purpose: "send to printer", xsi: true}
+
+ls:
+  synopsis: "ls [-ACFHLRSacdfigl1teleknopqrstux] [file...]"
+  purpose: "list directory contents"
+  key_options:
+    "-a": "include dotfiles"
+    "-A": "include dotfiles except . and .."
+    "-l": "long format"
+    "-R": "recursive"
+    "-r": "reverse sort"
+    "-t": "sort by modification time"
+    "-S": "sort by size"
+    "-F": "append type indicator (/ @ * | = >)"
+    "-d": "list directories themselves, not contents"
+    "-i": "print inode number"
+    "-1": "one entry per line"
+    "-C": "columnar output"
+    "-H": "follow symlink args"
+    "-L": "follow all symlinks"
+    "-p": "append / to directories"
+    "-s": "print allocated blocks"
+  default_sort: "alphabetical by locale"

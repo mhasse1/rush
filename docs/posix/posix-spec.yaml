@@ -1,0 +1,286 @@
+# POSIX.1-2024 LLM-Optimized Reference
+# IEEE Std 1003.1-2024 / The Open Group Base Specifications Issue 8
+# Compact normative rules. See reference/ subdirectory for detailed specs.
+
+meta:
+  standard: "IEEE Std 1003.1-2024"
+  also_known_as: "The Open Group Base Specifications Issue 8"
+  url: "https://pubs.opengroup.org/onlinepubs/9799919799/"
+  version_constants: {_POSIX_VERSION: 202405, _XOPEN_VERSION: 800}
+  scope: "OS interface + shell + utilities for portable applications"
+  not_in_scope: [graphics, databases, record_IO, binary_portability, system_config]
+
+# ─── Index to Reference Files ───
+
+index:
+  "reference/shell-language.yaml": "Shell command language: quoting, expansion, grammar, redirections, builtins, set options"
+  "reference/utilities-a-l.yaml": "All POSIX utilities A-L: synopsis, options, exit status"
+  "reference/utilities-m-z.yaml": "All POSIX utilities M-Z: synopsis, options, exit status"
+  "reference/system-interfaces.yaml": "C system interfaces by domain: process, file I/O, signals, sockets, threads, memory"
+  "reference/headers.yaml": "Header file contents: types, constants, macros, function declarations"
+  "reference/regex.yaml": "Regular expressions: BRE, ERE, bracket expressions, precedence"
+  "reference/environment.yaml": "Environment variables, locale categories, terminal interface (termios)"
+  "reference/edge-cases.yaml": "Undefined behavior, implementation-defined, common pitfalls"
+
+# ─── Terminology ───
+
+terminology:
+  shall: "mandatory requirement"
+  should: "recommended but not required"
+  may: "optional"
+  implementation_defined: "valid behavior chosen by implementor; must be documented"
+  unspecified: "valid behavior that may vary; not required to be documented"
+  undefined: "invalid construct; anything can happen"
+  obsolescent: "retained for compatibility; do not use in new code"
+
+# ─── Conformance ───
+
+conformance:
+  posix_app_requires:
+    - "define _POSIX_C_SOURCE as 202405L before any #include"
+    - "accept implementation-defined and unspecified behaviors"
+    - "avoid undefined constructs"
+    - "respect minimum limit values"
+  xsi_app_requires:
+    - "define _XOPEN_SOURCE as 800 before any #include"
+    - "all POSIX requirements plus XSI extensions"
+  feature_detection:
+    compile_time: "check _POSIX_* constants in <unistd.h>"
+    runtime: "sysconf(), pathconf(), fpathconf()"
+    categories:
+      "-1": "not supported"
+      "0": "may be supported (check at runtime)"
+      "202405L": "supported"
+
+# ─── File System Model ───
+
+filesystem:
+  types: [regular, directory, symlink, FIFO, block_special, character_special, socket]
+  hierarchy: "directed graph; all non-terminal nodes are directories"
+  pathname_resolution:
+    absolute: "starts with / ; resolves from root"
+    relative: "no leading / ; resolves from cwd"
+    dot: ". = this directory"
+    dotdot: ".. = parent directory"
+    null: "always fails"
+    trailing_slash: "target must be directory"
+    double_slash_prefix: "implementation-defined"
+    triple_slash_prefix: "equivalent to single /"
+    symlink_limit: ">= SYMLOOP_MAX (min 8)"
+
+  permissions:
+    bits: "rwxrwxrwx (owner/group/other) + setuid + setgid + sticky"
+    check_order:
+      - "1. if appropriate privileges → access granted"
+      - "2. if effective UID = file owner → use owner bits"
+      - "3. if effective GID or supplementary GIDs match → use group bits"
+      - "4. use other bits"
+    special:
+      setuid: "exec sets effective UID to file owner"
+      setgid: "exec sets effective GID to file group; on directory: new files inherit group"
+      sticky: "on directory: only file/dir owner can delete"
+    umask: "cleared bits prevent corresponding permission on file creation"
+
+  atomicity:
+    rename: "atomic directory operation"
+    O_CREAT_O_EXCL: "atomic create-if-not-exists"
+    O_APPEND: "atomic seek-to-end + write"
+    pipe_write: "atomic if <= PIPE_BUF bytes"
+    directory_ops: "atomic; fully succeed or no effect"
+
+  file_times:
+    atime: "last data access"
+    mtime: "last data modification"
+    ctime: "last status change (system-set only)"
+    resolution: ">= 1 second; may be nanosecond"
+    update_rule: "marked for update; actually written by close/stat/fsync"
+
+# ─── Process Model ───
+
+process:
+  creation: "fork() copies parent; exec() replaces image"
+  identification:
+    pid: "unique positive integer"
+    ppid: "parent process ID"
+    pgid: "process group ID"
+    sid: "session ID"
+  inheritance_from_fork:
+    inherited: [open_fds, signal_dispositions, umask, cwd, env, uid, gid, pgid, sid, nice]
+    not_inherited: [file_locks, pending_signals, alarm_timers, pending_aio]
+  termination:
+    normal: "exit() or return from main()"
+    abnormal: "signal"
+    zombie: "terminated but parent hasn't waited"
+    orphan: "parent terminated; reparented to init (PID 1)"
+  exit_status: "0-255 via exit(n) or _exit(n); low 8 bits accessible by parent"
+
+  sessions_and_groups:
+    session: "collection of process groups; one per login"
+    session_leader: "process that called setsid()"
+    controlling_terminal: "one per session; allocated by session leader"
+    foreground_group: "receives terminal input and signals"
+    background_group: "SIGTTIN on read; SIGTTOU on write (if TOSTOP)"
+    job_control: "suspend/resume/background/foreground via signals"
+
+# ─── Signal Model ───
+
+signals:
+  lifecycle: "generated → pending → delivered (or blocked/ignored)"
+  delivery: "to specific thread (hardware fault) or first unblocking thread"
+  mask: "per-thread set of blocked signals"
+  uncatchable: [SIGKILL, SIGSTOP]
+  default_actions:
+    terminate: [SIGABRT, SIGALRM, SIGFPE, SIGHUP, SIGINT, SIGKILL, SIGPIPE, SIGTERM, SIGUSR1, SIGUSR2]
+    terminate_with_core: [SIGBUS, SIGILL, SIGQUIT, SIGSEGV, SIGSYS, SIGTRAP, SIGXCPU, SIGXFSZ]
+    stop: [SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU]
+    ignore: [SIGCHLD, SIGURG, SIGWINCH]
+    continue: [SIGCONT]
+  handler_constraints:
+    - "must use only async-signal-safe functions"
+    - "must save/restore errno"
+    - "SA_RESTART: only some functions are restartable"
+  realtime: "SIGRTMIN-SIGRTMAX; queued FIFO; lowest number first"
+
+# ─── Shell Model ───
+
+shell:
+  execution_flow: "read → tokenize → parse → expand → redirect → execute"
+  expansion_order: [tilde, parameter, command_substitution, arithmetic, field_splitting, pathname, quote_removal]
+  command_types:
+    simple: "[assignments] [redirections] command [args]"
+    pipeline: "cmd1 | cmd2 | cmd3"
+    list: "cmd1 && cmd2 || cmd3 ; cmd4 & cmd5"
+    compound: [if, while, until, for, case, "{}", "()"]
+    function: "name() compound-command"
+  exit_codes: {0: success, 1-125: error, 126: "not executable", 127: "not found", "128+N": "killed by signal N"}
+  special_builtins: [".", ":", break, continue, eval, exec, exit, export, readonly, return, set, shift, times, trap, unset]
+  special_builtin_rules:
+    - "variable assignments persist after completion"
+    - "errors exit non-interactive shell"
+    - "found before PATH search and functions"
+
+# ─── Environment Variables (Key Ones) ───
+
+key_env_vars:
+  PATH: "colon-separated command search directories"
+  HOME: "user home (tilde expansion)"
+  IFS: "field splitting (default: space tab newline)"
+  PS1: "prompt"
+  LANG: "default locale"
+  LC_ALL: "override all LC_* vars"
+  TZ: "timezone"
+  TERM: "terminal type"
+  TMPDIR: "temp directory"
+  resolution: "LC_ALL > specific LC_* > LANG > default"
+
+# ─── Regular Expressions (Summary) ───
+
+regex_summary:
+  BRE: "basic: . * ^ $ [] \\(\\) \\{\\} \\n"
+  ERE: "extended: . * + ? ^ $ [] () {} | \\n"
+  classes: "[:alnum:] [:alpha:] [:blank:] [:cntrl:] [:digit:] [:graph:] [:lower:] [:print:] [:punct:] [:space:] [:upper:] [:xdigit:]"
+  matching: "leftmost, longest match (greedy)"
+  ERE_non_greedy: "*? +? ?? {m,n}?"
+  see: "reference/regex.yaml for complete rules"
+
+# ─── Utility Conventions ───
+
+utility_conventions:
+  option_format: "-X (single char); -- terminates options"
+  exit_status: "0=success; >0=error; never rely on specific non-zero values"
+  stdin: "read if no file args or file is -"
+  stderr: "diagnostics on error"
+  eight_bit: "all utilities must handle 8-bit data"
+  locale: "behavior affected by LC_* environment variables"
+  option_argument: "required: separate arg or same string; optional: must be same string"
+
+# ─── Limits (POSIX Minimums) ───
+
+limits:
+  ARG_MAX: ">= 4096 bytes (exec argument list)"
+  CHILD_MAX: ">= 25 (simultaneous processes per user)"
+  OPEN_MAX: ">= 20 (open files per process)"
+  PIPE_BUF: ">= 512 bytes (atomic pipe write)"
+  PATH_MAX: ">= 256 bytes (pathname length)"
+  NAME_MAX: ">= 14 bytes (filename length)"
+  LINE_MAX: ">= 2048 bytes (utility input line)"
+  LINK_MAX: ">= 8 (hard links per file)"
+  SYMLOOP_MAX: ">= 8 (symlink traversal depth)"
+  _XOPEN_NAME_MAX: ">= 255 (XSI filename)"
+  _XOPEN_PATH_MAX: ">= 1024 (XSI pathname)"
+
+# ─── Epoch and Time ───
+
+time:
+  epoch: "1970-01-01T00:00:00Z"
+  rule: "every day = exactly 86400 seconds"
+  clocks:
+    CLOCK_REALTIME: "wall clock; settable; may jump"
+    CLOCK_MONOTONIC: "steady; never jumps backward"
+    CLOCK_PROCESS_CPUTIME_ID: "process CPU time"
+    CLOCK_THREAD_CPUTIME_ID: "thread CPU time"
+
+# ─── Thread Safety ───
+
+thread_safety:
+  data_race: "two threads access same non-atomic location, at least one writing → undefined"
+  synchronization: [mutex, condvar, rwlock, barrier, spinlock, semaphore, atomic_ops]
+  errno: "thread-local"
+  fork_in_mt: "child has only calling thread; async-signal-safe funcs only before exec"
+  async_signal_safe: "restricted function set usable in signal handlers and child-after-fork"
+
+# ─── Socket Model ───
+
+sockets:
+  families: {AF_INET: IPv4, AF_INET6: IPv6, AF_UNIX: "local IPC"}
+  types: {SOCK_STREAM: "reliable ordered (TCP)", SOCK_DGRAM: "unreliable unordered (UDP)", SOCK_RAW: "raw protocol"}
+  lifecycle_stream: "socket → bind → listen → accept → send/recv → shutdown → close"
+  lifecycle_dgram: "socket → bind → sendto/recvfrom → close"
+  non_blocking: "O_NONBLOCK; connect returns EINPROGRESS; accept returns EAGAIN"
+  byte_order: "network = big-endian; use htonl/htons/ntohl/ntohs"
+
+# ─── IPC Mechanisms ───
+
+ipc:
+  pipes: "anonymous; unidirectional; FIFO ordering; PIPE_BUF atomic writes"
+  fifos: "named pipes; appear in filesystem; same semantics as pipes"
+  message_queues: "priority-ordered; msgget/msgsnd/msgrcv/msgctl (XSI)"
+  semaphores:
+    posix: "sem_open/sem_wait/sem_post (named); sem_init (unnamed)"
+    sysv: "semget/semop/semctl (XSI)"
+  shared_memory:
+    posix: "shm_open + mmap"
+    sysv: "shmget/shmat/shmdt/shmctl (XSI)"
+  sockets: "local (AF_UNIX) or network (AF_INET/AF_INET6)"
+
+# ─── Namespace Reservations ───
+
+namespace:
+  reserved_prefixes: [posix_, POSIX_, _POSIX_]
+  rule: "neither implementations nor applications may use these prefixes"
+  c_reserved: "identifiers starting with _ + uppercase or _ + _ are reserved"
+  header_prefixes: "each header reserves specific prefixes (e.g., pthread_, sem_, sig_)"
+
+# ─── Portable Character Set ───
+
+portable_charset:
+  includes: "A-Z a-z 0-9 plus 32 punctuation chars plus control chars"
+  encoding_rules:
+    - "digits 0-9 must have contiguous ascending values"
+    - "NUL must be all-zero bits"
+    - ". / \\n \\r must have invariant encoding across locales"
+    - "all portable chars are single-byte and positive when stored as char"
+
+# ─── Key Behavioral Rules ───
+
+behavioral_rules:
+  - "shall/must = mandatory; should = recommended; may = optional"
+  - "exit 0 = success everywhere; never test for specific non-zero values"
+  - "errno is meaningful only after a function returns an error indication"
+  - "partial read/write is always possible; always check return values"
+  - "EINTR means 'signal interrupted; retry usually appropriate'"
+  - "EAGAIN/EWOULDBLOCK means 'try again later' (may be same value)"
+  - "implementation-defined ≠ undefined: the former is valid but varies; the latter is a bug"
+  - "locale affects: collation, character classification, date/time format, numeric format, messages"
+  - "all utilities must handle 8-bit transparent data"
+  - "-- terminates options for all standard utilities"

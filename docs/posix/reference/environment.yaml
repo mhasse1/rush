@@ -1,0 +1,245 @@
+# POSIX Environment Variables, Locale, Terminal Interface — IEEE Std 1003.1-2024
+# LLM-optimized reference. Terse rules only.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Base Definitions, Chapters 7-8, 10-11"
+
+# ─── Environment Variables ───
+
+environment_variables:
+  shell_critical:
+    HOME: "user home directory; used in tilde expansion"
+    PATH: "colon-separated command search prefixes"
+    IFS: "internal field separators (default: space, tab, newline)"
+    PS1: "primary prompt (interactive shell)"
+    PS2: "secondary prompt (continuation)"
+    PS4: "debug trace prompt (set -x)"
+    ENV: "file executed on interactive shell startup"
+    PWD: "current working directory (absolute pathname)"
+    OLDPWD: "previous working directory"
+    SHELL: "user's preferred command interpreter"
+
+  locale:
+    LANG: "default locale when LC_* not set"
+    LC_ALL: "overrides ALL LC_* variables and LANG"
+    LC_COLLATE: "string collation order"
+    LC_CTYPE: "character classification and case conversion"
+    LC_MESSAGES: "message language, yes/no patterns"
+    LC_MONETARY: "monetary formatting"
+    LC_NUMERIC: "number formatting (decimal point, grouping)"
+    LC_TIME: "date/time formatting"
+    LANGUAGE: "colon-separated locale list for message translation precedence"
+
+  process:
+    PPID: "parent process ID (set by shell, read-only)"
+    LINENO: "current line number in script"
+    OPTARG: "getopts option argument"
+    OPTIND: "getopts next argument index"
+    RANDOM: "random number seed"
+    SECONDS: "elapsed seconds since shell invocation"
+
+  terminal:
+    TERM: "terminal type"
+    COLUMNS: "terminal width in columns"
+    LINES: "terminal height in lines"
+    EDITOR: "default editor"
+    VISUAL: "full-screen editor"
+
+  i18n:
+    TEXTDOMAIN: "text domain for gettext/ngettext"
+    TEXTDOMAINDIR: "root directory for message object hierarchy"
+    NLSPATH: "message catalog search path templates"
+    CHARSET: "character set specification"
+
+  mail:
+    MAIL: "mailbox file path"
+    MAILCHECK: "seconds between mail checks"
+    MAILPATH: "colon-separated mail file paths"
+    MAILRC: "mail init file"
+    MBOX: "read mail folder"
+    DEAD: "dead letter folder"
+
+  build:
+    CC: "C compiler"
+    CFLAGS: "C compiler flags"
+    LDFLAGS: "linker flags"
+    FFLAGS: "Fortran flags"
+    LEX: "lex utility"
+    LFLAGS: "lex flags"
+    YACC: "yacc utility"
+    YFLAGS: "yacc flags"
+    ARFLAGS: "ar flags"
+    GET: "SCCS get utility"
+    MAKEFLAGS: "make flags"
+    MAKESHELL: "shell for make"
+
+  misc:
+    TMPDIR: "temporary file directory"
+    TZ: "timezone info"
+    USER: "current username"
+    LOGNAME: "login name (set at login)"
+    PAGER: "preferred paging program"
+    LPDEST: "default printer"
+    PRINTER: "default printer name"
+    MANPATH: "manual page search path"
+    DATEMSK: "getdate() template file"
+    CDPATH: "cd search path"
+    HISTFILE: "history file path"
+    HISTSIZE: "max history entries"
+    FCEDIT: "fc editor"
+    EXINIT: "ex/vi init commands"
+
+  locale_resolution_order:
+    - "1. LC_ALL (if set, overrides everything)"
+    - "2. Specific LC_* variable"
+    - "3. LANG (fallback)"
+    - "4. Implementation default (POSIX/C locale)"
+
+# ─── Locale Categories ───
+
+locale_categories:
+  LC_CTYPE:
+    purpose: "character classification and case conversion"
+    classes: [upper, lower, alpha, digit, alnum, xdigit, space, blank, cntrl, punct, graph, print]
+    mappings: [toupper, tolower]
+    note: "classes have mutual-exclusivity rules"
+
+  LC_COLLATE:
+    purpose: "string collation order"
+    features:
+      - "multi-character collating elements"
+      - "equivalence classes (same primary weight)"
+      - "multiple weight levels (up to COLL_WEIGHTS_MAX)"
+      - "IGNORE keyword excludes from comparison"
+    directives: [forward, backward, position]
+
+  LC_MONETARY:
+    purpose: "monetary formatting"
+    key_fields:
+      int_curr_symbol: "4-char ISO 4217 code"
+      currency_symbol: "local currency symbol"
+      mon_decimal_point: "decimal separator"
+      mon_thousands_sep: "digit grouping separator"
+      p_sign_posn: "0=parens, 1=before all, 2=after all, 3=before symbol, 4=after symbol"
+
+  LC_NUMERIC:
+    purpose: "non-monetary number formatting"
+    fields: [decimal_point, thousands_sep, grouping]
+
+  LC_TIME:
+    purpose: "date/time formatting"
+    key_fields:
+      d_t_fmt: "%c format"
+      d_fmt: "%x format"
+      t_fmt: "%X format"
+      am_pm: "AM/PM strings"
+      abday: "7 abbreviated weekday names"
+      abmon: "12 abbreviated month names"
+      era: "era descriptions (direction:offset:dates:name:format)"
+
+  LC_MESSAGES:
+    purpose: "yes/no patterns and message language"
+    yesexpr: "ERE matching affirmative (POSIX default: ^[yY])"
+    noexpr: "ERE matching negative (POSIX default: ^[nN])"
+
+  POSIX_locale:
+    name: "C or POSIX"
+    behavior: "default when setlocale not called; minimal, portable"
+
+# ─── System Files and Devices ───
+
+system_files:
+  "/": "root directory"
+  "/dev/null": "empty source, infinite sink; reads return EOF, writes discarded"
+  "/dev/tty": "controlling terminal synonym; works despite redirection"
+  "/dev/console": "system console; may not be readable/writable"
+  "/tmp": "temporary files; apps may create here; no persistence guarantee"
+
+  rules:
+    - "apps cannot assume file creation in / or /dev"
+    - "/tmp is the only standard-writable directory"
+
+# ─── Terminal Interface ───
+
+terminal:
+  termios_structure:
+    c_iflag: "input modes"
+    c_oflag: "output modes"
+    c_cflag: "control modes"
+    c_lflag: "local modes"
+    c_cc: "special control characters array [NCCS]"
+
+  input_flags:
+    BRKINT: "signal on break"
+    ICRNL: "CR → NL"
+    IGNBRK: "ignore break"
+    IGNCR: "ignore CR"
+    IGNPAR: "ignore parity errors"
+    INLCR: "NL → CR"
+    INPCK: "parity check"
+    ISTRIP: "strip to 7 bits"
+    IXANY: "any char restarts output"
+    IXOFF: "start/stop input control"
+    IXON: "start/stop output control"
+    PARMRK: "mark parity errors (0xff 0x00 X)"
+
+  output_flags:
+    OPOST: "enable post-processing"
+    ONLCR: "NL → CR-LF"
+    OCRNL: "CR → NL"
+    ONOCR: "no CR at column 0"
+    ONLRET: "NL does CR"
+    OFILL: "fill chars not delays"
+    TAB3: "expand tabs to spaces"
+
+  control_flags:
+    CLOCAL: "ignore modem lines"
+    CREAD: "enable receiver"
+    CSIZE: "bits/byte (CS5-CS8)"
+    CSTOPB: "2 stop bits"
+    HUPCL: "hangup on last close"
+    PARENB: "enable parity"
+    PARODD: "odd parity"
+
+  local_flags:
+    ECHO: "echo input"
+    ECHOE: "ERASE = backspace-space-backspace"
+    ECHOK: "NL after KILL"
+    ECHONL: "echo NL even without ECHO"
+    ICANON: "canonical (line-buffered) mode"
+    IEXTEN: "extended functions"
+    ISIG: "check INTR/QUIT/SUSP"
+    NOFLSH: "no flush after signals"
+    TOSTOP: "SIGTTOU for background writes"
+
+  special_chars:
+    VINTR: "SIGINT"
+    VQUIT: "SIGQUIT"
+    VERASE: "delete last char"
+    VKILL: "delete line"
+    VEOF: "end-of-file"
+    VEOL: "additional line delimiter"
+    VSTART: "resume output"
+    VSTOP: "suspend output"
+    VSUSP: "SIGTSTP"
+    VMIN: "min bytes (non-canonical)"
+    VTIME: "timeout in 0.1s (non-canonical)"
+
+  canonical_mode:
+    - "input assembled into lines (NL, EOF, EOL delimited)"
+    - "ERASE/KILL processing enabled"
+    - "read returns at most one line"
+
+  non_canonical_mode:
+    case_a: "MIN>0, TIME>0: inter-byte timer; returns MIN bytes or on timeout (>=1 byte)"
+    case_b: "MIN>0, TIME=0: blocks until MIN bytes"
+    case_c: "MIN=0, TIME>0: returns first byte or 0 on timeout"
+    case_d: "MIN=0, TIME=0: returns immediately (may return 0)"
+
+  access_control:
+    foreground_read: "always allowed"
+    foreground_write: "always allowed"
+    background_read: "SIGTTIN (unless ignored/blocked/orphaned → EIO)"
+    background_write: "if TOSTOP: SIGTTOU (unless ignored/blocked/orphaned → EIO); else: allowed"
+
+  baud_rates: [B0, B50, B75, B110, B134, B150, B200, B300, B600, B1200, B1800, B2400, B4800, B9600, B19200, B38400]

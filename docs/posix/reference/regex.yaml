@@ -1,0 +1,133 @@
+# POSIX Regular Expressions — IEEE Std 1003.1-2024
+# LLM-optimized reference. No prose. Rules and behavior only.
+
+meta:
+  source: "IEEE Std 1003.1-2024, Base Definitions, Chapter 9"
+  scope: "BRE and ERE syntax, matching rules, bracket expressions"
+
+matching_principles:
+  - search begins at string start, finds first (leftmost) match
+  - at same position, longest possible match wins (greedy by default)
+  - matching is by bit pattern, not graphic representation
+  - NUL cannot appear in pattern or matched string
+  - implementations must support patterns up to 256 bytes
+
+# ─── Basic Regular Expressions (BRE) ───
+
+bre:
+  ordinary_char: "matches itself; non-special characters"
+  escaped_special: "\\X matches literal X for any special character"
+  dot: "matches any single character except NUL (outside bracket expressions)"
+
+  anchors:
+    "^": "matches start of string (only special at expression start)"
+    "$": "matches end of string (only special at expression end)"
+    "^pattern$": "matches entire string exclusively"
+
+  repetition:
+    "*": "zero or more of preceding BRE (not special at expr start, after ^, or after \\( )"
+    "\\{m\\}": "exactly m occurrences"
+    "\\{m,\\}": "at least m occurrences"
+    "\\{m,n\\}": "m to n occurrences inclusive"
+
+  subexpressions:
+    syntax: "\\( ... \\)"
+    nesting: allowed
+    backreference: "\\n matches same string as nth subexpression (n=1-9)"
+
+  concatenation: "sequential BREs match concatenated strings"
+
+  precedence_high_to_low:
+    - collation_symbols
+    - escaped_characters
+    - bracket_expressions
+    - subexpressions_and_backreferences
+    - duplication
+    - concatenation
+    - anchoring
+
+# ─── Extended Regular Expressions (ERE) ───
+
+ere:
+  differences_from_bre:
+    - "parentheses () are unescaped for grouping"
+    - "no backreferences"
+    - "alternation with |"
+    - "interval expressions use {} not \\{\\}"
+    - "+ and ? quantifiers added"
+
+  special_chars: ". [ \\ ( ) * + ? { | ^ $"
+
+  quantifiers:
+    "*": "zero or more"
+    "+": "one or more"
+    "?": "zero or one"
+    "{m}": "exactly m"
+    "{m,}": "at least m"
+    "{m,n}": "m to n inclusive"
+
+  non_greedy:
+    "*?": "zero or more, shortest match"
+    "+?": "one or more, shortest match"
+    "??": "zero or one, shortest match"
+    "{m,n}?": "m to n, shortest match"
+    REG_MINIMAL_flag: "reverses default — greedy becomes non-greedy and vice versa"
+
+  alternation:
+    syntax: "pattern1|pattern2"
+    meaning: "matches string matching either alternative"
+    grouping: "(a|b)c matches ac or bc"
+
+  anchors:
+    "^": "start of string (anywhere in expression, outside brackets)"
+    "$": "end of string (anywhere in expression, outside brackets)"
+
+  precedence_high_to_low:
+    - collation_symbols
+    - escaped_characters
+    - bracket_expressions
+    - grouping
+    - duplication
+    - concatenation
+    - anchoring
+    - alternation
+
+# ─── Bracket Expressions (shared BRE/ERE) ───
+
+bracket_expressions:
+  matching_list: "[abc] matches a, b, or c"
+  non_matching_list: "[^abc] matches any char except a, b, c"
+
+  special_elements:
+    collating_symbol: "[.ch.] — multi-character collating element"
+    equivalence_class: "[=a=] — all characters with same primary collation weight"
+    character_class: "[:classname:] — locale-defined character set"
+    range: "[a-z] — characters in collation sequence between endpoints inclusive"
+
+  character_classes:
+    "[:alnum:]": "letters and digits"
+    "[:alpha:]": "letters"
+    "[:blank:]": "space and tab"
+    "[:cntrl:]": "control characters"
+    "[:digit:]": "decimal digits 0-9"
+    "[:graph:]": "printable non-space"
+    "[:lower:]": "lowercase letters"
+    "[:print:]": "printable including space"
+    "[:punct:]": "punctuation (not alnum, not space, but printable)"
+    "[:space:]": "whitespace (space, tab, newline, CR, FF, VT)"
+    "[:upper:]": "uppercase letters"
+    "[:xdigit:]": "hex digits 0-9 a-f A-F"
+
+  literal_rules:
+    - "] is literal if first after [ or [^"
+    - "- is literal if first after [ or [^, or last before ]"
+    - "^ is only special immediately after ["
+
+# ─── Undefined Behavior ───
+
+undefined_behavior:
+  - "multiple adjacent quantifiers (e.g., **)"
+  - "invalid interval expression values"
+  - "bracket expression edge cases with collating elements"
+  - "backreference to non-existent subexpression"
+  - "ERE alternation with empty branch in some contexts"

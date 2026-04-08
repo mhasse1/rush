@@ -1,0 +1,257 @@
+# POSIX Edge Cases, Undefined Behavior, and Common Pitfalls — IEEE Std 1003.1-2024
+# LLM-optimized. These are the behaviors that cause the most bugs.
+
+meta:
+  source: "IEEE Std 1003.1-2024 (all volumes)"
+  purpose: "Catalog undefined, unspecified, and implementation-defined behaviors"
+
+# ─── Shell Edge Cases ───
+
+shell:
+  word_splitting:
+    - "unquoted $var with IFS='' → no splitting"
+    - "unquoted $@ with no positional params → zero fields (not empty string)"
+    - "\"$*\" with IFS=: → params joined by colon"
+    - "\"$@\" always produces separate fields, even with custom IFS"
+    - "empty IFS → no field splitting at all"
+    - "IFS with only whitespace → leading/trailing stripped, sequences collapsed"
+    - "IFS with non-whitespace → each delimiter produces field; adjacent = empty field"
+
+  quoting:
+    - "single quotes cannot be nested or escaped inside single quotes"
+    - "in double quotes, \\ only escapes $ ` \" \\ newline — all others literal"
+    - "$'...' supports \\x hex and \\ddd octal — this is NOT the same as $\"...\""
+    - "unquoted # starts comment only at word boundary"
+
+  parameter_expansion:
+    - "${var:-} and ${var-} differ: colon tests for null too, without colon only unset"
+    - "${var:=} assigns — cannot assign to positional params or special params"
+    - "pattern in ${var%pat} uses fnmatch rules, not regex"
+    - "nested expansions: ${${var}} is NOT valid POSIX"
+
+  pipelines:
+    - "which commands in a pipeline run in subshells is implementation-defined"
+    - "variable assignments in pipeline may not be visible after: x=1 | read y"
+    - "exit status of pipeline is last command; ! inverts"
+    - "pipefail is NOT in POSIX"
+
+  subshells:
+    - "( ) creates copy of environment; changes do not propagate to parent"
+    - "$$ returns parent shell PID, not subshell PID"
+    - "traps are reset in subshell (except ignored signals)"
+
+  errexit:
+    - "set -e does NOT exit for: if/while/until conditions, && left side, || left side, ! prefix, non-last pipeline commands"
+    - "functions inherit errexit only if called directly, not in conditionals"
+    - "command substitution: $(false) in assignment doesn't trigger errexit"
+
+  here_documents:
+    - "delimiter with ANY quoting (even partial) disables expansion in body"
+    - "<<-DELIM strips leading TABS only, not spaces"
+    - "here-doc body is NOT affected by noglob or IFS"
+
+  aliases:
+    - "alias expansion is recursive but tracks already-expanded aliases"
+    - "trailing blank in alias value triggers expansion of next word"
+    - "aliases only expanded in interactive shells (or when shell processes aliases)"
+
+  test_command:
+    - "-a and -o operators removed from POSIX 2024"
+    - ">4 arguments to test: unspecified behavior"
+    - "[ is a regular builtin, not special; [[ is not POSIX"
+    - "always quote variables in test: [ -f $f ] fails if f is empty or has spaces"
+
+  arithmetic:
+    - "$(( )) uses signed long — overflow is undefined"
+    - "division by zero: undefined behavior"
+    - "unset or empty variables in arithmetic = 0"
+
+  exec_and_fork:
+    - "exec without command: redirections affect current shell permanently"
+    - "exec with command: replaces shell (no return)"
+    - "command not found: exit 127; found but not executable: exit 126"
+
+# ─── File System Edge Cases ───
+
+filesystem:
+  pathname_resolution:
+    - "null pathname: always fails"
+    - "trailing / on pathname: implies the target must be a directory"
+    - "// at start: implementation-defined (may differ from /)"
+    - "/// or more slashes at start: equivalent to single /"
+    - "symlink loops: ELOOP (limit >= SYMLOOP_MAX, minimum 8)"
+    - "dangling symlink: ENOENT for most operations"
+
+  permissions:
+    - "root (appropriate privileges) bypasses most permission checks"
+    - "S_ISVTX (sticky) on directory: only owner can delete files"
+    - "S_ISGID on directory: new files inherit group"
+    - "umask affects file creation but NOT chmod"
+
+  atomicity:
+    - "rename() is atomic for the directory operation"
+    - "write() to pipe/FIFO: atomic if <= PIPE_BUF bytes"
+    - "write() > PIPE_BUF: may interleave with other writers"
+    - "O_APPEND: seek+write is atomic"
+    - "O_CREAT|O_EXCL: atomic create-if-not-exists"
+    - "directory operations are atomic"
+
+  file_times:
+    - "atime, mtime, ctime updated lazily; guaranteed by close/stat/fsync"
+    - "resolution: at least 1 second; may be nanosecond"
+    - "ctime cannot be set by applications (set by system on metadata changes)"
+
+  links:
+    - "hard links cannot cross filesystems (EXDEV)"
+    - "hard links to directories: not allowed by most implementations"
+    - "symlinks can cross filesystems and point to nonexistent targets"
+    - "unlink() on last link to open file: data accessible until all fds closed"
+
+# ─── Process Edge Cases ───
+
+process:
+  fork:
+    - "child gets copy of parent's file descriptors (shared open file descriptions)"
+    - "child gets copy of parent's signal dispositions"
+    - "child does NOT inherit: file locks, pending signals, alarm timers"
+    - "fork in multithreaded process: child has only calling thread"
+    - "async-signal-safe functions only after fork in MT process before exec"
+
+  exec:
+    - "close-on-exec (FD_CLOEXEC) fds closed; others inherited"
+    - "signals set to SIG_IGN remain ignored; caught signals reset to SIG_DFL"
+    - "effective UID/GID may change if setuid/setgid bit set on file"
+    - "all threads except calling thread terminated"
+
+  signals:
+    - "SIGKILL and SIGSTOP cannot be caught, blocked, or ignored"
+    - "SIGCHLD default is ignore — zombies still created unless SA_NOCLDWAIT"
+    - "signal handler must use only async-signal-safe functions"
+    - "errno is thread-local but signal handlers must save/restore it"
+    - "SA_RESTART: only some functions are restartable"
+    - "signals to process delivered to first thread with signal unblocked"
+
+  signal_disposition_across_fork_exec:
+    fork: |
+      Child inherits parent's entire signal disposition table as-is.
+      SIG_IGN stays SIG_IGN. Handlers stay as handlers. Mask preserved.
+      Pending signals NOT inherited (child starts clean).
+    exec: |
+      SIG_IGN survives exec (stays ignored in new program).
+      SIG_DFL survives exec.
+      Any handler function is RESET to SIG_DFL (code gone, can't call it).
+      Signal mask preserved. Pending signals preserved.
+    shell_consequences:
+      - "background jobs: shell sets SIGINT/SIGQUIT to SIG_IGN before fork → child inherits SIG_IGN → survives exec → background process ignores Ctrl+C"
+      - "foreground jobs: shell must NOT leave signals at SIG_IGN → must reset to SIG_DFL between fork and exec so child gets default behavior"
+      - "interactive shell ignores SIGTSTP/SIGTTIN/SIGTTOU for itself → must reset to SIG_DFL in child before exec so child can be suspended"
+      - "trap '' SIGINT in shell script → sets SIG_IGN → all children inherit ignore → cannot be overridden by child (SIG_IGN survives exec)"
+      - "trap 'handler' SIGINT → sets handler → child after exec gets SIG_DFL (handler lost) → child IS killable by SIGINT"
+
+  wait:
+    - "zombie: process terminated but parent hasn't waited — holds PID"
+    - "orphan process group: SIGHUP+SIGCONT sent when group becomes orphaned"
+    - "WNOHANG: return immediately if no child changed state"
+    - "double-fork: grandchild reparented to init (PID 1)"
+
+# ─── I/O Edge Cases ───
+
+io:
+  file_descriptors:
+    - "0-2 may be closed; opening a file may return fd 0, 1, or 2"
+    - "dup2 to same fd: no-op (doesn't close), returns fd"
+    - "OPEN_MAX minimum is 20; actual limit via sysconf(_SC_OPEN_MAX)"
+    - "O_CLOEXEC: set atomically at open; prevents fd leak across exec race"
+    - "O_CLOFORK: close on fork (new in POSIX.1-2024)"
+
+  pipes:
+    - "write to pipe with no readers: SIGPIPE + EPIPE"
+    - "read from pipe with no writers: returns 0 (EOF)"
+    - "pipe capacity: at least PIPE_BUF (minimum 512 bytes)"
+    - "writes <= PIPE_BUF: atomic; > PIPE_BUF: may interleave"
+
+  stdio:
+    - "stdin/stdout line-buffered if interactive; fully-buffered otherwise"
+    - "stderr is never fully-buffered"
+    - "mixing read/write on same stream without intervening seek/flush: undefined"
+    - "stream orientation (byte vs wide) set on first use; cannot change except via freopen"
+    - "fclose(NULL): undefined behavior"
+
+  sockets:
+    - "accept() on non-blocking socket with no connections: EAGAIN"
+    - "connect() non-blocking: returns EINPROGRESS; check with poll/select"
+    - "send() on disconnected socket: SIGPIPE + EPIPE (MSG_NOSIGNAL suppresses signal)"
+    - "SO_REUSEADDR: allows bind to TIME_WAIT addresses"
+    - "partial read/write: always possible; must check return value"
+
+# ─── Thread Edge Cases ───
+
+threads:
+  data_races:
+    - "two threads accessing same non-atomic location, at least one writing: undefined behavior"
+    - "mutex/condvar/rwlock operations synchronize memory"
+    - "fork() in MT program: child has only calling thread; must use async-signal-safe functions before exec"
+    - "calling non-async-signal-safe function from signal handler: undefined if it interrupted unsafe function"
+
+  mutex:
+    - "unlock mutex not held by current thread: undefined (NORMAL), error (ERRORCHECK), works (RECURSIVE)"
+    - "destroying locked mutex: undefined"
+    - "PTHREAD_MUTEX_INITIALIZER: only for static allocation"
+    - "robust mutex: EOWNERDEAD if previous holder died; must call pthread_mutex_consistent"
+
+  cancellation:
+    - "PTHREAD_CANCEL_DEFERRED: only at cancellation points"
+    - "PTHREAD_CANCEL_ASYNCHRONOUS: can happen any time; only safe in async-cancel-safe code"
+    - "cleanup handlers run LIFO when thread is cancelled"
+
+# ─── Utility Edge Cases ───
+
+utilities:
+  general:
+    - "exit status 0 = success; >0 = error (never rely on specific non-zero values)"
+    - "-- terminates options for all utilities"
+    - "- as operand means stdin/stdout (utility-specific)"
+    - "unrecognized option: diagnostic to stderr + error exit"
+
+  common_pitfalls:
+    echo: "behavior of -n, -e, \\escapes is implementation-defined; use printf instead"
+    test: "always quote variables; empty var causes syntax error in [ $var = x ]"
+    find_exec: "-exec {} + batches; -exec {} \\; runs once per file"
+    xargs: "use -0 with find -print0 for filenames with spaces/newlines"
+    sort: "locale affects order; LC_ALL=C for byte-order sort"
+    grep: "exit 0 = match, 1 = no match, >1 = error"
+    sed: "in-place edit (-i) is NOT in POSIX (use redirect + mv)"
+    awk: "uninitialized variables are '' (string) or 0 (numeric)"
+    read: "reads one line; backslash continues; -r disables backslash processing"
+    cd: "CDPATH can cause cd to go somewhere unexpected"
+    umask: "affects created files but not chmod; common default 022"
+
+# ─── Implementation-Defined Behaviors ───
+
+implementation_defined:
+  - "which pipeline commands run in subshells"
+  - "signal numbers for specific signals (only names are portable)"
+  - "size of PIPE_BUF beyond minimum 512"
+  - "maximum number of open files (OPEN_MAX)"
+  - "timezone database format and location"
+  - "whether char is signed or unsigned"
+  - "pathname // prefix behavior"
+  - "nice value to priority mapping"
+  - "scheduling policy for equal-priority processes"
+  - "what constitutes 'appropriate privileges' (root on Unix)"
+  - "core dump generation and format"
+  - "echo behavior with escape sequences"
+  - "locale data location and format"
+  - "terminal control character values"
+
+# ─── Unspecified Behaviors ───
+
+unspecified:
+  - "order of directory entries from readdir()"
+  - "thread scheduling order among equal-priority threads"
+  - "order of signal delivery when multiple pending"
+  - "for var in array order in awk"
+  - "order of variable expansion in make"
+  - "behavior of > 4 arguments to test"
+  - "file offset after write() error"
+  - "output interleaving from parallel processes"

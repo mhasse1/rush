@@ -1,0 +1,500 @@
+# POSIX System Interfaces — IEEE Std 1003.1-2024
+# LLM-optimized. Grouped by domain. Prototype, behavior, return, key errors.
+
+meta:
+  source: "IEEE Std 1003.1-2024, System Interfaces, Chapter 3"
+  scope: "Key C APIs grouped by domain"
+  convention: "return 0/-1 unless noted; -1 sets errno"
+
+# ─── Process Control ───
+
+process:
+  fork:
+    proto: "pid_t fork(void)"
+    returns: "child PID to parent; 0 to child; -1 on error"
+    behavior:
+      - "child gets copy of parent's address space"
+      - "child inherits: open fds (shared open file descriptions), signal dispositions, umask, cwd, env, uid/gid"
+      - "child does NOT inherit: file locks, pending signals, alarm timers, pending aio"
+      - "in MT process: child has only calling thread; must use async-signal-safe funcs before exec"
+    signal_inheritance: |
+      The child inherits the EXACT signal disposition table from the parent:
+      - SIG_IGN → child gets SIG_IGN (signal remains ignored)
+      - SIG_DFL → child gets SIG_DFL
+      - handler function → child gets SAME handler function (copy of parent's table)
+      The child also inherits the signal mask (set of blocked signals).
+      Pending signals are NOT inherited (child starts with empty pending set).
+    errors: [EAGAIN, ENOMEM, ENOSYS]
+
+  _Fork:
+    proto: "pid_t _Fork(void)"
+    returns: "same as fork()"
+    behavior: "async-signal-safe version of fork(); no atfork handlers called"
+
+  exec:
+    variants: [execl, execle, execlp, execv, execve, execvp, fexecve]
+    proto: "int execve(const char *path, char *const argv[], char *const envp[])"
+    returns: "does not return on success; -1 on error"
+    behavior:
+      - "replaces process image with new program"
+      - "FD_CLOEXEC fds closed; others inherited"
+      - "setuid/setgid may change effective uid/gid"
+      - "all threads terminated except calling thread"
+    signal_inheritance: |
+      Signal dispositions are transformed across exec:
+      - SIG_IGN → remains SIG_IGN (ignored signals stay ignored)
+      - SIG_DFL → remains SIG_DFL
+      - handler function → RESET TO SIG_DFL (handler code no longer exists in new image)
+      The signal mask (blocked signals) is preserved across exec.
+      Pending signals remain pending.
+
+      Shell implication: when a shell runs a child process, the fork+exec
+      sequence means:
+        1. fork: child inherits shell's handlers
+        2. exec: handlers reset to SIG_DFL, but SIG_IGN survives
+      So if the shell ignores SIGINT for background jobs (SIG_IGN), the
+      child will also ignore SIGINT after exec. But if the shell has a
+      SIGCHLD handler, the child gets SIG_DFL for SIGCHLD after exec.
+      This is why shells must explicitly reset signal dispositions between
+      fork and exec when they want the child to have default behavior for
+      signals the shell was ignoring.
+    errors: [E2BIG, EACCES, EINVAL, ELOOP, ENAMETOOLONG, ENOENT, ENOEXEC, ENOMEM, ENOTDIR, ETXTBSY]
+
+  _exit:
+    proto: "void _exit(int status)"
+    behavior: "terminate process immediately; no atexit handlers, no stdio flush"
+
+  exit:
+    proto: "void exit(int status)"
+    behavior: "call atexit handlers, flush stdio, then _exit(status & 0xFF)"
+
+  wait:
+    proto: "pid_t wait(int *stat_loc)"
+    returns: "child PID; -1 on error"
+    behavior: "blocks until child terminates"
+    status_macros:
+      WIFEXITED: "true if normal exit"
+      WEXITSTATUS: "exit code (low 8 bits)"
+      WIFSIGNALED: "true if killed by signal"
+      WTERMSIG: "killing signal"
+      WIFSTOPPED: "true if stopped"
+      WSTOPSIG: "stopping signal"
+      WIFCONTINUED: "true if continued"
+      WCOREDUMP: "true if core dumped (XSI)"
+    errors: [ECHILD, EINTR]
+
+  waitpid:
+    proto: "pid_t waitpid(pid_t pid, int *stat_loc, int options)"
+    pid_values:
+      ">0": "wait for specific child"
+      "0": "wait for any child in caller's process group"
+      "-1": "wait for any child (like wait)"
+      "<-1": "wait for any child in group |pid|"
+    options: [WNOHANG, WUNTRACED, WCONTINUED]
+    errors: [ECHILD, EINTR, EINVAL]
+
+  waitid:
+    proto: "int waitid(idtype_t idtype, id_t id, siginfo_t *infop, int options)"
+    id_types: [P_PID, P_PGID, P_ALL]
+    options: [WEXITED, WSTOPPED, WCONTINUED, WNOHANG, WNOWAIT]
+
+  posix_spawn:
+    proto: "int posix_spawn(pid_t *pid, const char *path, const posix_spawn_file_actions_t *file_actions, const posix_spawnattr_t *attrp, char *const argv[], char *const envp[])"
+    returns: "0 on success; error number on failure (not -1)"
+    behavior: "create new process; more efficient than fork+exec on some systems"
+    flags: [POSIX_SPAWN_RESETIDS, POSIX_SPAWN_SETPGROUP, POSIX_SPAWN_SETSIGDEF, POSIX_SPAWN_SETSIGMASK, POSIX_SPAWN_SETSCHEDPARAM, POSIX_SPAWN_SETSCHEDULER, POSIX_SPAWN_SETSID]
+
+  getpid: {proto: "pid_t getpid(void)", returns: "always succeeds; returns process ID"}
+  getppid: {proto: "pid_t getppid(void)", returns: "parent process ID"}
+  getpgrp: {proto: "pid_t getpgrp(void)", returns: "process group ID"}
+  setpgid: {proto: "int setpgid(pid_t pid, pid_t pgid)", errors: [EACCES, EINVAL, EPERM, ESRCH]}
+  setsid: {proto: "pid_t setsid(void)", returns: "new session ID; -1 if already leader", errors: [EPERM]}
+  getsid: {proto: "pid_t getsid(pid_t pid)"}
+
+  getuid: {proto: "uid_t getuid(void)"}
+  geteuid: {proto: "uid_t geteuid(void)"}
+  getgid: {proto: "gid_t getgid(void)"}
+  getegid: {proto: "gid_t getegid(void)"}
+  setuid: {proto: "int setuid(uid_t uid)", errors: [EINVAL, EPERM]}
+  seteuid: {proto: "int seteuid(uid_t uid)", errors: [EINVAL, EPERM]}
+  setgid: {proto: "int setgid(gid_t gid)", errors: [EINVAL, EPERM]}
+  setegid: {proto: "int setegid(gid_t gid)", errors: [EINVAL, EPERM]}
+
+  nice: {proto: "int nice(int incr)", returns: "new nice value; -1 may be valid (check errno)", xsi: true}
+  getpriority: {proto: "int getpriority(int which, id_t who)", xsi: true}
+  setpriority: {proto: "int setpriority(int which, id_t who, int value)", xsi: true}
+
+# ─── File I/O ───
+
+file_io:
+  open:
+    proto: "int open(const char *path, int oflag, ...)"
+    returns: "lowest available fd; -1 on error"
+    key_flags:
+      O_RDONLY: "read only"
+      O_WRONLY: "write only"
+      O_RDWR: "read/write"
+      O_CREAT: "create if not exists (requires mode arg)"
+      O_EXCL: "fail if exists (with O_CREAT, atomic)"
+      O_TRUNC: "truncate to 0"
+      O_APPEND: "append (atomic seek+write)"
+      O_NONBLOCK: "non-blocking"
+      O_CLOEXEC: "close on exec"
+      O_CLOFORK: "close on fork (new in 2024)"
+      O_DIRECTORY: "fail if not directory"
+      O_NOFOLLOW: "fail if symlink"
+    errors: [EACCES, EEXIST, EINTR, EISDIR, ELOOP, EMFILE, ENAMETOOLONG, ENFILE, ENOENT, ENOSPC, ENOTDIR, ENXIO, EOVERFLOW, EROFS, ETXTBSY]
+
+  openat:
+    proto: "int openat(int fd, const char *path, int oflag, ...)"
+    behavior: "like open() but relative to directory fd; AT_FDCWD for cwd"
+
+  close:
+    proto: "int close(int fildes)"
+    behavior: "release fd; if last fd to open file description, release it"
+    errors: [EBADF, EINTR]
+    note: "EINTR: file state is unspecified; use posix_close for defined behavior"
+
+  posix_close:
+    proto: "int posix_close(int fildes, int flags)"
+    behavior: "like close but with POSIX_CLOSE_RESTART flag for EINTR handling"
+
+  read:
+    proto: "ssize_t read(int fildes, void *buf, size_t nbyte)"
+    returns: "bytes read; 0 = EOF; -1 = error"
+    behavior:
+      - "may return fewer bytes than requested (partial read)"
+      - "regular file: advances offset"
+      - "pipe: blocks until data or all writers closed"
+      - "terminal (canonical): returns one line"
+      - "O_NONBLOCK + no data: returns -1 EAGAIN"
+    errors: [EAGAIN, EBADF, EINTR, EIO, EISDIR, EOVERFLOW]
+
+  write:
+    proto: "ssize_t write(int fildes, const void *buf, size_t nbyte)"
+    returns: "bytes written; -1 = error"
+    behavior:
+      - "may return fewer bytes than requested (partial write)"
+      - "O_APPEND: atomically seeks to end first"
+      - "pipe: SIGPIPE if no readers (EPIPE)"
+      - "pipe write <= PIPE_BUF: atomic"
+      - "O_NONBLOCK + would block: EAGAIN"
+    errors: [EAGAIN, EBADF, EFBIG, EINTR, EIO, ENOSPC, EPIPE, ERANGE]
+
+  lseek:
+    proto: "off_t lseek(int fildes, off_t offset, int whence)"
+    returns: "new offset; -1 on error"
+    whence: {SEEK_SET: "from start", SEEK_CUR: "from current", SEEK_END: "from end", SEEK_HOLE: "next hole", SEEK_DATA: "next data"}
+    errors: [EBADF, EINVAL, EOVERFLOW, ESPIPE]
+
+  pread: {proto: "ssize_t pread(int fildes, void *buf, size_t nbyte, off_t offset)", behavior: "read at offset without changing file offset"}
+  pwrite: {proto: "ssize_t pwrite(int fildes, const void *buf, size_t nbyte, off_t offset)", behavior: "write at offset without changing file offset"}
+
+  dup:
+    proto: "int dup(int fildes)"
+    returns: "lowest available fd; -1 on error"
+    behavior: "new fd shares open file description; FD_CLOEXEC cleared"
+
+  dup2:
+    proto: "int dup2(int fildes, int fildes2)"
+    returns: "fildes2; -1 on error"
+    behavior: "if fildes2 open, close it first; if fildes==fildes2, no-op"
+
+  dup3:
+    proto: "int dup3(int fildes, int fildes2, int flags)"
+    behavior: "like dup2 but can set O_CLOEXEC atomically; EINVAL if fildes==fildes2"
+
+  pipe:
+    proto: "int pipe(int fildes[2])"
+    behavior: "fildes[0] = read end; fildes[1] = write end"
+  pipe2:
+    proto: "int pipe2(int fildes[2], int flags)"
+    flags: "O_CLOEXEC, O_CLOFORK, O_NONBLOCK"
+
+  fcntl:
+    proto: "int fcntl(int fildes, int cmd, ...)"
+    commands:
+      F_DUPFD: "dup to >= arg"
+      F_DUPFD_CLOEXEC: "dup with FD_CLOEXEC"
+      F_GETFD: "get fd flags"
+      F_SETFD: "set fd flags (FD_CLOEXEC, FD_CLOFORK)"
+      F_GETFL: "get file status flags"
+      F_SETFL: "set file status flags (O_APPEND, O_NONBLOCK, O_SYNC, etc.)"
+      F_GETLK: "get lock info"
+      F_SETLK: "set lock (non-blocking)"
+      F_SETLKW: "set lock (blocking)"
+      F_OFD_GETLK: "OFD lock get"
+      F_OFD_SETLK: "OFD lock set"
+      F_OFD_SETLKW: "OFD lock set (blocking)"
+
+  fsync: {proto: "int fsync(int fildes)", behavior: "flush data + metadata to storage"}
+  fdatasync: {proto: "int fdatasync(int fildes)", behavior: "flush data only (not metadata unless needed for retrieval)"}
+  ftruncate: {proto: "int ftruncate(int fildes, off_t length)"}
+  truncate: {proto: "int truncate(const char *path, off_t length)"}
+
+# ─── File/Directory Operations ───
+
+filesystem:
+  stat:
+    proto: "int stat(const char *path, struct stat *buf)"
+    behavior: "get file status; follows symlinks"
+    errors: [EACCES, ELOOP, ENAMETOOLONG, ENOENT, ENOTDIR, EOVERFLOW]
+  lstat: {proto: "int lstat(const char *path, struct stat *buf)", behavior: "like stat but returns symlink info"}
+  fstat: {proto: "int fstat(int fildes, struct stat *buf)"}
+  fstatat: {proto: "int fstatat(int fd, const char *path, struct stat *buf, int flag)", flags: "AT_SYMLINK_NOFOLLOW"}
+
+  access: {proto: "int access(const char *path, int amode)", modes: "R_OK, W_OK, X_OK, F_OK", note: "uses real UID/GID, not effective"}
+  faccessat: {proto: "int faccessat(int fd, const char *path, int amode, int flag)", flags: "AT_EACCESS (use effective IDs)"}
+
+  chmod: {proto: "int chmod(const char *path, mode_t mode)"}
+  fchmod: {proto: "int fchmod(int fildes, mode_t mode)"}
+  chown: {proto: "int chown(const char *path, uid_t owner, gid_t group)"}
+  fchown: {proto: "int fchown(int fildes, uid_t owner, gid_t group)"}
+  lchown: {proto: "int lchown(const char *path, uid_t owner, gid_t group)", behavior: "change symlink owner (not target)"}
+
+  link: {proto: "int link(const char *path1, const char *path2)", behavior: "create hard link; cannot cross filesystems", errors: [EACCES, EEXIST, EMLINK, ENOENT, ENOSPC, EPERM, EXDEV]}
+  linkat: {proto: "int linkat(int fd1, const char *path1, int fd2, const char *path2, int flag)"}
+  unlink: {proto: "int unlink(const char *path)", behavior: "remove directory entry; file deleted when last link and last fd closed"}
+  unlinkat: {proto: "int unlinkat(int fd, const char *path, int flag)", flags: "AT_REMOVEDIR (for directories, like rmdir)"}
+  symlink: {proto: "int symlink(const char *path1, const char *path2)", behavior: "create symbolic link"}
+  readlink: {proto: "ssize_t readlink(const char *path, char *buf, size_t bufsize)", returns: "bytes placed in buf (NOT null-terminated); -1 on error"}
+
+  rename: {proto: "int rename(const char *old, const char *new)", behavior: "atomic rename; if new exists, removed first", errors: [EACCES, EBUSY, EEXIST, EINVAL, EISDIR, ELOOP, EMLINK, ENAMETOOLONG, ENOENT, ENOSPC, ENOTDIR, ENOTEMPTY, EPERM, EROFS, EXDEV]}
+
+  mkdir: {proto: "int mkdir(const char *path, mode_t mode)", errors: [EACCES, EEXIST, ELOOP, EMLINK, ENAMETOOLONG, ENOENT, ENOSPC, ENOTDIR, EROFS]}
+  rmdir: {proto: "int rmdir(const char *path)", behavior: "remove empty directory", errors: [EACCES, EBUSY, EEXIST, ENOENT, ENOTDIR, ENOTEMPTY, EPERM, EROFS]}
+
+  chdir: {proto: "int chdir(const char *path)"}
+  fchdir: {proto: "int fchdir(int fildes)"}
+  getcwd: {proto: "char *getcwd(char *buf, size_t size)", returns: "buf on success; NULL on error"}
+
+  opendir: {proto: "DIR *opendir(const char *dirname)"}
+  fdopendir: {proto: "DIR *fdopendir(int fd)"}
+  readdir: {proto: "struct dirent *readdir(DIR *dirp)", returns: "next entry or NULL (check errno for error vs end)"}
+  closedir: {proto: "int closedir(DIR *dirp)"}
+
+  umask: {proto: "mode_t umask(mode_t cmask)", returns: "previous mask (always succeeds)"}
+
+  realpath: {proto: "char *realpath(const char *file_name, char *resolved_name)", returns: "resolved path; NULL on error"}
+
+  futimens: {proto: "int futimens(int fd, const struct timespec times[2])", special: "UTIME_NOW, UTIME_OMIT"}
+  utimensat: {proto: "int utimensat(int fd, const char *path, const struct timespec times[2], int flag)"}
+
+# ─── Signals ───
+
+signals:
+  kill:
+    proto: "int kill(pid_t pid, int sig)"
+    pid_values:
+      ">0": "send to process"
+      "0": "send to caller's process group"
+      "-1": "send to all processes (implementation-defined scope)"
+      "<-1": "send to process group |pid|"
+    note: "sig=0 tests process existence without sending signal"
+    errors: [EINVAL, EPERM, ESRCH]
+
+  raise: {proto: "int raise(int sig)", behavior: "send signal to calling thread/process"}
+
+  sigaction:
+    proto: "int sigaction(int sig, const struct sigaction *act, struct sigaction *oact)"
+    struct_sigaction:
+      sa_handler: "SIG_DFL, SIG_IGN, or handler function"
+      sa_sigaction: "handler with siginfo (when SA_SIGINFO set)"
+      sa_mask: "signals blocked during handler"
+      sa_flags: "SA_NOCLDSTOP, SA_NOCLDWAIT, SA_NODEFER, SA_ONSTACK, SA_RESETHAND, SA_RESTART, SA_SIGINFO"
+    note: "cannot set handler for SIGKILL or SIGSTOP"
+
+  sigprocmask:
+    proto: "int sigprocmask(int how, const sigset_t *set, sigset_t *oset)"
+    how: {SIG_BLOCK: "add to mask", SIG_UNBLOCK: "remove from mask", SIG_SETMASK: "replace mask"}
+
+  sigpending: {proto: "int sigpending(sigset_t *set)"}
+  sigsuspend: {proto: "int sigsuspend(const sigset_t *sigmask)", returns: "always -1 (EINTR)"}
+  sigwait: {proto: "int sigwait(const sigset_t *set, int *sig)", returns: "0 on success; error number on failure"}
+  sigqueue: {proto: "int sigqueue(pid_t pid, int signo, union sigval value)", behavior: "send signal with data"}
+
+  signal_set_ops:
+    sigemptyset: {proto: "int sigemptyset(sigset_t *set)"}
+    sigfillset: {proto: "int sigfillset(sigset_t *set)"}
+    sigaddset: {proto: "int sigaddset(sigset_t *set, int signo)"}
+    sigdelset: {proto: "int sigdelset(sigset_t *set, int signo)"}
+    sigismember: {proto: "int sigismember(const sigset_t *set, int signo)", returns: "1 if member, 0 if not"}
+
+  alarm: {proto: "unsigned alarm(unsigned seconds)", returns: "previous alarm remaining; 0 if none"}
+  pause: {proto: "int pause(void)", returns: "always -1 (EINTR)"}
+  sleep: {proto: "unsigned sleep(unsigned seconds)", returns: "remaining seconds (0 if completed)"}
+  nanosleep: {proto: "int nanosleep(const struct timespec *rqtp, struct timespec *rmtp)"}
+
+# ─── Sockets ───
+
+sockets:
+  socket:
+    proto: "int socket(int domain, int type, int protocol)"
+    returns: "fd; -1 on error"
+    domains: [AF_INET, AF_INET6, AF_UNIX, AF_UNSPEC]
+    types: [SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, SOCK_SEQPACKET]
+
+  bind: {proto: "int bind(int socket, const struct sockaddr *address, socklen_t address_len)"}
+  listen: {proto: "int listen(int socket, int backlog)"}
+  accept: {proto: "int accept(int socket, struct sockaddr *address, socklen_t *address_len)", returns: "new connected fd; -1 on error"}
+  connect: {proto: "int connect(int socket, const struct sockaddr *address, socklen_t address_len)", note: "non-blocking returns EINPROGRESS; check with poll/select"}
+
+  send: {proto: "ssize_t send(int socket, const void *buffer, size_t length, int flags)"}
+  sendto: {proto: "ssize_t sendto(int socket, const void *message, size_t length, int flags, const struct sockaddr *dest_addr, socklen_t dest_len)"}
+  sendmsg: {proto: "ssize_t sendmsg(int socket, const struct msghdr *message, int flags)"}
+
+  recv: {proto: "ssize_t recv(int socket, void *buffer, size_t length, int flags)"}
+  recvfrom: {proto: "ssize_t recvfrom(int socket, void *buffer, size_t length, int flags, struct sockaddr *address, socklen_t *address_len)"}
+  recvmsg: {proto: "ssize_t recvmsg(int socket, struct msghdr *message, int flags)"}
+
+  msg_flags: {MSG_PEEK: "peek at data", MSG_OOB: "out-of-band", MSG_WAITALL: "wait for full request", MSG_NOSIGNAL: "don't send SIGPIPE", MSG_DONTWAIT: "non-blocking"}
+
+  setsockopt: {proto: "int setsockopt(int socket, int level, int option_name, const void *option_value, socklen_t option_len)"}
+  getsockopt: {proto: "int getsockopt(int socket, int level, int option_name, void *option_value, socklen_t *option_len)"}
+
+  shutdown: {proto: "int shutdown(int socket, int how)", how: {SHUT_RD: 0, SHUT_WR: 1, SHUT_RDWR: 2}}
+  socketpair: {proto: "int socketpair(int domain, int type, int protocol, int socket_vector[2])"}
+  getpeername: {proto: "int getpeername(int socket, struct sockaddr *address, socklen_t *address_len)"}
+  getsockname: {proto: "int getsockname(int socket, struct sockaddr *address, socklen_t *address_len)"}
+
+  name_resolution:
+    getaddrinfo: {proto: "int getaddrinfo(const char *nodename, const char *servname, const struct addrinfo *hints, struct addrinfo **res)", returns: "0 on success; error code on failure"}
+    freeaddrinfo: {proto: "void freeaddrinfo(struct addrinfo *ai)"}
+    gai_strerror: {proto: "const char *gai_strerror(int ecode)"}
+    getnameinfo: {proto: "int getnameinfo(const struct sockaddr *sa, socklen_t salen, char *host, socklen_t hostlen, char *serv, socklen_t servlen, int flags)"}
+    inet_ntop: {proto: "const char *inet_ntop(int af, const void *src, char *dst, socklen_t size)"}
+    inet_pton: {proto: "int inet_pton(int af, const char *src, void *dst)", returns: "1=success, 0=invalid, -1=error"}
+
+# ─── I/O Multiplexing ───
+
+io_multiplex:
+  poll:
+    proto: "int poll(struct pollfd fds[], nfds_t nfds, int timeout)"
+    returns: "number of ready fds; 0 = timeout; -1 = error"
+    events: {POLLIN: "readable", POLLOUT: "writable", POLLERR: "error (revents only)", POLLHUP: "hangup (revents only)", POLLNVAL: "invalid fd (revents only)"}
+
+  pselect:
+    proto: "int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds, const struct timespec *timeout, const sigset_t *sigmask)"
+    returns: "number of ready fds; 0 = timeout; -1 = error"
+    macros: [FD_ZERO, FD_SET, FD_CLR, FD_ISSET]
+    note: "atomically sets signal mask and waits; nfds = highest fd + 1"
+
+  select:
+    proto: "int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *errorfds, struct timeval *timeout)"
+    note: "legacy; prefer pselect or poll"
+
+# ─── Memory Mapping ───
+
+memory:
+  mmap:
+    proto: "void *mmap(void *addr, size_t len, int prot, int flags, int fildes, off_t off)"
+    returns: "mapped address; MAP_FAILED on error"
+    protection: {PROT_READ: read, PROT_WRITE: write, PROT_EXEC: execute, PROT_NONE: none}
+    flags: {MAP_SHARED: "changes visible to other mappers and written to file", MAP_PRIVATE: "copy-on-write; changes private", MAP_FIXED: "use exact address (may unmap existing)", MAP_ANONYMOUS: "not backed by file"}
+    errors: [EACCES, EBADF, EINVAL, EMFILE, ENODEV, ENOMEM, ENOTSUP, EOVERFLOW]
+
+  munmap: {proto: "int munmap(void *addr, size_t len)"}
+  mprotect: {proto: "int mprotect(void *addr, size_t len, int prot)"}
+  msync: {proto: "int msync(void *addr, size_t len, int flags)", flags: [MS_ASYNC, MS_SYNC, MS_INVALIDATE]}
+  mlock: {proto: "int mlock(const void *addr, size_t len)"}
+  munlock: {proto: "int munlock(const void *addr, size_t len)"}
+  mlockall: {proto: "int mlockall(int flags)", flags: [MCL_CURRENT, MCL_FUTURE]}
+
+  shm_open: {proto: "int shm_open(const char *name, int oflag, mode_t mode)", returns: "fd; -1 on error"}
+  shm_unlink: {proto: "int shm_unlink(const char *name)"}
+
+# ─── Threads ───
+
+threads:
+  pthread_create:
+    proto: "int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg)"
+    returns: "0 on success; error number on failure"
+    errors: [EAGAIN, EPERM, EINVAL]
+
+  pthread_exit: {proto: "void pthread_exit(void *value_ptr)", behavior: "terminate calling thread; cleanup handlers called"}
+  pthread_join: {proto: "int pthread_join(pthread_t thread, void **value_ptr)", behavior: "block until thread terminates", errors: [EDEADLK, EINVAL, ESRCH]}
+  pthread_detach: {proto: "int pthread_detach(pthread_t thread)"}
+  pthread_self: {proto: "pthread_t pthread_self(void)"}
+  pthread_equal: {proto: "int pthread_equal(pthread_t t1, pthread_t t2)"}
+
+  pthread_mutex_init: {proto: "int pthread_mutex_init(pthread_mutex_t *mutex, const pthread_mutexattr_t *attr)"}
+  pthread_mutex_destroy: {proto: "int pthread_mutex_destroy(pthread_mutex_t *mutex)"}
+  pthread_mutex_lock:
+    proto: "int pthread_mutex_lock(pthread_mutex_t *mutex)"
+    behavior:
+      NORMAL: "deadlock if already held by caller"
+      ERRORCHECK: "returns EDEADLK"
+      RECURSIVE: "increments lock count"
+    errors: [EAGAIN, EDEADLK, EINVAL, EOWNERDEAD]
+  pthread_mutex_trylock: {proto: "int pthread_mutex_trylock(pthread_mutex_t *mutex)", returns: "0 or EBUSY"}
+  pthread_mutex_unlock:
+    proto: "int pthread_mutex_unlock(pthread_mutex_t *mutex)"
+    behavior:
+      NORMAL: "undefined if not held by caller"
+      ERRORCHECK: "returns EPERM if not held"
+      RECURSIVE: "decrements count; unlocks at 0"
+
+  pthread_cond_wait: {proto: "int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)", behavior: "atomically unlock mutex and block; relock on return; may wake spuriously"}
+  pthread_cond_signal: {proto: "int pthread_cond_signal(pthread_cond_t *cond)", behavior: "wake at least one waiting thread"}
+  pthread_cond_broadcast: {proto: "int pthread_cond_broadcast(pthread_cond_t *cond)", behavior: "wake all waiting threads"}
+  pthread_cond_timedwait: {proto: "int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)", returns: "0 or ETIMEDOUT"}
+
+  pthread_rwlock_rdlock: {proto: "int pthread_rwlock_rdlock(pthread_rwlock_t *rwlock)", behavior: "shared lock; multiple readers OK"}
+  pthread_rwlock_wrlock: {proto: "int pthread_rwlock_wrlock(pthread_rwlock_t *rwlock)", behavior: "exclusive lock; blocks until no readers or writers"}
+  pthread_rwlock_unlock: {proto: "int pthread_rwlock_unlock(pthread_rwlock_t *rwlock)"}
+
+  pthread_key_create: {proto: "int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))"}
+  pthread_getspecific: {proto: "void *pthread_getspecific(pthread_key_t key)"}
+  pthread_setspecific: {proto: "int pthread_setspecific(pthread_key_t key, const void *value)"}
+
+  pthread_once: {proto: "int pthread_once(pthread_once_t *once_control, void (*init_routine)(void))"}
+  pthread_atfork: {proto: "int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void))"}
+
+  pthread_cancel: {proto: "int pthread_cancel(pthread_t thread)"}
+  pthread_setcancelstate: {proto: "int pthread_setcancelstate(int state, int *oldstate)", states: [PTHREAD_CANCEL_ENABLE, PTHREAD_CANCEL_DISABLE]}
+  pthread_setcanceltype: {proto: "int pthread_setcanceltype(int type, int *oldtype)", types: [PTHREAD_CANCEL_DEFERRED, PTHREAD_CANCEL_ASYNCHRONOUS]}
+
+  pthread_sigmask: {proto: "int pthread_sigmask(int how, const sigset_t *set, sigset_t *oset)"}
+  pthread_kill: {proto: "int pthread_kill(pthread_t thread, int sig)"}
+
+# ─── Time ───
+
+time:
+  clock_gettime: {proto: "int clock_gettime(clockid_t clock_id, struct timespec *tp)", clocks: [CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID]}
+  clock_settime: {proto: "int clock_settime(clockid_t clock_id, const struct timespec *tp)", note: "only CLOCK_REALTIME settable; requires privileges"}
+  clock_getres: {proto: "int clock_getres(clockid_t clock_id, struct timespec *res)"}
+  clock_nanosleep: {proto: "int clock_nanosleep(clockid_t clock_id, int flags, const struct timespec *rqtp, struct timespec *rmtp)", flags: "TIMER_ABSTIME"}
+  time: {proto: "time_t time(time_t *tloc)", returns: "seconds since epoch"}
+  gmtime_r: {proto: "struct tm *gmtime_r(const time_t *timer, struct tm *result)"}
+  localtime_r: {proto: "struct tm *localtime_r(const time_t *timer, struct tm *result)"}
+  mktime: {proto: "time_t mktime(struct tm *timeptr)"}
+  strftime: {proto: "size_t strftime(char *s, size_t maxsize, const char *format, const struct tm *timeptr)", returns: "bytes written; 0 if buffer too small"}
+  strptime: {proto: "char *strptime(const char *buf, const char *format, struct tm *tm)", returns: "pointer past last parsed char; NULL on error"}
+
+# ─── Dynamic Loading ───
+
+dynamic_loading:
+  dlopen: {proto: "void *dlopen(const char *file, int mode)", modes: [RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL]}
+  dlclose: {proto: "int dlclose(void *handle)"}
+  dlsym: {proto: "void *dlsym(void *handle, const char *name)", returns: "symbol address; NULL if not found (check dlerror)"}
+  dlerror: {proto: "char *dlerror()", returns: "error string; NULL if no error since last call"}
+
+# ─── System Configuration ───
+
+sysconf: {proto: "long sysconf(int name)", returns: "value; -1 if not defined (check errno)"}
+pathconf: {proto: "long pathconf(const char *path, int name)"}
+fpathconf: {proto: "long fpathconf(int fildes, int name)"}
+confstr: {proto: "size_t confstr(int name, char *buf, size_t len)"}
+
+# ─── Misc ───
+
+misc:
+  system: {proto: "int system(const char *command)", behavior: "fork + exec sh -c command; returns child exit status or -1"}
+  getenv: {proto: "char *getenv(const char *name)", returns: "value string; NULL if not found", note: "not thread-safe; use secure_getenv where available"}
+  setenv: {proto: "int setenv(const char *envname, const char *envval, int overwrite)"}
+  unsetenv: {proto: "int unsetenv(const char *name)"}
+  getentropy: {proto: "int getentropy(void *buffer, size_t length)", constraint: "length <= 256", behavior: "cryptographic random bytes"}
+  isatty: {proto: "int isatty(int fildes)", returns: "1 if terminal; 0 if not"}
+  ttyname: {proto: "char *ttyname(int fildes)", returns: "terminal name; NULL if not terminal"}
+  gethostname: {proto: "int gethostname(char *name, size_t namelen)"}
+  uname: {proto: "int uname(struct utsname *name)", fields: [sysname, nodename, release, version, machine]}
