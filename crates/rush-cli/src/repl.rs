@@ -96,6 +96,11 @@ pub fn run() {
 
     // REPL loop
     loop {
+        // Check for signal exit (SIGHUP/SIGTERM)
+        if crate::signals::should_exit() {
+            break;
+        }
+
         evaluator.env.set("$?", Value::Int(evaluator.exit_code as i64));
         prompt.set_exit_code(evaluator.exit_code);
 

@@ -3,6 +3,7 @@ mod completer;
 mod highlighter;
 mod prompt;
 mod repl;
+mod signals;
 mod validator;
 
 use rush_core::dispatch;
@@ -12,6 +13,10 @@ use rush_core::parser;
 use std::io;
 
 fn main() {
+    // Install signal handlers before anything else
+    signals::install();
+    signals::update_terminal_size();
+
     let args: Vec<String> = std::env::args().collect();
 
     // rush --lex: dump tokens

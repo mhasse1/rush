@@ -52,7 +52,17 @@ pub fn dispatch(
             _ => {}
         }
 
-        // Step 2: Check for exit
+        // Step 2: Extract inline env vars (VAR=val cmd)
+        let (inline_vars, segment) = extract_inline_env_vars(segment);
+        let segment = segment.as_str();
+
+        // Set inline vars
+        let mut saved_vars: Vec<(String, Option<String>)> = Vec::new();
+        for (key, val) in &inline_vars {
+            saved_vars.push((key.clone(), std::env::var(key).ok()));
+            unsafe { std::env::set_var(key, val) };
+        }
+
         let first_word = segment.split_whitespace().next().unwrap_or("");
 
         // exit/quit
@@ -118,6 +128,14 @@ pub fn dispatch(
                 eprintln!("{}", result.stderr);
             }
         }
+
+        // Restore inline env vars
+        for (key, prev) in saved_vars {
+            match prev {
+                Some(val) => unsafe { std::env::set_var(&key, &val) },
+                None => unsafe { std::env::remove_var(&key) },
+            }
+        }
     }
 
     DispatchResult {
@@ -131,6 +149,44 @@ pub fn dispatch(
 pub fn dispatch_simple(line: &str, evaluator: &mut Evaluator) -> i32 {
     let result = dispatch(line, evaluator, None);
     result.exit_code
+}
+
+// ── Inline Env Vars ─────────────────────────────────────────────────
+
+/// Extract leading VAR=val assignments from a command.
+/// `LANG=C sort file` → vars=[("LANG","C")], remaining="sort file"
+fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String) {
+    let mut vars = Vec::new();
+    let words: Vec<&str> = segment.split_whitespace().collect();
+    let mut cmd_start = 0;
+
+    for word in &words {
+        // Check if this word is VAR=VALUE (not ==, not a flag, identifier on left)
+        if let Some(eq_pos) = word.find('=') {
+            if eq_pos > 0 && !word.starts_with('-') && !word[..eq_pos].contains('(') {
+                let left = &word[..eq_pos];
+                // Left side must be a valid identifier
+                if left.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && left.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+                {
+                    let val = &word[eq_pos + 1..];
+                    let val = val.trim_matches('"').trim_matches('\'');
+                    vars.push((left.to_string(), val.to_string()));
+                    cmd_start += 1;
+                    continue;
+                }
+            }
+        }
+        break; // First non-assignment word = start of command
+    }
+
+    if cmd_start == 0 || cmd_start >= words.len() {
+        // No inline vars, or all words are assignments (no command)
+        return (vars, segment.to_string());
+    }
+
+    let remaining = words[cmd_start..].join(" ");
+    (vars, remaining)
 }
 
 // ── Chain Splitting ─────────────────────────────────────────────────
@@ -407,5 +463,35 @@ mod tests {
         let mut eval = Evaluator::new(&mut output);
         let result = dispatch("exit", &mut eval, None);
         assert!(result.should_exit);
+    }
+
+    // ── Inline env vars ─────────────────────────────────────────────
+
+    #[test]
+    fn extract_inline_vars() {
+        let (vars, cmd) = extract_inline_env_vars("LANG=C sort file.txt");
+        assert_eq!(vars, vec![("LANG".to_string(), "C".to_string())]);
+        assert_eq!(cmd, "sort file.txt");
+    }
+
+    #[test]
+    fn extract_multiple_inline_vars() {
+        let (vars, cmd) = extract_inline_env_vars("FOO=1 BAR=2 cmd");
+        assert_eq!(vars.len(), 2);
+        assert_eq!(cmd, "cmd");
+    }
+
+    #[test]
+    fn extract_no_inline_vars() {
+        let (vars, cmd) = extract_inline_env_vars("ls -la");
+        assert!(vars.is_empty());
+        assert_eq!(cmd, "ls -la");
+    }
+
+    #[test]
+    fn extract_assignment_not_inline() {
+        // "x=5" alone is an assignment, not an inline var
+        let (vars, _cmd) = extract_inline_env_vars("x=5");
+        assert_eq!(vars.len(), 1); // It's extracted but no command follows
     }
 }
