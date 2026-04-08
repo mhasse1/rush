@@ -51,6 +51,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "which" | "type" => { handle_which(args); true }
         "o" | "open" => { handle_open(args); true }
         "reload" => { handle_reload(evaluator, args); true }
+        "sync" => { rush_core::sync::handle_sync(args); true }
         "init" => { handle_init(); true }
         "printf" => { handle_printf(args); true }
         "mark" | "---" => { handle_mark(args); true }

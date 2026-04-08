@@ -20,5 +20,6 @@ pub mod jobs;
 pub mod platform;
 pub mod flags;
 pub mod hints;
+pub mod sync;
 #[cfg(test)]
 mod posix_tests;
