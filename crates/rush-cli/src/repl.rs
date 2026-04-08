@@ -145,6 +145,13 @@ pub fn run() {
             }
         }
     }
+
+    // Fire EXIT trap if set
+    if let Some(action) = rush_core::trap::get_exit_trap() {
+        if !action.is_empty() {
+            crate::run_line(&mut evaluator, &action);
+        }
+    }
 }
 
 /// Expand history references: !!, !$, !N

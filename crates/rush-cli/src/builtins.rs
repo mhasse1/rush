@@ -53,6 +53,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "read" => { handle_read(evaluator, args); true }
         "exec" => { handle_exec(args); true }
         "eval" => { handle_eval(evaluator, args); true }
+        "trap" => { rush_core::trap::handle_trap(args); true }
         _ => false,
     }
 }

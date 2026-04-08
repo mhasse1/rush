@@ -1,5 +1,48 @@
 use std::process::{Command, Stdio};
 
+// ── Process Group Management ────────────────────────────────────────
+
+/// Whether a command should run in foreground (gets terminal) or background.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
+pub enum JobMode {
+    Foreground,
+    Background,
+}
+
+/// Set up child process for proper shell job control.
+/// Called between fork() and exec() via pre_exec.
+#[cfg(unix)]
+unsafe fn setup_child_process(pgid: u32, foreground: bool) {
+    unsafe {
+        // Put child in its own process group (or the pipeline's group)
+        libc::setpgid(0, pgid as libc::pid_t);
+
+        if foreground {
+            // Give this process group the terminal
+            libc::tcsetpgrp(libc::STDIN_FILENO, libc::getpgrp());
+        }
+
+        // Reset signal dispositions to default for the child
+        // Per POSIX: foreground jobs must get SIG_DFL so they respond to signals
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+        libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+        libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+        libc::signal(libc::SIGTTIN, libc::SIG_DFL);
+        libc::signal(libc::SIGTTOU, libc::SIG_DFL);
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+/// Reclaim terminal control after a foreground job completes.
+#[cfg(unix)]
+pub fn reclaim_terminal() {
+    unsafe {
+        let shell_pgid = libc::getpgrp();
+        libc::tcsetpgrp(libc::STDIN_FILENO, shell_pgid);
+    }
+}
+
 /// Result of running an external command.
 #[derive(Debug, Clone)]
 pub struct CommandResult {
@@ -11,24 +54,65 @@ pub struct CommandResult {
 // ── Single Command ──────────────────────────────────────────────────
 
 /// Run a single command with inherited stdio (TTY preserved).
+/// Sets up proper process group for job control.
 pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
-    match Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-    {
-        Ok(status) => CommandResult {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit_code: status.code().unwrap_or(-1),
-        },
-        Err(e) => CommandResult {
-            stdout: String::new(),
-            stderr: format!("rush: {program}: {e}"),
-            exit_code: 127,
-        },
+        .stderr(Stdio::inherit());
+
+    // Set up child process group and signal dispositions
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        cmd.pre_exec(|| {
+            setup_child_process(0, true); // pgid=0 → own group, foreground
+            Ok(())
+        });
+    }
+
+    match cmd.status() {
+        Ok(status) => {
+            #[cfg(unix)]
+            reclaim_terminal();
+
+            // Map signal death to 128+N
+            let exit_code = status.code().unwrap_or_else(|| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    status.signal().map(|s| 128 + s).unwrap_or(-1)
+                }
+                #[cfg(not(unix))]
+                { -1 }
+            });
+
+            CommandResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code,
+            }
+        }
+        Err(e) => {
+            #[cfg(unix)]
+            reclaim_terminal();
+
+            // Distinguish 126 (not executable) from 127 (not found)
+            let exit_code = if e.kind() == std::io::ErrorKind::NotFound {
+                127
+            } else if e.kind() == std::io::ErrorKind::PermissionDenied {
+                126
+            } else {
+                127
+            };
+
+            CommandResult {
+                stdout: String::new(),
+                stderr: format!("rush: {program}: {e}"),
+                exit_code,
+            }
+        }
     }
 }
 
