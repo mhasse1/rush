@@ -1,0 +1,790 @@
+//! Rush pipeline operators: where, select, sort, count, first, last, skip,
+//! sum, avg, min, max, distinct, as json/csv, from json/csv, objectify, tee, grep.
+//!
+//! Pipeline operators transform Rush values (typically arrays of strings or hashes)
+//! flowing through a `|` chain.
+
+use std::collections::HashMap;
+use crate::value::Value;
+
+/// A parsed pipeline operator with its arguments.
+#[derive(Debug)]
+pub struct PipeOp {
+    pub name: String,
+    pub args: Vec<String>,
+}
+
+/// Known pipeline operator names.
+const PIPE_OPS: &[&str] = &[
+    "where", "select", "sort", "count", "first", "last", "skip",
+    "sum", "avg", "min", "max", "distinct", "uniq", "reverse",
+    "as", "from", "objectify", "tee", "grep", "head", "tail",
+    "each", "times", "columns", "json",
+];
+
+/// Check if a word is a pipeline operator.
+pub fn is_pipe_op(word: &str) -> bool {
+    PIPE_OPS.iter().any(|op| op.eq_ignore_ascii_case(word))
+}
+
+/// Split a pipeline string into segments on `|`.
+/// Respects quoting so `echo "a | b"` doesn't split.
+pub fn split_pipeline(line: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    for ch in line.chars() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '|' if !in_single && !in_double => {
+                segments.push(current.trim().to_string());
+                current.clear();
+                continue;
+            }
+            _ => {}
+        }
+        current.push(ch);
+    }
+    if !current.trim().is_empty() {
+        segments.push(current.trim().to_string());
+    }
+    segments
+}
+
+/// Parse a pipeline operator segment into name + args.
+pub fn parse_pipe_op(segment: &str) -> PipeOp {
+    let parts: Vec<String> = shell_split(segment);
+    let name = parts.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    let args = parts.into_iter().skip(1).collect();
+    PipeOp { name, args }
+}
+
+/// Apply a pipeline operator to a value.
+pub fn apply_pipe_op(input: Value, op: &PipeOp) -> Value {
+    match op.name.as_str() {
+        "where" => apply_where(input, &op.args),
+        "select" => apply_select(input, &op.args),
+        "sort" => apply_sort(input, &op.args),
+        "count" => apply_count(input),
+        "first" | "head" => apply_first(input, &op.args),
+        "last" | "tail" => apply_last(input, &op.args),
+        "skip" => apply_skip(input, &op.args),
+        "sum" => apply_sum(input, &op.args),
+        "avg" => apply_avg(input, &op.args),
+        "min" => apply_min(input, &op.args),
+        "max" => apply_max(input, &op.args),
+        "distinct" | "uniq" => apply_distinct(input),
+        "reverse" => apply_reverse(input),
+        "as" => apply_as(input, &op.args),
+        "from" | "json" => apply_from(input, &op.args),
+        "objectify" => apply_objectify(input),
+        "grep" => apply_grep(input, &op.args),
+        _ => input,
+    }
+}
+
+/// Convert text stdout into an array of lines for pipeline processing.
+pub fn text_to_array(text: &str) -> Value {
+    Value::Array(
+        text.lines()
+            .map(|l| Value::String(l.to_string()))
+            .collect(),
+    )
+}
+
+// ── Operator Implementations ────────────────────────────────────────
+
+fn apply_where(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    if args.is_empty() {
+        return Value::Array(items);
+    }
+
+    // Simple: where field op value (e.g., where size > 1000)
+    // Or: where /pattern/ (regex match on string repr)
+    let condition = args.join(" ");
+
+    // Regex filter: where /pattern/
+    if condition.starts_with('/') && condition.ends_with('/') && condition.len() > 2 {
+        let pattern = &condition[1..condition.len() - 1];
+        let filtered: Vec<Value> = items
+            .into_iter()
+            .filter(|v| v.to_rush_string().contains(pattern))
+            .collect();
+        return Value::Array(filtered);
+    }
+
+    // Field comparison: where field op value
+    if args.len() >= 3 {
+        let field = &args[0];
+        let op = &args[1];
+        let val = &args[2..].join(" ");
+
+        let filtered: Vec<Value> = items
+            .into_iter()
+            .filter(|item| {
+                let item_val = get_field(item, field);
+                compare_values(&item_val, op, val)
+            })
+            .collect();
+        return Value::Array(filtered);
+    }
+
+    // String contains filter: where pattern
+    let pattern = &condition;
+    let filtered: Vec<Value> = items
+        .into_iter()
+        .filter(|v| {
+            v.to_rush_string()
+                .to_lowercase()
+                .contains(&pattern.to_lowercase())
+        })
+        .collect();
+    Value::Array(filtered)
+}
+
+fn apply_select(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    if args.is_empty() {
+        return Value::Array(items);
+    }
+
+    // select field1, field2, ... — project specific fields
+    let fields: Vec<&str> = args
+        .iter()
+        .flat_map(|a| a.split(','))
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let projected: Vec<Value> = items
+        .into_iter()
+        .map(|item| {
+            if fields.len() == 1 {
+                get_field(&item, fields[0])
+            } else {
+                let mut map = HashMap::new();
+                for f in &fields {
+                    map.insert(f.to_string(), get_field(&item, f));
+                }
+                Value::Hash(map)
+            }
+        })
+        .collect();
+    Value::Array(projected)
+}
+
+fn apply_sort(input: Value, args: &[String]) -> Value {
+    let mut items = to_items(input);
+
+    if let Some(field) = args.first() {
+        // Sort by field
+        items.sort_by(|a, b| {
+            let va = get_field(a, field);
+            let vb = get_field(b, field);
+            va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+    } else {
+        items.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // Check for --desc / -r flag
+    if args.iter().any(|a| a == "--desc" || a == "-r") {
+        items.reverse();
+    }
+
+    Value::Array(items)
+}
+
+fn apply_count(input: Value) -> Value {
+    match input {
+        Value::Array(arr) => Value::Int(arr.len() as i64),
+        Value::String(s) => Value::Int(s.lines().count() as i64),
+        _ => Value::Int(1),
+    }
+}
+
+fn apply_first(input: Value, args: &[String]) -> Value {
+    let n: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let items = to_items(input);
+    if n == 1 {
+        items.into_iter().next().unwrap_or(Value::Nil)
+    } else {
+        Value::Array(items.into_iter().take(n).collect())
+    }
+}
+
+fn apply_last(input: Value, args: &[String]) -> Value {
+    let n: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let items = to_items(input);
+    let skip = items.len().saturating_sub(n);
+    if n == 1 {
+        items.into_iter().last().unwrap_or(Value::Nil)
+    } else {
+        Value::Array(items.into_iter().skip(skip).collect())
+    }
+}
+
+fn apply_skip(input: Value, args: &[String]) -> Value {
+    let n: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let items = to_items(input);
+    Value::Array(items.into_iter().skip(n).collect())
+}
+
+fn apply_sum(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    if let Some(field) = args.first() {
+        // Sum a specific field
+        let mut total = 0.0_f64;
+        for item in items {
+            if let Some(n) = get_field(&item, field).to_float() {
+                total += n;
+            }
+        }
+        if total == total.floor() {
+            Value::Int(total as i64)
+        } else {
+            Value::Float(total)
+        }
+    } else {
+        // Sum the values directly
+        let mut total = 0.0_f64;
+        for item in items {
+            if let Some(n) = item.to_float() {
+                total += n;
+            }
+        }
+        if total == total.floor() {
+            Value::Int(total as i64)
+        } else {
+            Value::Float(total)
+        }
+    }
+}
+
+fn apply_avg(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    let count = items.len();
+    if count == 0 {
+        return Value::Nil;
+    }
+    let sum = apply_sum(Value::Array(items), args);
+    match sum {
+        Value::Int(n) => Value::Float(n as f64 / count as f64),
+        Value::Float(f) => Value::Float(f / count as f64),
+        _ => Value::Nil,
+    }
+}
+
+fn apply_min(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    if let Some(field) = args.first() {
+        items
+            .into_iter()
+            .min_by(|a, b| {
+                let va = get_field(a, field);
+                let vb = get_field(b, field);
+                va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(Value::Nil)
+    } else {
+        items
+            .into_iter()
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(Value::Nil)
+    }
+}
+
+fn apply_max(input: Value, args: &[String]) -> Value {
+    let items = to_items(input);
+    if let Some(field) = args.first() {
+        items
+            .into_iter()
+            .max_by(|a, b| {
+                let va = get_field(a, field);
+                let vb = get_field(b, field);
+                va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(Value::Nil)
+    } else {
+        items
+            .into_iter()
+            .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(Value::Nil)
+    }
+}
+
+fn apply_distinct(input: Value) -> Value {
+    let items = to_items(input);
+    let mut seen = Vec::new();
+    let mut result = Vec::new();
+    for item in items {
+        let key = item.inspect();
+        if !seen.contains(&key) {
+            seen.push(key);
+            result.push(item);
+        }
+    }
+    Value::Array(result)
+}
+
+fn apply_reverse(input: Value) -> Value {
+    let mut items = to_items(input);
+    items.reverse();
+    Value::Array(items)
+}
+
+fn apply_as(input: Value, args: &[String]) -> Value {
+    let format = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+    match format.as_str() {
+        "json" => {
+            let json = value_to_json(&input);
+            Value::String(
+                serde_json::to_string_pretty(&json).unwrap_or_else(|_| "null".to_string()),
+            )
+        }
+        "csv" => {
+            let items = to_items(input);
+            Value::String(values_to_csv(&items))
+        }
+        _ => input,
+    }
+}
+
+fn apply_from(input: Value, args: &[String]) -> Value {
+    let format = args.first().map(|s| s.to_lowercase()).unwrap_or_else(|| "json".to_string());
+    let text = match &input {
+        Value::String(s) => s.clone(),
+        _ => input.to_rush_string(),
+    };
+    match format.as_str() {
+        "json" => {
+            match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(v) => json_to_value(&v),
+                Err(_) => input,
+            }
+        }
+        "csv" => csv_to_values(&text),
+        _ => input,
+    }
+}
+
+fn apply_objectify(input: Value) -> Value {
+    // Convert tabular text output to array of hashes.
+    // Detects column positions from header line.
+    let text = match &input {
+        Value::String(s) => s.clone(),
+        Value::Array(arr) => arr.iter().map(|v| v.to_rush_string()).collect::<Vec<_>>().join("\n"),
+        _ => return input,
+    };
+
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 2 {
+        return input;
+    }
+
+    // Use first line as headers
+    let headers: Vec<&str> = lines[0].split_whitespace().collect();
+    let mut objects = Vec::new();
+
+    for line in &lines[1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.splitn(headers.len(), char::is_whitespace)
+            .map(|s| s.trim())
+            .collect();
+        let mut map = HashMap::new();
+        for (i, header) in headers.iter().enumerate() {
+            let val = fields.get(i).unwrap_or(&"");
+            // Try to parse as number
+            if let Ok(n) = val.parse::<i64>() {
+                map.insert(header.to_string(), Value::Int(n));
+            } else if let Ok(f) = val.parse::<f64>() {
+                map.insert(header.to_string(), Value::Float(f));
+            } else {
+                map.insert(header.to_string(), Value::String(val.to_string()));
+            }
+        }
+        objects.push(Value::Hash(map));
+    }
+
+    Value::Array(objects)
+}
+
+fn apply_grep(input: Value, args: &[String]) -> Value {
+    let pattern = args.first().map(|s| s.as_str()).unwrap_or("");
+    if pattern.is_empty() {
+        return input;
+    }
+    let case_insensitive = args.iter().any(|a| a == "-i");
+    let items = to_items(input);
+    let filtered: Vec<Value> = items
+        .into_iter()
+        .filter(|v| {
+            let s = v.to_rush_string();
+            if case_insensitive {
+                s.to_lowercase().contains(&pattern.to_lowercase())
+            } else {
+                s.contains(pattern)
+            }
+        })
+        .collect();
+    Value::Array(filtered)
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+fn to_items(value: Value) -> Vec<Value> {
+    match value {
+        Value::Array(arr) => arr,
+        Value::String(s) => s.lines().map(|l| Value::String(l.to_string())).collect(),
+        other => vec![other],
+    }
+}
+
+fn get_field(item: &Value, field: &str) -> Value {
+    match item {
+        Value::Hash(map) => map.get(field).cloned().unwrap_or(Value::Nil),
+        Value::String(s) => {
+            // For string items, try parsing as number if field access is attempted
+            Value::String(s.clone())
+        }
+        _ => item.clone(),
+    }
+}
+
+fn compare_values(item_val: &Value, op: &str, target: &str) -> bool {
+    // Try numeric comparison
+    if let (Some(a), Ok(b)) = (item_val.to_float(), target.parse::<f64>()) {
+        return match op {
+            ">" => a > b,
+            ">=" => a >= b,
+            "<" => a < b,
+            "<=" => a <= b,
+            "==" | "=" => (a - b).abs() < f64::EPSILON,
+            "!=" => (a - b).abs() >= f64::EPSILON,
+            _ => false,
+        };
+    }
+
+    // String comparison
+    let a = item_val.to_rush_string();
+    let b = target.trim_matches('"').trim_matches('\'');
+    match op {
+        "==" | "=" => a == b,
+        "!=" => a != b,
+        ">" => a > b.to_string(),
+        "<" => (a) < b.to_string(),
+        ">=" => a >= b.to_string(),
+        "<=" => a <= b.to_string(),
+        "=~" => a.contains(b),
+        "!~" => !a.contains(b),
+        _ => false,
+    }
+}
+
+fn value_to_json(val: &Value) -> serde_json::Value {
+    match val {
+        Value::Nil => serde_json::Value::Null,
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Int(n) => serde_json::Value::Number((*n).into()),
+        Value::Float(f) => {
+            serde_json::Number::from_f64(*f)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null)
+        }
+        Value::String(s) => serde_json::Value::String(s.clone()),
+        Value::Symbol(s) => serde_json::Value::String(s.clone()),
+        Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(value_to_json).collect())
+        }
+        Value::Hash(map) => {
+            let obj: serde_json::Map<String, serde_json::Value> =
+                map.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
+            serde_json::Value::Object(obj)
+        }
+        Value::Range(start, end, exclusive) => {
+            let items: Vec<serde_json::Value> = if *exclusive {
+                (*start..*end).map(|n| serde_json::Value::Number(n.into())).collect()
+            } else {
+                (*start..=*end).map(|n| serde_json::Value::Number(n.into())).collect()
+            };
+            serde_json::Value::Array(items)
+        }
+    }
+}
+
+fn json_to_value(v: &serde_json::Value) -> Value {
+    match v {
+        serde_json::Value::Null => Value::Nil,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() { Value::Int(i) }
+            else if let Some(f) = n.as_f64() { Value::Float(f) }
+            else { Value::Nil }
+        }
+        serde_json::Value::String(s) => Value::String(s.clone()),
+        serde_json::Value::Array(arr) => Value::Array(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(obj) => {
+            let mut map = HashMap::new();
+            for (k, v) in obj {
+                map.insert(k.clone(), json_to_value(v));
+            }
+            Value::Hash(map)
+        }
+    }
+}
+
+fn values_to_csv(items: &[Value]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+
+    // Get headers from first hash item
+    if let Some(Value::Hash(first)) = items.first() {
+        let headers: Vec<&String> = first.keys().collect();
+        let mut result = headers.iter().map(|h| h.as_str()).collect::<Vec<_>>().join(",");
+        result.push('\n');
+
+        for item in items {
+            if let Value::Hash(map) = item {
+                let row: Vec<String> = headers
+                    .iter()
+                    .map(|h| {
+                        let v = map.get(*h).map(|v| v.to_rush_string()).unwrap_or_default();
+                        if v.contains(',') || v.contains('"') {
+                            format!("\"{}\"", v.replace('"', "\"\""))
+                        } else {
+                            v
+                        }
+                    })
+                    .collect();
+                result.push_str(&row.join(","));
+                result.push('\n');
+            }
+        }
+        result
+    } else {
+        // Array of non-hash items → one column
+        items.iter().map(|v| v.to_rush_string()).collect::<Vec<_>>().join("\n")
+    }
+}
+
+fn csv_to_values(text: &str) -> Value {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() < 2 {
+        return Value::String(text.to_string());
+    }
+
+    let headers: Vec<&str> = lines[0].split(',').map(|s| s.trim()).collect();
+    let mut rows = Vec::new();
+
+    for line in &lines[1..] {
+        if line.trim().is_empty() { continue; }
+        let fields: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+        let mut map = HashMap::new();
+        for (i, header) in headers.iter().enumerate() {
+            let val = fields.get(i).unwrap_or(&"").to_string();
+            map.insert(header.to_string(), Value::String(val));
+        }
+        rows.push(Value::Hash(map));
+    }
+    Value::Array(rows)
+}
+
+/// Simple shell-style word splitting (respects quotes).
+fn shell_split(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    for ch in s.chars() {
+        match ch {
+            '\'' if !in_double => { in_single = !in_single; continue; }
+            '"' if !in_single => { in_double = !in_double; continue; }
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    parts.push(std::mem::take(&mut current));
+                }
+                continue;
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn arr(vals: &[i64]) -> Value {
+        Value::Array(vals.iter().map(|n| Value::Int(*n)).collect())
+    }
+
+    fn str_arr(vals: &[&str]) -> Value {
+        Value::Array(vals.iter().map(|s| Value::String(s.to_string())).collect())
+    }
+
+    #[test]
+    fn pipe_split() {
+        assert_eq!(split_pipeline("ls | grep foo | count"), vec!["ls", "grep foo", "count"]);
+        assert_eq!(split_pipeline("echo \"a | b\""), vec!["echo \"a | b\""]);
+    }
+
+    #[test]
+    fn op_count() {
+        assert_eq!(apply_pipe_op(arr(&[1, 2, 3]), &parse_pipe_op("count")), Value::Int(3));
+    }
+
+    #[test]
+    fn op_first() {
+        assert_eq!(apply_pipe_op(arr(&[10, 20, 30]), &parse_pipe_op("first")), Value::Int(10));
+        assert_eq!(apply_pipe_op(arr(&[10, 20, 30]), &parse_pipe_op("first 2")), arr(&[10, 20]));
+    }
+
+    #[test]
+    fn op_last() {
+        assert_eq!(apply_pipe_op(arr(&[10, 20, 30]), &parse_pipe_op("last")), Value::Int(30));
+        assert_eq!(apply_pipe_op(arr(&[10, 20, 30]), &parse_pipe_op("last 2")), arr(&[20, 30]));
+    }
+
+    #[test]
+    fn op_skip() {
+        assert_eq!(apply_pipe_op(arr(&[1, 2, 3, 4]), &parse_pipe_op("skip 2")), arr(&[3, 4]));
+    }
+
+    #[test]
+    fn op_sort() {
+        assert_eq!(apply_pipe_op(arr(&[3, 1, 2]), &parse_pipe_op("sort")), arr(&[1, 2, 3]));
+    }
+
+    #[test]
+    fn op_reverse() {
+        assert_eq!(apply_pipe_op(arr(&[1, 2, 3]), &parse_pipe_op("reverse")), arr(&[3, 2, 1]));
+    }
+
+    #[test]
+    fn op_distinct() {
+        assert_eq!(apply_pipe_op(arr(&[1, 2, 2, 3, 1]), &parse_pipe_op("distinct")), arr(&[1, 2, 3]));
+    }
+
+    #[test]
+    fn op_sum() {
+        assert_eq!(apply_pipe_op(arr(&[1, 2, 3, 4]), &parse_pipe_op("sum")), Value::Int(10));
+    }
+
+    #[test]
+    fn op_avg() {
+        assert_eq!(apply_pipe_op(arr(&[2, 4, 6]), &parse_pipe_op("avg")), Value::Float(4.0));
+    }
+
+    #[test]
+    fn op_min_max() {
+        assert_eq!(apply_pipe_op(arr(&[3, 1, 2]), &parse_pipe_op("min")), Value::Int(1));
+        assert_eq!(apply_pipe_op(arr(&[3, 1, 2]), &parse_pipe_op("max")), Value::Int(3));
+    }
+
+    #[test]
+    fn op_where_string() {
+        let input = str_arr(&["hello world", "goodbye", "hello rust"]);
+        let result = apply_pipe_op(input, &parse_pipe_op("where hello"));
+        assert_eq!(result, str_arr(&["hello world", "hello rust"]));
+    }
+
+    #[test]
+    fn op_where_regex() {
+        let input = str_arr(&["ERROR: bad", "INFO: good", "ERROR: worse"]);
+        let result = apply_pipe_op(input, &parse_pipe_op("where /ERROR/"));
+        assert_eq!(result, str_arr(&["ERROR: bad", "ERROR: worse"]));
+    }
+
+    #[test]
+    fn op_grep() {
+        let input = str_arr(&["foo bar", "baz qux", "foo baz"]);
+        let result = apply_pipe_op(input, &parse_pipe_op("grep foo"));
+        assert_eq!(result, str_arr(&["foo bar", "foo baz"]));
+    }
+
+    #[test]
+    fn op_as_json() {
+        let result = apply_pipe_op(arr(&[1, 2, 3]), &parse_pipe_op("as json"));
+        if let Value::String(s) = result {
+            assert!(s.contains("["));
+            assert!(s.contains("1"));
+        } else {
+            panic!("expected string");
+        }
+    }
+
+    #[test]
+    fn op_from_json() {
+        let input = Value::String("[1, 2, 3]".to_string());
+        let result = apply_pipe_op(input, &parse_pipe_op("from json"));
+        assert_eq!(result, arr(&[1, 2, 3]));
+    }
+
+    #[test]
+    fn op_select_single_field() {
+        let items = Value::Array(vec![
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Alice".to_string())),
+                ("age".to_string(), Value::Int(30)),
+            ])),
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Bob".to_string())),
+                ("age".to_string(), Value::Int(25)),
+            ])),
+        ]);
+        let result = apply_pipe_op(items, &parse_pipe_op("select name"));
+        assert_eq!(result, str_arr(&["Alice", "Bob"]));
+    }
+
+    #[test]
+    fn op_where_field_comparison() {
+        let items = Value::Array(vec![
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Alice".to_string())),
+                ("age".to_string(), Value::Int(30)),
+            ])),
+            Value::Hash(HashMap::from([
+                ("name".to_string(), Value::String("Bob".to_string())),
+                ("age".to_string(), Value::Int(25)),
+            ])),
+        ]);
+        let result = apply_pipe_op(items, &parse_pipe_op("where age > 27"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 1);
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn op_objectify() {
+        let text = Value::String("NAME  AGE\nAlice 30\nBob   25".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 2);
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("NAME"), Some(&Value::String("Alice".to_string())));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn text_to_array_conversion() {
+        let result = text_to_array("line1\nline2\nline3");
+        assert_eq!(result, str_arr(&["line1", "line2", "line3"]));
+    }
+}
