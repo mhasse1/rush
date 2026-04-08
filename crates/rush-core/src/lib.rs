@@ -18,3 +18,4 @@ pub mod theme;
 pub mod trap;
 pub mod jobs;
 pub mod platform;
+pub mod flags;

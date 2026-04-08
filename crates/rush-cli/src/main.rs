@@ -117,10 +117,15 @@ fn main() {
 /// chain operators, triage, Rush eval, and shell execution.
 pub fn run_line(evaluator: &mut Evaluator, line: &str) {
     let trimmed = line.trim();
-    if builtins::handle(evaluator, trimmed) {
-        return;
+
+    // Only check builtins for simple commands (no chain operators).
+    // This ensures "set -e; cmd" goes through dispatch for proper chain splitting.
+    if !trimmed.contains("&&") && !trimmed.contains("||") && !trimmed.contains(';') {
+        if builtins::handle(evaluator, trimmed) {
+            return;
+        }
     }
-    // Pass job table for background job support
+
     builtins::JOB_TABLE.with(|jt| {
         dispatch::dispatch_with_jobs(trimmed, evaluator, Some(&mut jt.borrow_mut()));
     });

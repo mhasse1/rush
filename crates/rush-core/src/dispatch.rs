@@ -4,6 +4,7 @@
 //! init.rush, -c mode. This ensures consistent behavior everywhere.
 
 use crate::eval::Evaluator;
+use crate::flags;
 use crate::jobs::JobTable;
 use crate::parser;
 use crate::pipeline;
@@ -41,6 +42,10 @@ pub fn dispatch_with_jobs(
     if trimmed.is_empty() {
         return DispatchResult { exit_code: 0, should_exit: false };
     }
+
+    // Step 0: Handle heredocs — extract <<DELIM content from multi-line input
+    let trimmed = expand_heredocs(trimmed);
+    let trimmed = trimmed.as_str();
 
     // Step 1: Split on chain operators (&&, ||, ;) respecting quotes
     let chains = split_chains(trimmed);
@@ -129,7 +134,30 @@ pub fn dispatch_with_jobs(
             (false, segment)
         };
 
+        // set -x: print command before execution
+        if flags::xtrace() {
+            eprintln!("+ {segment}");
+        }
+
         let first_word = segment.split_whitespace().next().unwrap_or("");
+
+        // Core builtins handled directly in dispatch (work in chains)
+        if first_word == "set" {
+            let args = segment[first_word.len()..].trim();
+            if flags::handle_set_flag(args) {
+                last_exit = 0;
+                last_failed = false;
+                evaluator.exit_code = 0;
+                // Restore inline env vars
+                for (key, prev) in saved_vars {
+                    match prev {
+                        Some(val) => unsafe { std::env::set_var(&key, &val) },
+                        None => unsafe { std::env::remove_var(&key) },
+                    }
+                }
+                continue;
+            }
+        }
 
         // exit/quit
         if first_word == "exit" || first_word == "quit" {
@@ -209,6 +237,17 @@ pub fn dispatch_with_jobs(
                 None => unsafe { std::env::remove_var(&key) },
             }
         }
+
+        // set -e: exit on failure (with POSIX exceptions)
+        // Exceptions: condition of if/while/until, left side of && or ||
+        if flags::errexit() && last_failed {
+            // Check if this segment was in an exception context
+            let in_exception = matches!(chain.operator, ChainOp::And | ChainOp::Or);
+            if !in_exception {
+                should_exit = true;
+                break;
+            }
+        }
     }
 
     DispatchResult {
@@ -222,6 +261,102 @@ pub fn dispatch_with_jobs(
 pub fn dispatch_simple(line: &str, evaluator: &mut Evaluator) -> i32 {
     let result = dispatch(line, evaluator, None);
     result.exit_code
+}
+
+// ── Heredoc Expansion ───────────────────────────────────────────────
+
+/// Process heredocs and backslash-newline continuations in multi-line input.
+/// Converts `cmd <<EOF\nbody\nEOF` into `cmd` with heredoc content piped as stdin.
+/// Also joins `line \\\nline2` into `line line2`.
+fn expand_heredocs(input: &str) -> String {
+    let mut result = String::new();
+    let lines: Vec<&str> = input.split('\n').collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let mut line = lines[i].to_string();
+
+        // Backslash-newline continuation
+        while line.ends_with('\\') && i + 1 < lines.len() {
+            line.pop(); // remove trailing backslash
+            i += 1;
+            line.push_str(lines[i]);
+        }
+
+        // Check for heredoc: cmd <<DELIM or cmd <<-DELIM
+        if let Some(heredoc_pos) = find_heredoc(&line) {
+            let (cmd_part, rest) = line.split_at(heredoc_pos);
+            let rest = &rest[2..]; // skip <<
+            let strip_tabs = rest.starts_with('-');
+            let delim_str = if strip_tabs { &rest[1..] } else { rest };
+            let delim = delim_str.trim().trim_matches('\'').trim_matches('"');
+
+            if delim.is_empty() {
+                result.push_str(&line);
+                result.push('\n');
+                i += 1;
+                continue;
+            }
+
+            // Collect heredoc body
+            let mut body = String::new();
+            i += 1;
+            while i < lines.len() {
+                let hline = if strip_tabs {
+                    lines[i].trim_start_matches('\t')
+                } else {
+                    lines[i]
+                };
+                if hline.trim() == delim {
+                    i += 1;
+                    break;
+                }
+                body.push_str(hline);
+                body.push('\n');
+                i += 1;
+            }
+
+            // Write heredoc body to a temp file and redirect stdin
+            let tmp = std::env::temp_dir().join(format!("rush_heredoc_{}", std::process::id()));
+            if std::fs::write(&tmp, &body).is_ok() {
+                let tmp_path = tmp.to_string_lossy();
+                result.push_str(cmd_part.trim());
+                result.push_str(&format!(" < {tmp_path}"));
+                result.push('\n');
+            }
+            continue;
+        }
+
+        result.push_str(&line);
+        result.push('\n');
+        i += 1;
+    }
+
+    // Remove trailing newline
+    if result.ends_with('\n') {
+        result.pop();
+    }
+    result
+}
+
+/// Find the position of << in a line (not inside quotes).
+fn find_heredoc(line: &str) -> Option<usize> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    for i in 0..chars.len().saturating_sub(1) {
+        if chars[i] == '\'' && !in_double { in_single = !in_single; }
+        if chars[i] == '"' && !in_single { in_double = !in_double; }
+        if !in_single && !in_double && chars[i] == '<' && chars[i + 1] == '<' {
+            // Make sure it's not <<< (herestring)
+            if i + 2 < chars.len() && chars[i + 2] == '<' {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+    None
 }
 
 // ── Inline Env Vars ─────────────────────────────────────────────────

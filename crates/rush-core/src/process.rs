@@ -1,5 +1,6 @@
 use std::process::{Command, Stdio};
 
+use crate::flags;
 use crate::platform;
 
 /// Reclaim terminal control after a foreground job completes.
@@ -501,8 +502,8 @@ fn parse_and_expand(line: &str) -> Vec<String> {
             // 4. Arithmetic expansion ($((expr)))
             let expanded = expand_tilde(&w);
 
-            // 5. Pathname/glob expansion (unquoted only)
-            if !was_quoted && contains_glob_chars(&expanded) {
+            // 5. Pathname/glob expansion (unquoted only, unless set -f)
+            if !was_quoted && !flags::noglob() && contains_glob_chars(&expanded) {
                 match glob::glob(&expanded) {
                     Ok(paths) => {
                         let mut matches: Vec<String> = paths

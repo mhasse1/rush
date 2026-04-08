@@ -580,12 +580,12 @@ fn handle_set(args: &str) {
         return;
     }
 
-    // set -e / set +e / set -x / set +x shortcuts
+    // POSIX set flags
+    if rush_core::flags::handle_set_flag(args) {
+        return;
+    }
+
     match args {
-        "-e" => { config.set("stop_on_error", "true"); }
-        "+e" => { config.set("stop_on_error", "false"); }
-        "-x" => { config.set("trace_commands", "true"); }
-        "+x" => { config.set("trace_commands", "false"); }
         "vi" => { config.set("vi", ""); }
         "emacs" => { config.set("emacs", ""); }
         _ => {
