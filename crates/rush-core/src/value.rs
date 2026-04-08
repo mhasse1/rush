@@ -120,6 +120,7 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Symbol(a), Value::Symbol(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Hash(a), Value::Hash(b)) => a.len() == b.len() && a.iter().all(|(k, v)| b.get(k) == Some(v)),
             (Value::Range(a1, a2, a3), Value::Range(b1, b2, b3)) => {
                 a1 == b1 && a2 == b2 && a3 == b3
             }
