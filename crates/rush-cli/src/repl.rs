@@ -69,20 +69,23 @@ pub fn run(is_login: bool) {
             ]),
         );
         let mut normal_bindings = default_vi_normal_keybindings();
-        // If fzf is available, bind Ctrl+R to fzf history search
         if has_fzf() {
+            // fzf available: Ctrl+R and / and ? all go to fzf
+            let fzf_event = ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string());
             insert_bindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('r'),
-                ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string()),
+                KeyModifiers::CONTROL, KeyCode::Char('r'), fzf_event.clone(),
             );
             normal_bindings.add_binding(
-                KeyModifiers::CONTROL,
-                KeyCode::Char('r'),
-                ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string()),
+                KeyModifiers::CONTROL, KeyCode::Char('r'), fzf_event.clone(),
+            );
+            normal_bindings.add_binding(
+                KeyModifiers::NONE, KeyCode::Char('/'), fzf_event.clone(),
+            );
+            normal_bindings.add_binding(
+                KeyModifiers::NONE, KeyCode::Char('?'), fzf_event,
             );
         }
-        // Vi / and ? search handled natively by our reedline fork
+        // Without fzf: / and ? use reedline's built-in search (from our fork)
         Box::new(Vi::new(insert_bindings, normal_bindings))
     };
 
