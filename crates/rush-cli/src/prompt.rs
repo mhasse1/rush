@@ -148,7 +148,11 @@ fn short_cwd() -> String {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "?".to_string());
 
+    // Normalize to forward slashes (Unix-style on all platforms)
+    let cwd = cwd.replace('\\', "/");
+
     let display = if let Ok(home) = std::env::var("HOME") {
+        let home = home.replace('\\', "/");
         if let Some(rest) = cwd.strip_prefix(&home) {
             if rest.is_empty() { "~".to_string() } else { format!("~{rest}") }
         } else {

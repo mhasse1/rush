@@ -484,6 +484,96 @@ fn json_to_value(v: &serde_json::Value) -> Value {
     }
 }
 
+// ── Path ────────────────────────────────────────────────────────────
+
+pub fn path_method(method: &str, args: &[Value]) -> Value {
+    match method {
+        // Path.sep — platform-native separator ("/" or "\")
+        "sep" => Value::String(std::path::MAIN_SEPARATOR.to_string()),
+
+        // Path.join("a", "b", "c") — join with forward slashes (Rush-style)
+        "join" => {
+            let parts: Vec<String> = args.iter().map(|v| v.to_rush_string()).collect();
+            Value::String(parts.join("/"))
+        }
+
+        // Path.normalize(path) — canonical Rush path (forward slashes)
+        "normalize" => {
+            let p = arg_str(args, 0);
+            Value::String(p.replace('\\', "/"))
+        }
+
+        // Path.native(path) — convert to platform-native separators
+        "native" => {
+            let p = arg_str(args, 0);
+            if cfg!(windows) {
+                Value::String(p.replace('/', "\\"))
+            } else {
+                Value::String(p)
+            }
+        }
+
+        // Path.expand(path) — expand ~ and env vars, normalize
+        "expand" => {
+            let p = arg_str(args, 0);
+            let expanded = if p.starts_with("~/") || p == "~" {
+                let home = std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_default()
+                    .replace('\\', "/");
+                if p == "~" { home } else { format!("{home}{}", &p[1..]) }
+            } else {
+                p
+            };
+            Value::String(expanded.replace('\\', "/"))
+        }
+
+        // Path.exist?(path) — check if path exists
+        "exist?" | "exists?" => {
+            let p = arg_str(args, 0);
+            Value::Bool(Path::new(&p).exists())
+        }
+
+        // Path.absolute?(path) — check if path is absolute
+        "absolute?" => {
+            let p = arg_str(args, 0);
+            Value::Bool(Path::new(&p).is_absolute())
+        }
+
+        // Path.ext(path) — file extension
+        "ext" | "extension" => {
+            let p = arg_str(args, 0);
+            Value::String(
+                Path::new(&p).extension()
+                    .map(|e| format!(".{}", e.to_string_lossy()))
+                    .unwrap_or_default()
+            )
+        }
+
+        // Path.basename(path) — file name
+        "basename" => {
+            let p = arg_str(args, 0);
+            Value::String(
+                Path::new(&p).file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            )
+        }
+
+        // Path.dirname(path) — parent directory
+        "dirname" => {
+            let p = arg_str(args, 0);
+            Value::String(
+                Path::new(&p).parent()
+                    .map(|d| d.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_default()
+            )
+        }
+
+        _ => Value::Nil,
+    }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 fn arg_str(args: &[Value], index: usize) -> String {

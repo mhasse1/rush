@@ -1007,7 +1007,7 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                     } else {
                         // Backslash escapes the next character (POSIX behavior).
                         // On Windows, env var values have backslashes pre-escaped
-                        // by protect_backslashes() during expansion, so this is
+                        // by normalize_path_separators() during expansion, so this is
                         // consistent across platforms.
                         current.push(chars.next().unwrap());
                     }
@@ -1039,16 +1039,17 @@ pub fn expand_env_vars_pub(arg: &str) -> String { expand_env_vars(arg) }
 /// Public wrapper for IFS split tests.
 pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
 
-/// On Windows, escape backslashes in expanded values so the command-line
-/// parser doesn't treat them as escape characters. On Unix, this is a no-op.
-/// This ensures `echo $HOME` works correctly on Windows where HOME=C:\Users\mark:
-/// the value becomes C:\\Users\\mark in the expansion, and the parser reduces
-/// \\ back to \ — giving the correct output while keeping escape behavior
-/// consistent across platforms.
+/// Normalize a path-like value for Rush's internal representation.
+/// On Windows, converts backslashes to forward slashes so paths are
+/// consistent across platforms. On Unix, this is a no-op.
+///
+/// This means `$HOME` on Windows gives `C:/Users/mark` (not `C:\Users\mark`),
+/// keeping all Rush scripts and prompt output Unix-style.
+/// Use `.native_path` string method to convert back when needed.
 #[inline]
-fn protect_backslashes(value: &str) -> String {
+fn normalize_path_separators(value: &str) -> String {
     if cfg!(windows) && value.contains('\\') {
-        value.replace('\\', "\\\\")
+        value.replace('\\', "/")
     } else {
         value.to_string()
     }
@@ -1121,7 +1122,7 @@ fn expand_env_vars(arg: &str) -> String {
                     if depth > 0 { content.push(chars[i]); }
                     i += 1;
                 }
-                result.push_str(&protect_backslashes(&expand_parameter(&content)));
+                result.push_str(&normalize_path_separators(&expand_parameter(&content)));
                 continue;
             }
 
@@ -1163,7 +1164,7 @@ fn expand_env_vars(arg: &str) -> String {
                     }
                     _ => std::env::var(&var_name).unwrap_or_default(),
                 };
-                result.push_str(&protect_backslashes(&value));
+                result.push_str(&normalize_path_separators(&value));
                 continue;
             }
 
@@ -1809,7 +1810,7 @@ mod tests {
     #[test]
     fn env_var_expansion() {
         let home = std::env::var("HOME").unwrap_or_default();
-        let expected = protect_backslashes(&home);
+        let expected = normalize_path_separators(&home);
         let result = expand_env_vars("$HOME/bin");
         assert_eq!(result, format!("{expected}/bin"));
     }
@@ -1817,7 +1818,7 @@ mod tests {
     #[test]
     fn env_var_braces() {
         let home = std::env::var("HOME").unwrap_or_default();
-        let expected = protect_backslashes(&home);
+        let expected = normalize_path_separators(&home);
         let result = expand_env_vars("${HOME}/bin");
         assert_eq!(result, format!("{expected}/bin"));
     }

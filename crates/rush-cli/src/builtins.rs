@@ -34,7 +34,12 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "source" | "." => { handle_source(evaluator, args); true }
         "clear" => { print!("\x1b[2J\x1b[H"); true }
         "exit" | "quit" => std::process::exit(evaluator.exit_code),
-        "pwd" => { println!("{}", std::env::current_dir().unwrap_or_default().display()); true }
+        "pwd" => {
+            let cwd = std::env::current_dir().unwrap_or_default()
+                .to_string_lossy().replace('\\', "/");
+            println!("{cwd}");
+            true
+        }
         "alias" => { handle_alias(args); true }
         "unalias" => { handle_unalias(args); true }
         "pushd" => { handle_pushd(evaluator, args); true }
@@ -1694,6 +1699,7 @@ pub fn inject_builtin_vars(evaluator: &mut Evaluator) {
     evaluator.env.set("$user", Value::String(rush_core::llm::get_username()));
     evaluator.env.set("$rush_version", Value::String(crate::rush_version_short().to_string()));
     evaluator.env.set("$pid", Value::Int(std::process::id() as i64));
+    evaluator.env.set("$sep", Value::String(std::path::MAIN_SEPARATOR.to_string()));
     evaluator.env.set("__rush_arch", Value::String(std::env::consts::ARCH.to_string()));
     evaluator.env.set("__rush_os_version", Value::String(
         std::env::var("RUSH_OS_VERSION").unwrap_or_else(|_| "unknown".to_string())

@@ -719,6 +719,70 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Path stdlib & cross-platform paths
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn path_join() {
+        let (_, lines) = run("puts Path.join(\"Users\", \"mark\", \"src\")");
+        assert_eq!(lines[0], "Users/mark/src");
+    }
+
+    #[test]
+    fn path_normalize() {
+        let (_, lines) = run("puts Path.normalize(\"C:\\\\Users\\\\mark\")");
+        assert_eq!(lines[0], "C:/Users/mark");
+    }
+
+    #[test]
+    fn path_basename() {
+        let (_, lines) = run("puts Path.basename(\"/home/mark/file.txt\")");
+        assert_eq!(lines[0], "file.txt");
+    }
+
+    #[test]
+    fn path_dirname() {
+        let (_, lines) = run("puts Path.dirname(\"/home/mark/file.txt\")");
+        assert_eq!(lines[0], "/home/mark");
+    }
+
+    #[test]
+    fn path_ext() {
+        let (_, lines) = run("puts Path.ext(\"/home/mark/file.txt\")");
+        assert_eq!(lines[0], ".txt");
+    }
+
+    #[test]
+    fn path_expand_tilde() {
+        let (_, lines) = run("puts Path.expand(\"~/src\")");
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+            .replace('\\', "/");
+        assert_eq!(lines[0], format!("{home}/src"));
+    }
+
+    #[test]
+    fn path_sep() {
+        let (_, lines) = run("puts Path.sep");
+        let expected = std::path::MAIN_SEPARATOR.to_string();
+        assert_eq!(lines[0], expected);
+    }
+
+    #[test]
+    fn string_unix_path() {
+        let (_, lines) = run("puts \"C:\\\\Users\\\\mark\".unix_path");
+        assert_eq!(lines[0], "C:/Users/mark");
+    }
+
+    #[test]
+    fn string_native_path_noop_on_unix() {
+        // On Unix, native_path is a no-op (forward slashes stay)
+        let (_, lines) = run("puts \"/home/mark\".native_path");
+        assert_eq!(lines[0], "/home/mark");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Plugin system
     // ═══════════════════════════════════════════════════════════════
 

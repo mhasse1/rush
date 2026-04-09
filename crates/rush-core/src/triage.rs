@@ -103,9 +103,9 @@ pub fn is_rush_syntax(input: &str) -> bool {
         return true;
     }
 
-    // Stdlib receiver: File.xxx, Dir.xxx, Time.xxx, env.xxx
-    let stdlib = ["file", "dir", "time", "env"];
-    if stdlib.iter().any(|s| first_word.eq_ignore_ascii_case(s)) && first_word.contains('.') || trimmed.starts_with("File.") || trimmed.starts_with("Dir.") || trimmed.starts_with("Time.") || trimmed.starts_with("env.") {
+    // Stdlib receiver: File.xxx, Dir.xxx, Time.xxx, Path.xxx, env.xxx
+    let stdlib = ["file", "dir", "time", "env", "path"];
+    if stdlib.iter().any(|s| first_word.eq_ignore_ascii_case(s)) && first_word.contains('.') || trimmed.starts_with("File.") || trimmed.starts_with("Dir.") || trimmed.starts_with("Time.") || trimmed.starts_with("Path.") || trimmed.starts_with("env.") {
         return true;
     }
 

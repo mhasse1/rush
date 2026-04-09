@@ -385,6 +385,7 @@ impl<'a> Evaluator<'a> {
                         "file" => stdlib::file_method(method, &arg_vals),
                         "dir" => stdlib::dir_method(method, &arg_vals),
                         "time" => stdlib::time_method(method, &arg_vals),
+                        "path" => stdlib::path_method(method, &arg_vals),
                         "env" if method == "[]" => {
                             let key = arg_vals.first().map(|v| v.to_rush_string()).unwrap_or_default();
                             stdlib::env_get(&key)
@@ -407,6 +408,7 @@ impl<'a> Evaluator<'a> {
                         "time" => stdlib::time_method(property, &[]),
                         "dir" => stdlib::dir_method(property, &[]),
                         "file" => stdlib::file_method(property, &[]),
+                        "path" => stdlib::path_method(property, &[]),
                         "env" => stdlib::env_get(property),
                         _ => Value::Nil,
                     });
@@ -640,6 +642,7 @@ impl<'a> Evaluator<'a> {
                 "dir" => Some("dir"),
                 "time" => Some("time"),
                 "env" => Some("env"),
+                "path" => Some("path"),
                 _ => None,
             }
         } else {
@@ -882,6 +885,19 @@ impl<'a> Evaluator<'a> {
             "to_i" => Value::Int(s.parse::<i64>().unwrap_or(0)),
             "to_f" => Value::Float(s.parse::<f64>().unwrap_or(0.0)),
             "to_s" => Value::String(s.to_string()),
+            // Cross-platform path methods
+            "native_path" => {
+                // Convert forward slashes to platform-native separator
+                if cfg!(windows) {
+                    Value::String(s.replace('/', "\\"))
+                } else {
+                    Value::String(s.to_string())
+                }
+            }
+            "unix_path" => {
+                // Normalize to forward slashes (Unix-style)
+                Value::String(s.replace('\\', "/"))
+            }
             "[]" => self.index_access(&Value::String(s.to_string()), args),
             _ => Value::Nil,
         }
