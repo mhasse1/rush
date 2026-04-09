@@ -1777,7 +1777,9 @@ mod tests {
         std::fs::write(dir.join("b.txt"), "").ok();
         std::fs::write(dir.join("c.log"), "").ok();
 
-        let pattern = format!("{}/*.txt", dir.to_string_lossy());
+        // Use forward slashes for cross-platform compatibility
+        let dir_str = dir.to_string_lossy().replace('\\', "/");
+        let pattern = format!("{dir_str}/*.txt");
         let result = parse_and_expand(&format!("ls {pattern}"));
         // Should have "ls" + 2 .txt files
         assert!(result.len() >= 3, "expected ls + 2 files, got {:?}", result);
@@ -1807,15 +1809,17 @@ mod tests {
     #[test]
     fn env_var_expansion() {
         let home = std::env::var("HOME").unwrap_or_default();
+        let expected = protect_backslashes(&home);
         let result = expand_env_vars("$HOME/bin");
-        assert_eq!(result, format!("{home}/bin"));
+        assert_eq!(result, format!("{expected}/bin"));
     }
 
     #[test]
     fn env_var_braces() {
         let home = std::env::var("HOME").unwrap_or_default();
+        let expected = protect_backslashes(&home);
         let result = expand_env_vars("${HOME}/bin");
-        assert_eq!(result, format!("{home}/bin"));
+        assert_eq!(result, format!("{expected}/bin"));
     }
 
     #[test]
