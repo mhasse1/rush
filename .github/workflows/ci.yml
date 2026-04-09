@@ -89,6 +89,9 @@ jobs:
       - name: Build
         run: cargo build --release
 
+      - name: Build debug (for tests)
+        run: cargo build
+
       - name: Unit Tests
         run: cargo test
 

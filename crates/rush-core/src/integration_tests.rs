@@ -409,22 +409,46 @@ mod tests {
     // CLI: --version, --help, --login
     // ═══════════════════════════════════════════════════════════════
 
-    fn rush_cli_path() -> String {
-        // Find the built binary
-        let mut path = std::env::current_exe().unwrap();
+    fn rush_cli_path() -> Option<String> {
+        // Find the built binary — try multiple locations
+        let mut path = std::env::current_exe().ok()?;
         path.pop(); // remove test binary name
         path.pop(); // remove deps/
         path.push("rush-cli");
         if path.exists() {
-            return path.to_string_lossy().to_string();
+            return Some(path.to_string_lossy().to_string());
         }
-        // Fallback: try release build
-        "target/release/rush-cli".to_string()
+        // Try release build
+        let release = std::path::PathBuf::from("target/release/rush-cli");
+        if release.exists() {
+            return Some(release.to_string_lossy().to_string());
+        }
+        // Try workspace root
+        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+            let ws = std::path::PathBuf::from(manifest)
+                .parent().unwrap()
+                .parent().unwrap()
+                .join("target/debug/rush-cli");
+            if ws.exists() {
+                return Some(ws.to_string_lossy().to_string());
+            }
+        }
+        None // binary not found — tests that need it will skip
+    }
+
+    /// Helper: skip test if rush-cli binary isn't available
+    macro_rules! require_cli {
+        () => {
+            match rush_cli_path() {
+                Some(p) => p,
+                None => { eprintln!("skipping: rush-cli not found"); return; }
+            }
+        };
     }
 
     #[test]
     fn cli_version_flag() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .arg("--version")
             .output();
         if let Ok(out) = output {
@@ -437,7 +461,7 @@ mod tests {
 
     #[test]
     fn cli_help_flag() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .arg("--help")
             .output();
         if let Ok(out) = output {
@@ -450,7 +474,7 @@ mod tests {
 
     #[test]
     fn cli_login_env_var() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["--login", "-c", "echo $RUSH_LOGIN"])
             .output();
         if let Ok(out) = output {
@@ -461,7 +485,7 @@ mod tests {
 
     #[test]
     fn cli_non_login_env_var() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "echo $RUSH_LOGIN"])
             .output();
         if let Ok(out) = output {
@@ -472,7 +496,7 @@ mod tests {
 
     #[test]
     fn cli_env_vars_injected() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "echo $RUSH_OS $RUSH_ARCH"])
             .output();
         if let Ok(out) = output {
@@ -487,7 +511,7 @@ mod tests {
 
     #[test]
     fn cli_builtin_vars_in_rush() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "puts $os"])
             .output();
         if let Ok(out) = output {
@@ -521,7 +545,7 @@ mod tests {
         // Copy our init.rush there
         std::fs::copy(&init_path, config_dir.join("init.rush")).unwrap();
 
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "path add /opt/test-path --save"])
             .env("HOME", &home_tmp)
             .output();
@@ -549,7 +573,7 @@ mod tests {
         std::fs::write(config_dir.join("init.rush"),
             "# startup\n\n# ── PATH ─────────────────────────────────────────────────\npath add /usr/local/bin\n").unwrap();
 
-        let _output = std::process::Command::new(rush_cli_path())
+        let _output = std::process::Command::new(require_cli!())
             .args(["-c", "path add /opt/second --save"])
             .env("HOME", &home_tmp)
             .output();
@@ -575,7 +599,7 @@ mod tests {
         let script = tmp.join("test-path-block.rush");
         std::fs::write(&script, "path add\n  /opt/block-test-1\n  /opt/block-test-2\nend\necho $PATH").unwrap();
 
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .arg(script.to_str().unwrap())
             .output();
 
@@ -606,7 +630,7 @@ mod tests {
             "echo $PATH\n",
         )).unwrap();
 
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .arg(script.to_str().unwrap())
             .output();
 
@@ -636,7 +660,7 @@ mod tests {
             r#"{"edit_mode":"vi","show_timing":false}"#).unwrap();
 
         // Run "set show_timing true" WITHOUT --save
-        let _output = std::process::Command::new(rush_cli_path())
+        let _output = std::process::Command::new(require_cli!())
             .args(["-c", "set show_timing true"])
             .env("HOME", &home_tmp)
             .output();
@@ -659,7 +683,7 @@ mod tests {
             r#"{"edit_mode":"vi","show_timing":false}"#).unwrap();
 
         // Run "set show_timing true --save"
-        let _output = std::process::Command::new(rush_cli_path())
+        let _output = std::process::Command::new(require_cli!())
             .args(["-c", "set show_timing true --save"])
             .env("HOME", &home_tmp)
             .output();
@@ -681,7 +705,7 @@ mod tests {
             r#"{"edit_mode":"emacs"}"#).unwrap();
 
         // "set vi" should always save (no --save needed)
-        let _output = std::process::Command::new(rush_cli_path())
+        let _output = std::process::Command::new(require_cli!())
             .args(["-c", "set vi"])
             .env("HOME", &home_tmp)
             .output();
@@ -720,7 +744,7 @@ mod tests {
     #[test]
     fn plugin_block_in_script() {
         // Test that plugin.ps blocks execute through CLI if rush-ps is available
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "plugin.ps\n  1 + 1\nend"])
             .output();
 
@@ -740,7 +764,7 @@ mod tests {
 
     #[test]
     fn plugin_ps_multiline() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "plugin.ps\n  $x = 10\n  $y = 20\n  $x + $y\nend"])
             .output();
 
@@ -756,7 +780,7 @@ mod tests {
 
     #[test]
     fn plugin_ps_error_handling() {
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", "plugin.ps\n  this-is-not-a-valid-command-xyz\nend"])
             .output();
 
@@ -778,7 +802,7 @@ mod tests {
     fn plugin_ps_persistent_session() {
         // Two plugin.ps blocks in sequence should share state
         let script = "plugin.ps\n  $rush_test_var = 42\nend\nplugin.ps\n  $rush_test_var\nend";
-        let output = std::process::Command::new(rush_cli_path())
+        let output = std::process::Command::new(require_cli!())
             .args(["-c", script])
             .output();
 
