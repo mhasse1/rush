@@ -297,13 +297,22 @@ impl Parser {
             Vec::new()
         };
         self.skip_newlines();
+
+        // Capture raw body source for mixed Rush+shell function bodies
+        let body_start = self.current().position;
         let body = self.parse_body(&[TokenType::End])?;
+        let body_end = self.current().position;
+        let raw_body = self.source.as_ref().map(|s| {
+            s[body_start..body_end].trim().to_string()
+        });
+
         self.expect(TokenType::End)?;
         Ok(Node::FunctionDef {
             name,
             params,
             body,
             is_static: false,
+            raw_body,
         })
     }
 
@@ -410,6 +419,7 @@ impl Parser {
                     params,
                     body,
                     is_static,
+                    raw_body: None, // class methods don't need mixed dispatch
                 };
 
                 if is_static {

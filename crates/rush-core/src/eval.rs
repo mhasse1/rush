@@ -290,11 +290,13 @@ impl<'a> Evaluator<'a> {
                 params,
                 body,
                 is_static: _,
+                raw_body,
             } => {
                 self.env.define_function(Function {
                     name: name.clone(),
                     params: params.clone(),
                     body: body.clone(),
+                    raw_body: raw_body.clone(),
                 });
                 Ok(Value::Nil)
             }
@@ -538,6 +540,7 @@ impl<'a> Evaluator<'a> {
                                 name: mname.clone(),
                                 params: params.clone(),
                                 body: body.clone(),
+                                raw_body: None,
                             },
                         );
                     }
@@ -556,6 +559,7 @@ impl<'a> Evaluator<'a> {
                                 name: mname.clone(),
                                 params: params.clone(),
                                 body: body.clone(),
+                                raw_body: None,
                             },
                         );
                     }
@@ -573,6 +577,7 @@ impl<'a> Evaluator<'a> {
                             name: cname.clone(),
                             params: params.clone(),
                             body: body.clone(),
+                            raw_body: None,
                         })
                     } else {
                         None
@@ -1345,6 +1350,19 @@ impl<'a> Evaluator<'a> {
             self.env.set_local(&param.name, val);
         }
 
+        // If the function has a raw body, dispatch each line through triage.
+        // This handles mixed Rush+shell function bodies like:
+        //   def mcd(dir)
+        //     mkdir -p $dir    # shell command
+        //     cd $dir          # builtin
+        //     puts "done"      # Rush
+        //   end
+        if let Some(ref raw) = func.raw_body {
+            let result = self.exec_function_body_mixed(raw, &func.body);
+            self.env.pop_scope();
+            return result;
+        }
+
         let result = match self.exec(&func.body) {
             Ok(v) => Ok(v),
             Err(Signal::Return(v)) => Ok(v),
@@ -1352,6 +1370,118 @@ impl<'a> Evaluator<'a> {
         };
 
         self.env.pop_scope();
+        result
+    }
+
+    /// Execute a function body with mixed Rush+shell dispatch.
+    /// For each line: if it's Rush syntax, parse and eval; if shell, run natively.
+    fn exec_function_body_mixed(&mut self, raw: &str, ast_body: &[Node]) -> Result<Value, Signal> {
+        // First, try executing the parsed AST body.
+        // If all nodes evaluate successfully (not Nil for command-like things), use that.
+        // This handles pure-Rush functions efficiently.
+        // Detect shell commands: lines that triage says are shell AND look like
+        // actual commands (contain flags, pipes, paths, or known shell patterns).
+        // Simple expressions like "a + 1" are NOT shell commands even though
+        // triage doesn't recognize them as Rush (because 'a' looks like a command).
+        let has_shell_commands = raw.lines().any(|line| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return false;
+            }
+            if crate::triage::is_rush_syntax(trimmed) {
+                return false;
+            }
+            // Only treat as shell if it looks like an actual command invocation:
+            // - contains flags (-x, --flag)
+            // - contains path separators (/)
+            // - first word is a known command on PATH
+            let first_word = trimmed.split_whitespace().next().unwrap_or("");
+            first_word.contains('/')
+                || trimmed.contains(" -")
+                || trimmed.contains(" --")
+                || trimmed.contains('|')
+                || trimmed.contains('>')
+                || trimmed.contains('<')
+                || crate::process::command_exists(first_word)
+        });
+
+        if !has_shell_commands {
+            // Pure Rush function — use parsed AST
+            return match self.exec(ast_body) {
+                Ok(v) => Ok(v),
+                Err(Signal::Return(v)) => Ok(v),
+                Err(other) => Err(other),
+            };
+        }
+
+        // Mixed body — dispatch line by line
+        let mut last_value = Value::Nil;
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Expand Rush variables in the line
+            let expanded = self.expand_vars_in_line(trimmed);
+            let expanded = expanded.as_str();
+
+            if crate::triage::is_rush_syntax(expanded) {
+                // Parse and eval as Rush
+                match crate::parser::parse(expanded) {
+                    Ok(nodes) => {
+                        match self.exec(&nodes) {
+                            Ok(v) => last_value = v,
+                            Err(Signal::Return(v)) => return Ok(v),
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    Err(_) => {
+                        // Parse failed — try as shell command
+                        let result = crate::dispatch::dispatch(expanded, self, None);
+                        self.exit_code = result.exit_code;
+                    }
+                }
+            } else {
+                // Shell command — dispatch through the standard pipeline
+                let result = crate::dispatch::dispatch(expanded, self, None);
+                self.exit_code = result.exit_code;
+            }
+        }
+        Ok(last_value)
+    }
+
+    /// Expand Rush variables ($name references from the current scope) in a line.
+    fn expand_vars_in_line(&self, line: &str) -> String {
+        if !line.contains('$') {
+            return line.to_string();
+        }
+        let mut result = String::with_capacity(line.len());
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '$' && i + 1 < chars.len()
+                && (chars[i + 1].is_ascii_alphabetic() || chars[i + 1] == '_')
+            {
+                i += 1;
+                let mut var_name = String::new();
+                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                    var_name.push(chars[i]);
+                    i += 1;
+                }
+                // Check Rush scope first, then env vars
+                if let Some(val) = self.env.get(&var_name) {
+                    result.push_str(&val.to_rush_string());
+                } else if let Ok(val) = std::env::var(&var_name) {
+                    result.push_str(&val);
+                } else {
+                    // Variable not found — leave as empty string
+                }
+            } else {
+                result.push(chars[i]);
+                i += 1;
+            }
+        }
         result
     }
 

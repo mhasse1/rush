@@ -719,6 +719,37 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Shell commands in function bodies
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn function_with_shell_commands() {
+        let cli = require_cli!();
+        let dir = std::env::temp_dir().join("rush-test-fn-shell");
+        let dir_str = dir.to_string_lossy().replace('\\', "/");
+        let script = format!(
+            "def mcd(d)\n  mkdir -p $d\n  cd $d\nend\nmcd(\"{dir_str}\")\nputs Dir.pwd"
+        );
+        let output = std::process::Command::new(&cli)
+            .args(["-c", &script])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            // On macOS /tmp → /private/tmp
+            assert!(stdout.contains("rush-test-fn-shell"),
+                "function should cd into the dir: {stdout}");
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn function_mixed_rush_and_shell() {
+        // Function with both Rush expressions and shell commands
+        let (_, lines) = run("def greet(name)\n  puts \"hello #{name}\"\nend\ngreet(\"world\")");
+        assert_eq!(lines[0], "hello world");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Path stdlib & cross-platform paths
     // ═══════════════════════════════════════════════════════════════
 

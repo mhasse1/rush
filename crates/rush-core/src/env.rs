@@ -9,6 +9,9 @@ pub struct Function {
     pub name: String,
     pub params: Vec<ast::ParamDef>,
     pub body: Vec<ast::Node>,
+    /// Raw source of the function body — used for mixed Rush+shell dispatch.
+    /// If present, body lines are triaged (Rush vs shell) at call time.
+    pub raw_body: Option<String>,
 }
 
 /// A user-defined class.

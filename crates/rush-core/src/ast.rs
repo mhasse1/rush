@@ -67,6 +67,8 @@ pub enum Node {
         params: Vec<ParamDef>,
         body: Vec<Node>,
         is_static: bool,
+        /// Raw source of the body — for mixed Rush+shell dispatch.
+        raw_body: Option<String>,
     },
 
     /// `class Name [< Parent] ... end`
