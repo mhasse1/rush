@@ -1004,17 +1004,11 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                             }
                             _ => current.push('\\'),
                         }
-                    } else if cfg!(windows) {
-                        // On Windows, backslash is a path separator — preserve it.
-                        // Only treat as escape before special shell chars.
-                        match next {
-                            '"' | '\'' | '$' | '\\' | ' ' | '\t' | '`' => {
-                                current.push(chars.next().unwrap());
-                            }
-                            _ => current.push('\\'),
-                        }
                     } else {
-                        // Unix: backslash escapes the next character
+                        // Backslash escapes the next character (POSIX behavior).
+                        // On Windows, env var values have backslashes pre-escaped
+                        // by protect_backslashes() during expansion, so this is
+                        // consistent across platforms.
                         current.push(chars.next().unwrap());
                     }
                 }
@@ -1044,6 +1038,21 @@ pub fn expand_env_vars_pub(arg: &str) -> String { expand_env_vars(arg) }
 
 /// Public wrapper for IFS split tests.
 pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
+
+/// On Windows, escape backslashes in expanded values so the command-line
+/// parser doesn't treat them as escape characters. On Unix, this is a no-op.
+/// This ensures `echo $HOME` works correctly on Windows where HOME=C:\Users\mark:
+/// the value becomes C:\\Users\\mark in the expansion, and the parser reduces
+/// \\ back to \ — giving the correct output while keeping escape behavior
+/// consistent across platforms.
+#[inline]
+fn protect_backslashes(value: &str) -> String {
+    if cfg!(windows) && value.contains('\\') {
+        value.replace('\\', "\\\\")
+    } else {
+        value.to_string()
+    }
+}
 
 /// Expand $VAR, ${VAR}, ${VAR:-default}, ${VAR:=default}, ${#VAR},
 /// ${VAR%pattern}, ${VAR#pattern}, and $((arithmetic)) in a string.
@@ -1112,7 +1121,7 @@ fn expand_env_vars(arg: &str) -> String {
                     if depth > 0 { content.push(chars[i]); }
                     i += 1;
                 }
-                result.push_str(&expand_parameter(&content));
+                result.push_str(&protect_backslashes(&expand_parameter(&content)));
                 continue;
             }
 
@@ -1154,7 +1163,7 @@ fn expand_env_vars(arg: &str) -> String {
                     }
                     _ => std::env::var(&var_name).unwrap_or_default(),
                 };
-                result.push_str(&value);
+                result.push_str(&protect_backslashes(&value));
                 continue;
             }
 
