@@ -378,8 +378,14 @@ fn apply_from(input: Value, args: &[String]) -> Value {
 }
 
 fn apply_objectify(input: Value) -> Value {
+    // If already objectified (array of hashes), pass through
+    if let Value::Array(ref arr) = input {
+        if arr.first().map_or(false, |v| matches!(v, Value::Hash(_))) {
+            return input;
+        }
+    }
+
     // Convert tabular text output to array of hashes.
-    // Detects column positions from header line.
     let text = match &input {
         Value::String(s) => s.clone(),
         Value::Array(arr) => arr.iter().map(|v| v.to_rush_string()).collect::<Vec<_>>().join("\n"),
@@ -391,21 +397,28 @@ fn apply_objectify(input: Value) -> Value {
         return input;
     }
 
-    // Use first line as headers
-    let headers: Vec<&str> = lines[0].split_whitespace().collect();
-    let mut objects = Vec::new();
+    let header_line = lines[0];
 
+    // Split headers on whitespace. The last column gets all remaining text
+    // (handles COMMAND fields with spaces in ps, docker, etc.).
+    let headers: Vec<&str> = header_line.split_whitespace().collect();
+    if headers.is_empty() {
+        return input;
+    }
+    let col_count = headers.len();
+
+    let mut objects = Vec::new();
     for line in &lines[1..] {
         if line.trim().is_empty() {
             continue;
         }
-        let fields: Vec<&str> = line.splitn(headers.len(), char::is_whitespace)
-            .map(|s| s.trim())
-            .collect();
+        // Split into whitespace-delimited fields.
+        // First N-1 fields are individual tokens; last field gets ALL remaining text.
+        let fields = split_n_fields(line, col_count);
+
         let mut map = HashMap::new();
         for (i, header) in headers.iter().enumerate() {
-            let val = fields.get(i).unwrap_or(&"");
-            // Try to parse as number
+            let val = fields.get(i).map(|s| s.trim()).unwrap_or("");
             if let Ok(n) = val.parse::<i64>() {
                 map.insert(header.to_string(), Value::Int(n));
             } else if let Ok(f) = val.parse::<f64>() {
@@ -418,6 +431,36 @@ fn apply_objectify(input: Value) -> Value {
     }
 
     Value::Array(objects)
+}
+
+/// Split a line into N fields. First N-1 fields are whitespace-delimited tokens.
+/// The Nth field gets ALL remaining text (preserving spaces — for COMMAND columns).
+fn split_n_fields(line: &str, n: usize) -> Vec<String> {
+    if n == 0 { return Vec::new(); }
+    if n == 1 { return vec![line.trim().to_string()]; }
+
+    let mut fields = Vec::new();
+    let mut rest = line;
+
+    for _ in 0..n - 1 {
+        let trimmed = rest.trim_start();
+        if trimmed.is_empty() {
+            fields.push(String::new());
+            continue;
+        }
+        // Find end of this field (next whitespace)
+        if let Some(space_pos) = trimmed.find(char::is_whitespace) {
+            fields.push(trimmed[..space_pos].to_string());
+            rest = &trimmed[space_pos..];
+        } else {
+            fields.push(trimmed.to_string());
+            rest = "";
+        }
+    }
+
+    // Last field: everything remaining
+    fields.push(rest.trim_start().to_string());
+    fields
 }
 
 fn apply_grep(input: Value, args: &[String]) -> Value {
