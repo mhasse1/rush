@@ -1,314 +1,208 @@
 # Rush
 
-A cross-platform (macOS, Linux, Windows), modern shell with clean syntax, structured data pipelines, and built-in LLM agent protocol and MCP support.
+A Unix-style shell built in Rust, designed for both humans and LLM agents.
 
-Rush gives you clean scripting syntax, Unix shell commands, and PowerShell 7's structured object pipeline — in one shell, on every platform.
+Rush gives you clean scripting syntax, structured data pipelines, and a JSON wire protocol for AI agents — in one shell, on every platform.
 
 ```rush
 # Shell commands just work
 ls -la /var/log | grep ".log"
 
-# Structured pipelines — filter, select, format
+# Structured pipelines
 ps aux | where CPU > 50 | select Name, CPU | sort --desc
 
-# Clean scripting — no $ prefix, blocks use end
-files = Dir.list(".", :files)
+# Clean scripting — no $ prefix, #{} interpolation, end blocks
+files = Dir.list("src", :recurse)
 large = files.select { |f| File.size(f) > 1mb }
 large.each { |f| puts "#{f}: #{File.size(f).to_filesize}" }
 
-# LLM agent mode — JSON wire protocol
-rush --llm   # structured I/O for AI agents
+# LLM agent mode
+rush --llm   # structured JSON I/O for AI agents
+```
+
+## Rush vs Bash
+
+```bash
+# Bash                                    # Rush
+name="world"                              name = "world"
+echo "hello ${name}"                      puts "hello #{name}"
+if [ -f "$file" ]; then                   if File.exist?(file)
+  cat "$file" | wc -l                       File.read_lines(file).length
+fi                                        end
+files=$(find . -name "*.log")             files = Dir.glob("*.log")
+for f in $files; do                       for f in files
+  size=$(stat -f%z "$f")                    puts "#{f}: #{File.size(f)}"
+done                                      end
 ```
 
 ## Why Rush?
 
-**For humans:** Clean syntax. No `$()` soup, no `[[ ]]` vs `[ ]` confusion, no semicolons. Tab completion, vi/emacs modes, syntax highlighting, git-aware prompt — a shell that doesn't fight you.
+**For humans.** No `$()` soup, no `[[ ]]` vs `[ ]` confusion. Variables without sigils, blocks with `end`, `#{}` interpolation. Vi/emacs modes, autosuggestions, syntax highlighting, git-aware prompt.
 
-**For LLM agents:** `rush --llm` provides structured JSON input/output, typed errors, output spooling, a TTY blocklist, and a help system — everything an agent needs to operate a machine without parsing bash text.
+**For LLM agents.** `rush --llm` provides structured JSON I/O, typed errors, output spooling, and a TTY blocklist. `rush --mcp` exposes tools for Claude Code. No terminal escape parsing needed.
 
-**For scripts:** A real scripting language with classes, error handling, named arguments, and a File/Dir/Time stdlib — without leaving the shell.
-
-**For Windows admins:** `ps...end` blocks pass raw PowerShell through without Rush expansion — `$_`, script blocks, and cmdlets work untouched. Platform blocks (`win64`, `ps5`, `win32`) target specific Windows layers in one script.
+**For scripts.** Functions, classes, enums, error handling, and a File/Dir/Time stdlib — without leaving the shell.
 
 ## Install
 
 ```bash
-# macOS (Homebrew)
-brew install mhasse1/tap/rush
+# Build from source (requires Rust toolchain)
+git clone https://github.com/mhasse1/rush
+cd rush
+cargo build --release
+sudo cp target/release/rush-cli /usr/local/bin/rush
 
-# Manual (all platforms) — download from GitHub Releases
-# https://github.com/mhasse1/rush/releases
-
-# Build from source
-dotnet publish -c Release -r osx-arm64    # or linux-x64, win-x64
+# Or use the install script
 ./install.sh
 ```
 
-Requires .NET 10 SDK to build. Published binaries are self-contained (no runtime needed).
-
-## Feature Highlights
+## Features
 
 ### Structured Data Pipelines
 
 ```rush
-# Filter, select, aggregate — like SQL for your terminal
 ps aux | where CPU > 10 | select Name, CPU, Memory | sort --desc
 docker ps | where Status =~ /Up/ | select Names, Status
 netstat | where State == "ESTABLISHED" | count
 
-# Format output
-ps | as json                    # JSON output
 cat data.csv | from csv | where age > 30 | as json
-
-# Auto-objectify — known commands become structured automatically
-netstat | where State == "LISTEN" | select Local, PID
 ```
 
-### Clean Scripting Language
+Pipeline operators: `where`, `select`, `sort`, `count`, `first`, `last`, `skip`, `sum`, `avg`, `min`, `max`, `distinct`, `reverse`, `objectify`, `as json`, `as csv`, `from json`, `from csv`, `tee`, `columns`.
+
+### Scripting Language
 
 ```rush
-# Variables — no sigils
+# Variables, arrays, hashes
 name = "world"
-count = 42
 items = [1, 2, 3]
 config = { host: "localhost", port: 8080 }
 
 # String interpolation
-puts "hello #{name}, you have #{items.count} items"
+puts "hello #{name}, #{items.length} items"
 
 # Functions with defaults and named args
 def deploy(env, dry_run = false)
   if dry_run
-    puts "! would deploy to #{env}"
+    puts "would deploy to #{env}"
   else
     rsync -avz ./dist/ "#{env}.example.com:/var/www/"
-    puts "> deployed to #{env}"
   end
 end
 deploy("staging", dry_run: true)
 
-# Blocks and iteration
-files = Dir.list("src", :recurse)
-files.select { |f| f =~ /\.rs$/ }
-     .sort_by { |f| File.size(f) }
-     .reverse
-     .first(10)
-     .each { |f| puts f }
-```
-
-### Classes, Enums, Error Handling
-
-```rush
+# Classes
 class Server
-  attr host: String, port: Int = 8080
-
-  def initialize(host)
-    self.host = host
-  end
-
+  attr host, port
   def url
     return "http://#{self.host}:#{self.port}"
   end
 end
 
-s = Server.new("localhost")
-puts s.url
-
 # Error handling
-begin
+try
   data = File.read_json("config.json")
 rescue => e
   die "config error: #{e.message}"
 end
 ```
 
+Control flow: `if/elsif/else/end`, `unless`, `while`, `until`, `loop`, `for..in`, `case/when`, postfix conditionals, ternary operator. Full POSIX expansions: tilde, parameter, command substitution, arithmetic, glob, brace.
+
 ### Standard Library
 
 ```rush
-# File I/O
-content = File.read("data.txt")
-lines = File.read_lines("log.txt")
-config = File.read_json("config.json")
+# File I/O — cross-platform, no external deps
+File.read("data.txt")
 File.write("/tmp/out.txt", "hello")
+File.read_json("config.json")
 File.exist?("config.json")
+File.size("archive.tar.gz")
 
-# Directory operations
-Dir.list(".", :files)           # files only
-Dir.list("src", :recurse)      # recursive
-Dir.mkdir("/tmp/myapp/logs")    # with parents
+# Directories
+Dir.list("src", :recurse)
+Dir.glob("**/*.rs")
+Dir.mkdir("/tmp/myapp/logs")
 
 # Time and durations
 t = Time.now
 recent = Time.now - 24.hours
 ```
 
-### Platform Blocks
+### REPL
 
-```rush
-# Code runs only on the matching OS
-macos
-  export HOMEBREW_NO_AUTO_UPDATE=1
-end
+- Vi mode (default) and Emacs mode with mode indicator
+- Fish-style autosuggestions from history
+- Tab completion: commands, paths, methods, env vars, pipeline operators
+- Syntax highlighting for Rush keywords and shell commands
+- Ctrl+R reverse search, vi `/` search with `n`/`N`
+- Multi-line editing for blocks
+- Persistent history (10K entries)
+- Git-aware prompt with branch and dirty state
+- Dark/light terminal auto-detection
 
-linux
-  export LD_LIBRARY_PATH="/usr/local/lib"
-end
+### Shell Features
 
-win64
-  export TEMP="C:\\Temp"
-end
-
-# Property conditions
-macos.arch == "arm64"
-  puts "Apple Silicon"
-end
-
-linux.version >= "6.0"
-  puts "Modern kernel"
-end
-```
-
-### Windows: One Script, Every Layer
-
-No other shell wraps all Windows execution environments in one syntax. Rush gives you `ps`, `ps5`, and `win32` blocks — each targeting a different PowerShell layer, all in the same script:
-
-```rush
-# PowerShell 7 — raw passthrough, no Rush expansion
-# $_, script blocks, and cmdlets work untouched
-ps
-  Get-Service | Where-Object { $_.Status -eq "Running" }
-  $fw = Get-NetFirewallProfile
-  $fw | Format-Table Name, Enabled
-end
-
-# PowerShell 5.1 — legacy modules (AD, Exchange, older management tools)
-ps5
-  Import-Module ActiveDirectory
-  Get-ADUser -Filter * | Select-Object Name, Enabled
-end
-
-# 32-bit PowerShell 5.1 — OLEDB/ODBC drivers (Access, Excel, Business Central)
-win32
-  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;...")
-  $conn.Open()
-end
-```
-
-| Block | Engine | Use case |
-|-------|--------|----------|
-| `ps` | PowerShell 7 (cross-platform) | Cmdlets with `$_`, script blocks, Where-Object |
-| `ps5` | PowerShell 5.1 (Windows) | Legacy modules: AD, Exchange, older management tools |
-| `win32` | 32-bit PS 5.1 (Windows) | 32-bit OLEDB/ODBC: Access, Excel, Business Central |
-| `win64` | Rush syntax (Windows) | Windows-specific Rush code |
-
-Version gating: `ps.version >= "7.4"` targets specific PowerShell versions.
-
-### Database Queries
-
-```rush
-# SQLite, PostgreSQL, ODBC — built in
-sql add @mydb --driver sqlite --path ~/data.db
-sql @mydb "SELECT name, email FROM users WHERE active = 1"
-sql @mydb "SELECT * FROM orders" --json
-```
-
-### Windows Network Paths
-
-```rush
-# SMB shares — forward slashes always, Rush translates for Windows
-cd //fileserver/shared/docs
-ls //nas/backups/2026/
-cp //server/share/report.xlsx ./
-
-# SSH remote files — works on all platforms
-cat //ssh:server/etc/hosts
-cp //ssh:server/data/file.csv .
-```
+- 50+ builtins: `cd`, `pushd/popd`, `export`, `alias`, `source`, `eval`, `exec`, `trap`, `history`, `jobs`, `fg`, `bg`, `wait`, `kill`, `help`, `path`, `set`, and more
+- Background jobs with proper signal handling and terminal control
+- Heredocs, redirections (including fd duplication), process substitution
+- POSIX shell flags: `set -e`, `set -x`, `set -u`, `set -C`, `set -f`, and others
+- PATH management: `path add`, `path rm`, `path check`, `path dedupe`
+- Platform blocks: `macos`, `linux`, `win64` with property conditions
 
 ### Built-in AI Assistant
 
 ```rush
-# Ask a question
 ai "how do I find large files on macOS?"
-
-# Pipe context to AI — the killer feature
 cat error.log | ai "what went wrong?"
 git diff | ai "review this change"
-ps aux | ai "anything unusual?"
-sql @prod "SELECT * FROM orders WHERE status='failed'" | ai "summarize these failures"
-
-# Use any provider
-set --save aiProvider anthropic    # or openai, gemini, ollama
-set --save aiModel claude-sonnet-4-20250514
-
-# Custom providers
-# ~/.config/rush/ai-providers/my-llm.json
 ```
 
-Supports Anthropic, OpenAI, Gemini, and Ollama out of the box. Pipe anything to `ai` — logs, diffs, query results, command output — and get an answer in context.
+Supports Anthropic, OpenAI, Gemini, and Ollama. Pipe anything to `ai` and get an answer in context.
 
-### LLM Agent Mode
+## LLM Agent Mode
 
-`rush --llm` is a JSON wire protocol designed for AI agents. The agent reads structured JSON — no terminal parsing needed:
+`rush --llm` is a JSON wire protocol for AI agents:
 
 ```
 $ rush --llm
-
-← Rush emits context (ready prompt):
-{"ready":true,"host":"web-prod","user":"deploy","cwd":"/var/www","git_branch":"main","shell":"rush"}
-
-→ Agent sends a command:
-ls src | where /\.cs$/ | count
-
-← Rush returns structured result:
-{"status":"success","exit_code":0,"cwd":"/var/www","stdout":"47","duration_ms":12}
-
-→ Agent sends a failing command:
-cat /nonexistent
-
-← Rush returns structured error:
-{"status":"error","exit_code":1,"cwd":"/var/www","stderr":"cat: /nonexistent: No such file or directory","duration_ms":3}
+<- {"ready":true,"host":"web-prod","user":"deploy","cwd":"/var/www","git_branch":"main","shell":"rush"}
+-> ls src | count
+<- {"status":"success","exit_code":0,"cwd":"/var/www","stdout":"47","duration_ms":12}
 ```
 
-**Built-in LLM commands:**
-- `lcat file` — read files with metadata (mime type, size, encoding, binary → base64)
-- `spool` — retrieve output that exceeded the 4KB capture limit
-- `help <topic>` — on-demand reference (22 topics) to reduce context burn
-- `timeout N command` — prevent runaway commands
+Built-in commands: `lcat` (file reader with MIME detection), `spool` (paginated output), `help` (on-demand reference), `timeout` (runaway prevention). Output capped at 4KB with spool for overflow. TTY blocklist prevents interactive commands with suggested alternatives.
 
-**Safety features:**
-- Output capped at 4KB — excess goes to a spool buffer the agent can page through
-- TTY blocklist — `vim`, `top`, `less` etc. are blocked with suggested alternatives
-- Structured errors — exit codes, stderr, and error types in every response
+## MCP Server
 
-### MCP Server Integration
-
-Rush provides two MCP servers for Claude Code and Claude Desktop:
+Rush provides MCP servers for Claude Code and Claude Desktop:
 
 ```bash
 rush install mcp --claude    # registers both servers
 ```
 
-- **rush-local** — persistent session on local machine (variables, cwd survive between calls)
-- **rush-ssh** — SSH gateway for remote hosts (parallel execution, auto-detects Rush on remote)
+- **rush-local** -- persistent local session (variables, cwd survive between calls)
+- **rush-ssh** -- SSH gateway for remote hosts (auto-detects Rush on remote)
 
-Both servers expose `rush_execute`, `rush_read_file`, and `rush_context` tools, plus a `rush://lang-spec` resource so Claude understands Rush syntax.
+Tools: `rush_execute`, `rush_read_file`, `rush_context`. Includes `rush://lang-spec` resource so the LLM understands Rush syntax.
 
-### Shell Features
+## Plugin System
 
-- Vi and Emacs line editing modes
-- Tab completion (paths, commands, pipeline operators, flags)
-- Ctrl+R reverse history search, vi `/` search with `n`/`N` cycling
-- Real-time syntax highlighting
-- Git-aware prompt with branch and dirty state
-- Theme-aware colors — auto-adapts to dark and light terminals
-- `setbg --selector` — in-terminal color picker for background
-- Per-directory themes via `.rushbg` files
-- PATH management (`path add`, `path rm`, `path check`, `path dedupe`)
-- `help <topic>` — 22 built-in reference topics, `keyword --help` routing
-- Bash-to-Rush training hints after commands
-- `ai "prompt"` — built-in AI assistant (Anthropic, OpenAI, Gemini, Ollama)
-- Background jobs, command chaining, output redirection, heredocs
+Extend Rush with plugins in any language via JSON wire protocol:
+
+```rush
+# PowerShell plugin
+plugin.ps
+  Get-Service | Where-Object { $_.Status -eq "Running" }
+end
+
+# Python plugin
+plugin.python
+  import json
+  data = json.loads(input())
+  print(json.dumps({"result": len(data)}))
+end
+```
 
 ## CLI
 
@@ -320,37 +214,41 @@ rush --llm            LLM agent mode (JSON wire protocol)
 rush --mcp            MCP server (local persistent session)
 rush --mcp-ssh        MCP server (SSH gateway)
 rush --version        Show version
-rush --help           Show help
 ```
 
 ## Configuration
 
 ```
 ~/.config/rush/
-  config.json       Settings and saved aliases (managed by set/alias --save)
-  init.rush         Startup script — PATH, exports, functions, prompt
+  config.json       Settings and saved aliases
+  init.rush         Startup script (PATH, exports, functions, prompt)
   secrets.rush      API keys and tokens (never synced)
+  history           Command history
 ```
+
+Config sync across machines via git, ssh, or shared path.
 
 ## Architecture
 
-Rush transpiles its syntax to PowerShell 7, giving you access to the full .NET runtime. Shell commands run natively on Unix — Rush only translates what it recognizes and passes everything else through.
+Rush is built in Rust as a workspace of three crates:
 
 ```
-Rush source → Lexer → Parser → AST → Transpiler → PowerShell 7 engine
-                                                  ↘ native commands (ls, git, etc.)
+Rush source -> Lexer -> Parser -> AST -> Evaluator (native Rust)
+                                       -> fork/exec for shell commands
 ```
 
-Built on the MIT-licensed `Microsoft.PowerShell.SDK` (.NET 10 LTS). Single self-contained binary — no runtime dependencies.
+- **rush-core** -- lexer, parser, AST, evaluator, stdlib, pipeline operators
+- **rush-cli** -- REPL, line editor, prompt, themes, AI, MCP, LLM mode
+- **rush-ps-bridge** -- PowerShell interop for `ps`/`ps5`/`win32` blocks on Windows
+
+~5MB binary. ~10ms startup. ~98% POSIX compliant on Unix.
 
 ## Documentation
 
-- [User Manual](docs/user-manual.md) — comprehensive guide
-- [Feature Reference](docs/rush-features.md) — complete feature list
-- [LLM Mode Design](docs/llm-mode-design.md) — wire protocol specification
-- [Language Spec](docs/rush-lang-spec.yaml) — compact syntax reference
-- [Contributing](CONTRIBUTING.md) — development setup, project structure, how to add features
+- [Feature Reference](docs/rust-rush-features.md) -- complete feature list
+- [Language Spec](docs/rush-lang-spec.yaml) -- compact syntax reference
+- [LLM Mode Design](docs/llm-mode-design.md) -- wire protocol specification
 
 ## License
 
-Business Source License 1.1 (BSL). Source-available — read, build, modify, and use freely. Each version converts to Apache 2.0 after four years. See [LICENSE](LICENSE) for details.
+Business Source License 1.1. Source-available -- read, build, modify, and use freely. Each version converts to Apache 2.0 after four years. See [LICENSE](LICENSE) for details.
