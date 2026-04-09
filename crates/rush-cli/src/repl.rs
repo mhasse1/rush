@@ -91,7 +91,7 @@ pub fn run(is_login: bool) {
     let mut last_cmd: Option<String> = None;
 
     // Banner
-    let version = crate::rush_version_short();
+    let version = crate::rush_version();
     let mode = if config.edit_mode == "emacs" { "emacs" } else { "vi" };
     let theme_name = if detected_theme.is_dark { "dark" } else { "light" };
     let has_256 = detected_theme.bg_rgb.is_some();
