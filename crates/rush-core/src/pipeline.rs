@@ -531,16 +531,10 @@ fn apply_columns(input: Value, args: &[String]) -> Value {
 
 // ── Auto-objectify ──────────────────────────────────────────────────
 
-/// Commands whose output should be automatically objectified when piped.
-const AUTO_OBJECTIFY_COMMANDS: &[&str] = &[
-    "ps", "docker", "kubectl", "netstat", "ss", "lsof", "free", "df",
-    "mount", "ip", "ifconfig", "lsblk", "blkid",
-];
-
 /// Check if a command should auto-objectify its output for pipeline operators.
+/// Uses the objectify config system (built-in defaults + user config).
 pub fn should_auto_objectify(first_segment: &str) -> bool {
-    let cmd = first_segment.split_whitespace().next().unwrap_or("");
-    AUTO_OBJECTIFY_COMMANDS.iter().any(|c| cmd.eq_ignore_ascii_case(c))
+    crate::objectify_config::get().should_objectify(first_segment)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
