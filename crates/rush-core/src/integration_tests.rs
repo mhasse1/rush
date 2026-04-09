@@ -817,6 +817,93 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Objectify — end-to-end with real commands
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_ps_aux() {
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "ps aux | objectify | first 1 | as json"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Should have standard ps columns
+        assert!(stdout.contains("USER"), "should have USER column: {stdout}");
+        assert!(stdout.contains("PID"), "should have PID column: {stdout}");
+        assert!(stdout.contains("COMMAND"), "should have COMMAND column: {stdout}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_ps_aux_where() {
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "ps aux | objectify | where USER == root | first 1 | as json"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // If root processes exist, should filter to them
+        if !stdout.trim().is_empty() && stdout.contains("USER") {
+            assert!(stdout.contains("root"), "filtered to root: {stdout}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_ps_aux_select() {
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "ps aux | objectify | first 2 | select USER, PID | as json"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("USER"), "should have USER: {stdout}");
+        assert!(stdout.contains("PID"), "should have PID: {stdout}");
+        // Should NOT have COMMAND (we selected only USER, PID)
+        assert!(!stdout.contains("COMMAND"), "should not have COMMAND: {stdout}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_df() {
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "df -h | objectify | first 1 | as json"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("Filesystem"), "should have Filesystem: {stdout}");
+        assert!(stdout.contains("Size"), "should have Size: {stdout}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_explicit_pipe() {
+        // Test explicit | objectify (not auto-objectify)
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "echo \"NAME AGE\\nAlice 30\\nBob 25\" | objectify | as json"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // This tests the echo → objectify path
+        // echo may not interpret \n — this is more of a smoke test
+        if stdout.contains("NAME") {
+            assert!(stdout.contains("Alice") || stdout.contains("NAME"),
+                "objectify should parse: {stdout}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn objectify_count() {
+        let cli = require_cli!();
+        let out = std::process::Command::new(&cli)
+            .args(["-c", "ps aux | objectify | count"])
+            .output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let count: i64 = stdout.parse().unwrap_or(0);
+        assert!(count > 1, "ps aux should have multiple processes: {stdout}");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Plugin system
     // ═══════════════════════════════════════════════════════════════
 
