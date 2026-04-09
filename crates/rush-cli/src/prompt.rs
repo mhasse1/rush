@@ -121,11 +121,12 @@ impl Prompt for RushPrompt {
         &self,
         history_search: PromptHistorySearch,
     ) -> Cow<'_, str> {
-        let prefix = match history_search.status {
-            PromptHistorySearchStatus::Passing => "",
-            PromptHistorySearchStatus::Failing => "(failed) ",
+        let t = &self.theme;
+        let (prefix, color) = match history_search.status {
+            PromptHistorySearchStatus::Passing => ("", t.prompt_success.as_str()),
+            PromptHistorySearchStatus::Failing => ("failing ", t.prompt_failed.as_str()),
         };
-        Cow::Owned(format!("\n{prefix}(search: {}) ", history_search.term))
+        Cow::Owned(format!("\n{color}/{prefix}{}{} > ", history_search.term, t.reset))
     }
 }
 
