@@ -63,19 +63,28 @@ pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
                 exit_code,
             }
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            #[cfg(unix)]
+            reclaim_terminal();
+
+            // On Windows, retry via cmd.exe — echo, dir, etc. are shell builtins
+            #[cfg(windows)]
+            {
+                return run_via_cmd(program, args, false);
+            }
+
+            #[cfg(not(windows))]
+            CommandResult {
+                stdout: String::new(),
+                stderr: format!("rush: {program}: command not found"),
+                exit_code: 127,
+            }
+        }
         Err(e) => {
             #[cfg(unix)]
             reclaim_terminal();
 
-            // Distinguish 126 (not executable) from 127 (not found)
-            let exit_code = if e.kind() == std::io::ErrorKind::NotFound {
-                127
-            } else if e.kind() == std::io::ErrorKind::PermissionDenied {
-                126
-            } else {
-                127
-            };
-
+            let exit_code = if e.kind() == std::io::ErrorKind::PermissionDenied { 126 } else { 127 };
             CommandResult {
                 stdout: String::new(),
                 stderr: format!("rush: {program}: {e}"),
@@ -99,11 +108,80 @@ pub fn run_command_capture(program: &str, args: &[&str]) -> CommandResult {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             exit_code: output.status.code().unwrap_or(-1),
         },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // On Windows, retry via cmd.exe for shell builtins
+            #[cfg(windows)]
+            {
+                return run_via_cmd(program, args, true);
+            }
+            #[cfg(not(windows))]
+            CommandResult {
+                stdout: String::new(),
+                stderr: format!("rush: {program}: command not found"),
+                exit_code: 127,
+            }
+        }
         Err(e) => CommandResult {
             stdout: String::new(),
             stderr: format!("rush: {program}: {e}"),
             exit_code: 127,
         },
+    }
+}
+
+/// Windows: run a command through cmd.exe /C as fallback.
+/// Handles shell builtins (echo, dir, type, etc.) and pipes/redirects.
+#[cfg(windows)]
+fn run_via_cmd(program: &str, args: &[&str], capture: bool) -> CommandResult {
+    // Reconstruct the command line for cmd.exe
+    let mut cmdline = program.to_string();
+    for arg in args {
+        // Quote args that contain spaces
+        if arg.contains(' ') || arg.contains('"') {
+            cmdline.push_str(&format!(" \"{}\"", arg.replace('"', "\\\"")));
+        } else {
+            cmdline.push(' ');
+            cmdline.push_str(arg);
+        }
+    }
+
+    let mut cmd = Command::new("cmd.exe");
+    cmd.args(["/C", &cmdline]);
+
+    if capture {
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        match cmd.output() {
+            Ok(output) => CommandResult {
+                stdout: String::from_utf8_lossy(&output.stdout).trim_end().to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).trim_end().to_string(),
+                exit_code: output.status.code().unwrap_or(-1),
+            },
+            Err(e) => CommandResult {
+                stdout: String::new(),
+                stderr: format!("rush: cmd.exe: {e}"),
+                exit_code: 127,
+            },
+        }
+    } else {
+        cmd.stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit());
+
+        match cmd.status() {
+            Ok(status) => CommandResult {
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: status.code().unwrap_or(-1),
+            },
+            Err(e) => CommandResult {
+                stdout: String::new(),
+                stderr: format!("rush: cmd.exe: {e}"),
+                exit_code: 127,
+            },
+        }
     }
 }
 
@@ -256,13 +334,38 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
         let program = &parts[0];
         let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
-        match Command::new(program)
+        let spawn_result = Command::new(program)
             .args(&args)
             .stdin(stdin)
             .stdout(stdout)
             .stderr(Stdio::inherit())
-            .spawn()
-        {
+            .spawn();
+
+        let spawn_result = match spawn_result {
+            Ok(child) => Ok(child),
+            #[cfg(windows)]
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Windows fallback: try via cmd.exe for shell builtins
+                let mut cmdline = program.to_string();
+                for a in &args { cmdline.push(' '); cmdline.push_str(a); }
+                let stdin2 = if prev_stdout.is_some() {
+                    // Can't reuse taken stdin — fall back to full cmd pipeline
+                    Stdio::inherit()
+                } else {
+                    Stdio::inherit()
+                };
+                let stdout2 = if is_last && !capture_last { Stdio::inherit() } else { Stdio::piped() };
+                Command::new("cmd.exe")
+                    .args(["/C", &cmdline])
+                    .stdin(stdin2)
+                    .stdout(stdout2)
+                    .stderr(Stdio::inherit())
+                    .spawn()
+            }
+            Err(e) => Err(e),
+        };
+
+        match spawn_result {
             Ok(mut child) => {
                 // For the last child in capture mode, leave stdout for wait_with_output
                 if !(is_last && capture_last) {
