@@ -22,3 +22,4 @@ dist/
 internal/
 .claude/
 *.btskey
+shared/
