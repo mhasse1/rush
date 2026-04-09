@@ -68,7 +68,20 @@ pub fn run(is_login: bool) {
                 ReedlineEvent::MenuNext,
             ]),
         );
-        let normal_bindings = default_vi_normal_keybindings();
+        let mut normal_bindings = default_vi_normal_keybindings();
+        // If fzf is available, bind Ctrl+R to fzf history search
+        if has_fzf() {
+            insert_bindings.add_binding(
+                KeyModifiers::CONTROL,
+                KeyCode::Char('r'),
+                ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string()),
+            );
+            normal_bindings.add_binding(
+                KeyModifiers::CONTROL,
+                KeyCode::Char('r'),
+                ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string()),
+            );
+        }
         // Vi / and ? search handled natively by our reedline fork
         Box::new(Vi::new(insert_bindings, normal_bindings))
     };
@@ -191,6 +204,26 @@ pub fn run(is_login: bool) {
 
         match editor.read_line(&prompt) {
             Ok(Signal::Success(line)) => {
+                // fzf history search: intercept host command
+                if line == "__fzf_history__" {
+                    if let Some(selected) = fzf_history_search() {
+                        // Put selected command on the line and execute it
+                        let trimmed = selected.trim();
+                        if !trimmed.is_empty() {
+                            println!("{trimmed}");
+                            last_cmd = Some(trimmed.to_string());
+                            let start = std::time::Instant::now();
+                            crate::run_line(&mut evaluator, trimmed);
+                            let elapsed = start.elapsed();
+                            if show_timing && elapsed.as_millis() > 500 {
+                                let secs = elapsed.as_secs_f64();
+                                eprintln!("{}  {secs:.1}s{}", detected_theme.muted, detected_theme.reset);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
                     continue;
@@ -330,4 +363,59 @@ fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(line)
     }
+}
+
+// ── fzf integration ────────────────────────────────────────────────
+
+/// Check if fzf is available on PATH.
+fn has_fzf() -> bool {
+    rush_core::process::command_exists("fzf")
+}
+
+/// Run fzf with history file as input. Returns selected line or None.
+fn fzf_history_search() -> Option<String> {
+    let history_path = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map(|h| format!("{h}/.config/rush/history"))
+        .ok()?;
+
+    if !std::path::Path::new(&history_path).exists() {
+        return None;
+    }
+
+    // Run fzf with history piped in, most recent first
+    // tac reverses the file so recent commands appear first
+    let output = if cfg!(unix) {
+        std::process::Command::new("sh")
+            .args(["-c", &format!(
+                "tac '{}' 2>/dev/null || tail -r '{}' | awk '!seen[$0]++' | fzf --height 40% --reverse --no-sort --prompt 'history> '",
+                history_path, history_path
+            )])
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .ok()?
+    } else {
+        // Windows: no tac, just pipe history directly
+        std::process::Command::new("cmd")
+            .args(["/C", &format!(
+                "type \"{}\" | fzf --height 40% --reverse --no-sort --prompt \"history> \"",
+                history_path
+            )])
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .output()
+            .ok()?
+    };
+
+    if output.status.success() {
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !selected.is_empty() {
+            return Some(selected);
+        }
+    }
+
+    None // user cancelled (Esc/Ctrl+C)
 }
