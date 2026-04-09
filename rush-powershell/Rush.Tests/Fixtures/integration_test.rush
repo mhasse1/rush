@@ -1,0 +1,345 @@
+#!/usr/bin/env rush
+# ═══════════════════════════════════════════════════════════════════════
+# Rush Integration Test Suite
+# Exercises builtins, syntax constructs, and command translation.
+#
+# Convention: each test prints "PASS: description" or "FAIL: description"
+# The xUnit wrapper counts PASS/FAIL lines to determine success.
+#
+# Note: Pipeline expressions (e.g., .first, .sort, .abs) must be assigned
+# to variables before passing to assert_eq — PowerShell limitation.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Test Helpers ──────────────────────────────────────────────────────
+
+def assert_eq(actual, expected, label)
+  if actual == expected
+    puts "PASS: #{label}"
+  else
+    puts "FAIL: #{label} — expected '#{expected}', got '#{actual}'"
+  end
+end
+
+def assert_true(value, label)
+  if value
+    puts "PASS: #{label}"
+  else
+    puts "FAIL: #{label} — expected truthy"
+  end
+end
+
+def assert_false(value, label)
+  if not value
+    puts "PASS: #{label}"
+  else
+    puts "FAIL: #{label} — expected falsy"
+  end
+end
+
+# ── Functions Under Test ──────────────────────────────────────────────
+
+def double(x)
+  return x * 2
+end
+
+def greet(who, prefix = "Hello")
+  return "#{prefix}, #{who}!"
+end
+
+def add_one(x)
+  return x + 1
+end
+
+def add_two(x)
+  tmp = add_one(x)
+  return add_one(tmp)
+end
+
+# ═══════════════════════════════════════════════════════════════════════
+# All tests run inside a for block so they're in Rush syntax context.
+# ═══════════════════════════════════════════════════════════════════════
+
+for _run in [1]
+
+  # ── 1. Variable Assignment & Arithmetic ─────────────────────────────
+
+  x = 42
+  assert_eq(x, 42, "integer assignment")
+
+  y = 3.14
+  assert_eq(y, 3.14, "float assignment")
+
+  name = "Rush"
+  assert_eq(name, "Rush", "string assignment")
+
+  sum = x + 8
+  assert_eq(sum, 50, "addition")
+
+  diff = x - 2
+  assert_eq(diff, 40, "subtraction")
+
+  product = 6 * 7
+  assert_eq(product, 42, "multiplication")
+
+  quotient = 100 / 4
+  assert_eq(quotient, 25, "division")
+
+  remainder = 17 % 5
+  assert_eq(remainder, 2, "modulo")
+
+  counter = 10
+  counter += 5
+  assert_eq(counter, 15, "compound += assignment")
+
+  counter -= 3
+  assert_eq(counter, 12, "compound -= assignment")
+
+  # ── 2. String Operations ────────────────────────────────────────────
+
+  stripped = "  hello world  ".strip
+  assert_eq(stripped, "hello world", "string strip")
+
+  word = "hello"
+  upper = word.upcase
+  assert_eq(upper, "HELLO", "string upcase")
+  lower = word.downcase
+  assert_eq(lower, "hello", "string downcase")
+  assert_eq(word.length, 5, "string length")
+  assert_true(word.start_with?("hel"), "string start_with?")
+  assert_true(word.end_with?("llo"), "string end_with?")
+  assert_false(word.empty?, "string empty? on non-empty")
+  assert_true("".empty?, "string empty? on empty")
+
+  replaced = "hello world".replace("world", "Rush")
+  assert_eq(replaced, "hello Rush", "string replace")
+
+  parts = "a,b,c".split(",")
+  assert_eq(parts.count, 3, "string split count")
+  assert_eq(parts[0], "a", "string split first element")
+  assert_eq(parts[2], "c", "string split last element")
+
+  lang = "Rush"
+  ver = 1
+  msg = "Welcome to #{lang} v#{ver}"
+  assert_eq(msg, "Welcome to Rush v1", "string interpolation")
+
+  assert_eq("hi".ljust(5).length, 5, "ljust pads correctly")
+  assert_eq("hi".rjust(5).length, 5, "rjust pads correctly")
+
+  # ── 3. Boolean & Nil ────────────────────────────────────────────────
+
+  t = true
+  f = false
+  n = nil
+
+  assert_true(t, "true is truthy")
+  assert_false(f, "false is falsy")
+  assert_true(n.nil?, "nil is nil?")
+  assert_false(t.nil?, "true is not nil?")
+
+  # ── 4. Arrays ───────────────────────────────────────────────────────
+
+  items = [1, 2, 3, 4, 5]
+  assert_eq(items.count, 5, "array count")
+  assert_eq(items[0], 1, "array index 0")
+  assert_eq(items[4], 5, "array index 4")
+  first_item = items.first
+  assert_eq(first_item, 1, "array first")
+  last_item = items.last
+  assert_eq(last_item, 5, "array last")
+
+  assert_true(items.include?(3), "array include? true")
+  assert_false(items.include?(99), "array include? false")
+
+  reversed = items.reverse
+  assert_eq(reversed[0], 5, "array reverse first")
+  assert_eq(reversed[4], 1, "array reverse last")
+
+  sorted = [3, 1, 4, 1, 5].sort
+  assert_eq(sorted[0], 1, "array sort first")
+  assert_eq(sorted[4], 5, "array sort last")
+
+  unique = [1, 2, 2, 3, 3, 3].uniq
+  assert_eq(unique.count, 3, "array uniq count")
+
+  joined = ["a", "b", "c"].join("-")
+  assert_eq(joined, "a-b-c", "array join")
+
+  # ── 5. Hashes ───────────────────────────────────────────────────────
+
+  config = { name: "Rush", version: 1, debug: false }
+  assert_eq(config["name"], "Rush", "hash access by key")
+  assert_eq(config["version"], 1, "hash access numeric value")
+
+  # ── 6. Ranges ───────────────────────────────────────────────────────
+
+  nums = 1..5
+  assert_eq(nums.count, 5, "range count")
+  range_first = nums.first
+  assert_eq(range_first, 1, "range first")
+  range_last = nums.last
+  assert_eq(range_last, 5, "range last")
+
+  # ── 7. If/Elsif/Else ────────────────────────────────────────────────
+
+  val = 15
+  if val > 20
+    result = "big"
+  elsif val > 10
+    result = "medium"
+  else
+    result = "small"
+  end
+  assert_eq(result, "medium", "if/elsif/else")
+
+  flag = false
+  unless flag
+    unless_result = "correct"
+  end
+  assert_eq(unless_result, "correct", "unless block")
+
+  # ── 8. For Loops ────────────────────────────────────────────────────
+
+  total = 0
+  for i in 1..5
+    total += i
+  end
+  assert_eq(total, 15, "for loop sum 1..5")
+
+  words = ["hello", "world"].map { |w| w.upcase }
+  assert_eq(words.count, 2, "for loop + map count")
+  assert_eq(words[0], "HELLO", "for loop + map first")
+
+  # ── 9. While / Until Loops ──────────────────────────────────────────
+
+  n = 0
+  while n < 5
+    n += 1
+  end
+  assert_eq(n, 5, "while loop")
+
+  m = 10
+  until m <= 0
+    m -= 3
+  end
+  assert_true(m <= 0, "until loop")
+
+  # ── 10. Loop Control (next/break) ───────────────────────────────────
+
+  evens = (1..10).select { |i| i % 2 == 0 }
+  assert_eq(evens.count, 5, "select filters odd numbers")
+  assert_eq(evens[0], 2, "select first even is 2")
+
+  break_count = 0
+  for i in 1..100
+    break if i > 5
+    break_count += 1
+  end
+  assert_eq(break_count, 5, "break exits loop at 5")
+
+  next_sum = 0
+  for i in 1..10
+    next if i % 2 != 0
+    next_sum += i
+  end
+  assert_eq(next_sum, 30, "next skips odd sum=2+4+6+8+10")
+
+  # ── 11. Functions (def) ─────────────────────────────────────────────
+
+  d = double(7)
+  assert_eq(d, 14, "function def and call")
+  g1 = greet("Rush")
+  assert_eq(g1, "Hello, Rush!", "function with default param")
+  g2 = greet("World", "Hi")
+  assert_eq(g2, "Hi, World!", "function with overridden param")
+  a2 = add_two(3)
+  assert_eq(a2, 5, "function calling another function")
+
+  # ── 12. Try/Rescue ──────────────────────────────────────────────────
+
+  caught = false
+  try
+    die "test error"
+  rescue e
+    caught = true
+  end
+  assert_true(caught, "try/rescue catches die")
+
+  # ── 13. Case/When ───────────────────────────────────────────────────
+
+  status = "ok"
+  case status
+  when "ok"
+    case_result = "success"
+  when "error"
+    case_result = "failure"
+  else
+    case_result = "unknown"
+  end
+  assert_eq(case_result, "success", "case/when matching")
+
+  # ── 14. Method Chaining (select/map/reject) ─────────────────────────
+
+  numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  even_numbers = numbers.select { |n| n % 2 == 0 }
+  assert_eq(even_numbers.count, 5, "select even numbers")
+
+  doubled = [1, 2, 3].map { |n| n * 2 }
+  assert_eq(doubled[0], 2, "map first doubled")
+  assert_eq(doubled[2], 6, "map last doubled")
+
+  no_threes = [1, 2, 3, 4, 5].reject { |n| n == 3 }
+  assert_eq(no_threes.count, 4, "reject removes element")
+
+  sorted_words = ["banana", "apple", "cherry"].sort_by { |w| w.length }
+  assert_eq(sorted_words[0], "apple", "sort_by length first")
+
+  assert_true(numbers.any? { |n| n > 9 }, "any? with match")
+  assert_false(numbers.all? { |n| n > 5 }, "all? without full match")
+
+  # ── 15. Numeric Methods ─────────────────────────────────────────────
+
+  abs_val = (-5).abs
+  assert_eq(abs_val, 5, "numeric abs")
+
+  round_val = 3.14159.round(2)
+  assert_eq(round_val, 3.14, "numeric round 2")
+
+  times_sum = 0
+  5.times { |i| times_sum += i }
+  assert_eq(times_sum, 10, "times iterator 0+1+2+3+4")
+
+  # ── 16. Type Conversion ─────────────────────────────────────────────
+
+  int_val = "42".to_i
+  assert_eq(int_val, 42, "string to_i")
+  float_val = "3.14".to_f
+  assert_eq(float_val, 3.14, "string to_f")
+  str_val = 42.to_s
+  assert_eq(str_val, "42", "int to_s")
+
+  # ── 17. Environment Variables ────────────────────────────────────────
+
+  home_dir = env.HOME
+  if home_dir == nil or home_dir == ""
+    home_dir = env.USERPROFILE
+  end
+  assert_true(home_dir.length > 0, "home dir env var is set")
+
+  # ── 18. Each Iterator ─────────────────────────────────────────────────
+
+  each_result = 0
+  [10, 20, 30].each { |v| each_result += v }
+  assert_eq(each_result, 60, "each iterator sums values")
+
+  # ── 19. Skip ────────────────────────────────────────────────────────
+
+  skipped = [1, 2, 3, 4, 5].skip(2)
+  assert_eq(skipped.count, 3, "skip 2 leaves 3 elements")
+  assert_eq(skipped[0], 3, "skip 2 first element is 3")
+
+end
+
+puts ""
+puts "=== Integration test complete ==="
