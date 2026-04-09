@@ -394,7 +394,8 @@ fn apply_objectify(input: Value) -> Value {
 
     let lines: Vec<&str> = text.lines().collect();
     if lines.len() < 2 {
-        return input;
+        // Header only or empty — return empty array
+        return Value::Array(Vec::new());
     }
 
     let header_line = lines[0];
@@ -882,6 +883,205 @@ mod tests {
             assert_eq!(arr.len(), 2);
             if let Value::Hash(first) = &arr[0] {
                 assert_eq!(first.get("NAME"), Some(&Value::String("Alice".to_string())));
+                assert_eq!(first.get("AGE"), Some(&Value::Int(30)));
+            }
+            if let Value::Hash(second) = &arr[1] {
+                assert_eq!(second.get("NAME"), Some(&Value::String("Bob".to_string())));
+                assert_eq!(second.get("AGE"), Some(&Value::Int(25)));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_last_column_preserves_spaces() {
+        // Like ps aux: COMMAND column contains spaces
+        let text = Value::String(
+            "USER PID COMMAND\nmark 123 /usr/bin/some app --flag\nroot 1 /sbin/init".to_string()
+        );
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 2);
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("USER"), Some(&Value::String("mark".to_string())));
+                assert_eq!(first.get("PID"), Some(&Value::Int(123)));
+                assert_eq!(first.get("COMMAND"), Some(&Value::String("/usr/bin/some app --flag".to_string())));
+            }
+            if let Value::Hash(second) = &arr[1] {
+                assert_eq!(second.get("USER"), Some(&Value::String("root".to_string())));
+                assert_eq!(second.get("PID"), Some(&Value::Int(1)));
+                assert_eq!(second.get("COMMAND"), Some(&Value::String("/sbin/init".to_string())));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_numeric_parsing() {
+        let text = Value::String("NAME SCORE RATIO\nAlice 95 3.14\nBob 87 2.71".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("SCORE"), Some(&Value::Int(95)));
+                assert_eq!(first.get("RATIO"), Some(&Value::Float(3.14)));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_empty_fields() {
+        // Some rows may have fewer fields than headers
+        let text = Value::String("A B C\n1 2 3\n4 5\n6".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 3);
+            // Third row has only one field
+            if let Value::Hash(third) = &arr[2] {
+                assert_eq!(third.get("A"), Some(&Value::Int(6)));
+                // B and C should be empty strings
+                assert_eq!(third.get("B"), Some(&Value::String(String::new())));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_skips_blank_lines() {
+        let text = Value::String("NAME AGE\nAlice 30\n\nBob 25\n  \nCarol 28".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 3, "should skip blank lines: got {}", arr.len());
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_single_column() {
+        let text = Value::String("NAME\nAlice\nBob\nCarol".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 3);
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("NAME"), Some(&Value::String("Alice".to_string())));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_idempotent() {
+        // If input is already objectified (array of hashes), pass through
+        let hash1 = Value::Hash({
+            let mut m = HashMap::new();
+            m.insert("name".to_string(), Value::String("Alice".to_string()));
+            m
+        });
+        let input = Value::Array(vec![hash1]);
+        let result = apply_pipe_op(input.clone(), &parse_pipe_op("objectify"));
+        assert_eq!(result, input, "objectify should be idempotent on array of hashes");
+    }
+
+    #[test]
+    fn objectify_header_only() {
+        // Just a header, no data
+        let text = Value::String("NAME AGE SCORE".to_string());
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 0, "header-only should produce empty array");
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_from_array_input() {
+        // Input as array of strings (like text_to_array produces)
+        let input = Value::Array(vec![
+            Value::String("NAME AGE".to_string()),
+            Value::String("Alice 30".to_string()),
+            Value::String("Bob 25".to_string()),
+        ]);
+        let result = apply_pipe_op(input, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 2);
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("NAME"), Some(&Value::String("Alice".to_string())));
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_many_columns() {
+        // Like df -h output
+        let text = Value::String(
+            "Filesystem Size Used Avail Capacity Mounted on\n/dev/disk1 926G 600G 326G 65% /".to_string()
+        );
+        let result = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        if let Value::Array(arr) = &result {
+            assert_eq!(arr.len(), 1);
+            if let Value::Hash(row) = &arr[0] {
+                assert_eq!(row.get("Filesystem"), Some(&Value::String("/dev/disk1".to_string())));
+                assert_eq!(row.get("Size"), Some(&Value::String("926G".to_string())));
+                assert_eq!(row.get("Capacity"), Some(&Value::String("65%".to_string())));
+                // "Mounted on" is two words but our splitter treats "on" as separate column
+                // This is a known limitation — single-word headers only
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_then_where() {
+        // End-to-end: objectify → where filter
+        let text = Value::String("NAME AGE\nAlice 30\nBob 25\nCarol 35".to_string());
+        let objectified = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        let filtered = apply_pipe_op(objectified, &parse_pipe_op("where AGE > 28"));
+        if let Value::Array(arr) = &filtered {
+            assert_eq!(arr.len(), 2, "should have 2 rows with AGE > 28");
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_then_select() {
+        let text = Value::String("NAME AGE SCORE\nAlice 30 95\nBob 25 87".to_string());
+        let objectified = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        let selected = apply_pipe_op(objectified, &parse_pipe_op("select NAME, SCORE"));
+        if let Value::Array(arr) = &selected {
+            assert_eq!(arr.len(), 2);
+            if let Value::Hash(first) = &arr[0] {
+                assert!(first.contains_key("NAME"));
+                assert!(first.contains_key("SCORE"));
+                assert!(!first.contains_key("AGE"), "AGE should be excluded by select");
+            }
+        } else {
+            panic!("expected array");
+        }
+    }
+
+    #[test]
+    fn objectify_then_sort() {
+        let text = Value::String("NAME AGE\nCarol 35\nAlice 30\nBob 25".to_string());
+        let objectified = apply_pipe_op(text, &parse_pipe_op("objectify"));
+        let sorted = apply_pipe_op(objectified, &parse_pipe_op("sort AGE"));
+        if let Value::Array(arr) = &sorted {
+            assert_eq!(arr.len(), 3);
+            if let Value::Hash(first) = &arr[0] {
+                assert_eq!(first.get("AGE"), Some(&Value::Int(25)));
+            }
+            if let Value::Hash(last) = &arr[2] {
+                assert_eq!(last.get("AGE"), Some(&Value::Int(35)));
             }
         } else {
             panic!("expected array");
