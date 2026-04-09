@@ -692,4 +692,105 @@ mod tests {
 
         std::fs::remove_dir_all(&home_tmp).ok();
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Plugin system
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn plugin_discovery_finds_rush_ps() {
+        // rush-ps should be in ~/.config/rush/plugins/ if installed
+        let available = crate::plugin::list_available();
+        // Don't assert it exists — it might not be installed in CI
+        // Just verify the discovery function doesn't crash
+        for (name, path) in &available {
+            assert!(!name.is_empty());
+            assert!(!path.is_empty());
+        }
+    }
+
+    #[test]
+    fn plugin_execute_missing_plugin() {
+        let result = crate::plugin::execute("nonexistent-xyz-plugin", "echo hello");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("not found"), "error should mention not found: {err}");
+    }
+
+    #[test]
+    fn plugin_block_in_script() {
+        // Test that plugin.ps blocks execute through CLI if rush-ps is available
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "plugin.ps\n  1 + 1\nend"])
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+            if stderr.contains("session established") {
+                // rush-ps is installed — verify the result
+                assert_eq!(stdout, "2", "plugin.ps should compute 1+1=2: stdout={stdout}");
+            } else if stderr.contains("not found") {
+                // rush-ps not installed — that's OK, skip
+            }
+            // Either way, the command should not panic
+        }
+    }
+
+    #[test]
+    fn plugin_ps_multiline() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "plugin.ps\n  $x = 10\n  $y = 20\n  $x + $y\nend"])
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+            if stderr.contains("session established") {
+                assert_eq!(stdout, "30", "plugin.ps multi-line: {stdout}");
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_ps_error_handling() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "plugin.ps\n  this-is-not-a-valid-command-xyz\nend"])
+            .output();
+
+        if let Ok(out) = output {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            // Should not crash regardless of whether rush-ps is installed
+            assert!(out.status.code().is_some(), "should exit cleanly");
+
+            if stderr.contains("session established") {
+                // rush-ps ran the command — should get an error
+                assert!(stderr.contains("not recognized") || stderr.contains("error")
+                    || out.stdout.is_empty(),
+                    "invalid PS command should produce error output");
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_ps_persistent_session() {
+        // Two plugin.ps blocks in sequence should share state
+        let script = "plugin.ps\n  $rush_test_var = 42\nend\nplugin.ps\n  $rush_test_var\nend";
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", script])
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+
+            if stderr.contains("session established") {
+                // Variable set in first block should be available in second
+                assert!(stdout.contains("42"),
+                    "persistent session should preserve $rush_test_var: {stdout}");
+            }
+        }
+    }
 }
