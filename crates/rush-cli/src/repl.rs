@@ -68,7 +68,14 @@ pub fn run(is_login: bool) {
                 ReedlineEvent::MenuNext,
             ]),
         );
-        Box::new(Vi::new(insert_bindings, default_vi_normal_keybindings()))
+        let mut normal_bindings = default_vi_normal_keybindings();
+        // Vi / search — reedline only binds ? by default, add /
+        normal_bindings.add_binding(
+            KeyModifiers::NONE,
+            KeyCode::Char('/'),
+            ReedlineEvent::SearchHistory,
+        );
+        Box::new(Vi::new(insert_bindings, normal_bindings))
     };
 
     // Autosuggestions: fish-style ghost text from history
