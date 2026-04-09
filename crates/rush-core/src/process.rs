@@ -639,18 +639,43 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
 
 // Keep old single-redirect function for test compatibility
 fn run_cmd_with_stdio(program: &str, args: &[&str], stdin: Stdio, stdout: Stdio, stderr: Stdio) -> CommandResult {
-    match Command::new(program)
+    let result = Command::new(program)
         .args(args)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
-        .status()
-    {
+        .status();
+
+    match result {
         Ok(status) => CommandResult {
             stdout: String::new(),
             stderr: String::new(),
             exit_code: status.code().unwrap_or(-1),
         },
+        #[cfg(windows)]
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Windows: retry via cmd.exe for shell builtins with redirections
+            let mut cmdline = program.to_string();
+            for a in args { cmdline.push(' '); cmdline.push_str(a); }
+            match Command::new("cmd.exe")
+                .args(["/C", &cmdline])
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+            {
+                Ok(status) => CommandResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: status.code().unwrap_or(-1),
+                },
+                Err(e2) => CommandResult {
+                    stdout: String::new(),
+                    stderr: format!("rush: {program}: {e2}"),
+                    exit_code: 127,
+                },
+            }
+        }
         Err(e) => CommandResult {
             stdout: String::new(),
             stderr: format!("rush: {program}: {e}"),
@@ -979,7 +1004,17 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                             }
                             _ => current.push('\\'),
                         }
+                    } else if cfg!(windows) {
+                        // On Windows, backslash is a path separator — preserve it.
+                        // Only treat as escape before special shell chars.
+                        match next {
+                            '"' | '\'' | '$' | '\\' | ' ' | '\t' | '`' => {
+                                current.push(chars.next().unwrap());
+                            }
+                            _ => current.push('\\'),
+                        }
                     } else {
+                        // Unix: backslash escapes the next character
                         current.push(chars.next().unwrap());
                     }
                 }
