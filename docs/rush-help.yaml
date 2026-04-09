@@ -8,44 +8,37 @@ file:
   methods:
     - name: "File.read(path)"
       returns: "string"
-      transpiles_to: "Get-Content path -Raw"
       example: 'content = File.read("/etc/hosts")'
 
     - name: "File.read_lines(path)"
       returns: "array of strings"
-      transpiles_to: "@(Get-Content path)"
       example: |
         lines = File.read_lines("log.txt")
         puts lines.count
 
     - name: "File.read_json(path)"
       returns: "object/hash"
-      transpiles_to: "(Get-Content path -Raw | ConvertFrom-Json)"
       example: |
         config = File.read_json("config.json")
         puts config.name
 
     - name: "File.read_csv(path)"
       returns: "array of objects (column-name properties)"
-      transpiles_to: "@(Import-Csv path)"
       example: |
         rows = File.read_csv("data.csv")
         rows.each { |r| puts r.name }
 
     - name: "File.write(path, content)"
       returns: "void"
-      transpiles_to: "Set-Content -Path path -Value content"
       example: 'File.write("/tmp/out.txt", "hello world")'
       note: "Overwrites existing file"
 
     - name: "File.append(path, content)"
       returns: "void"
-      transpiles_to: "Add-Content -Path path -Value content"
       example: 'File.append("log.txt", "new entry")'
 
     - name: "File.exist?(path)"
       returns: "bool"
-      transpiles_to: "(Test-Path path)"
       example: |
         if File.exist?("config.json")
           puts "found"
@@ -53,12 +46,10 @@ file:
 
     - name: "File.delete(path)"
       returns: "void"
-      transpiles_to: "Remove-Item path"
       example: 'File.delete("/tmp/scratch.txt")'
 
     - name: "File.size(path)"
       returns: "int (bytes)"
-      transpiles_to: "(Get-Item path).Length"
       example: 'puts File.size("data.bin").to_filesize'
 
   rules:
@@ -111,7 +102,7 @@ time:
     - { name: "Time.today", returns: "DateTime (midnight)" }
 
   durations:
-    - { method: "N.hours", example: "24.hours", transpiles_to: "[TimeSpan]::FromHours(24)" }
+    - { method: "N.hours", example: "24.hours" }
     - { method: "N.minutes", example: "30.minutes" }
     - { method: "N.seconds", example: "5.seconds" }
     - { method: "N.days", example: "7.days" }
@@ -203,7 +194,6 @@ arrays:
 hashes:
   summary: "Hash (dictionary) literals and methods"
   literal: '{ name: "DNS", port: 53 }'
-  transpiles_to: '@{ name = "DNS"; port = 53 }'
 
   access:
     - { syntax: 'h["key"]', note: "bracket access" }
@@ -257,7 +247,7 @@ classes:
     - "attr a, b, c — multiple on one line"
 
   constructor:
-    - "def initialize(params) — becomes PS constructor"
+    - "def initialize(params) — class constructor"
     - "Default params generate constructor overloads"
     - "super(args) calls parent constructor"
 
@@ -287,11 +277,11 @@ enums:
       active = 1
       inactive = 2
     end
-  access: "Status.active  →  [Status]::Active"
+  access: "Status.active"
   comparison: "if s == Status.active"
   rules:
     - "Enum name must be PascalCase"
-    - "Members are lowercase in Rush, PascalCased in output"
+    - "Members are lowercase in Rush"
     - "Optional = N for explicit integer values"
     - "Defined before use in same script"
 
@@ -477,7 +467,7 @@ errors:
     end
 
   raise: 'die "something went wrong"'
-  note: "die raises an exception (transpiles to throw)"
+  note: "die raises an exception"
 
   typed_rescue:
     - "rescue IOError => e — catch specific type"
@@ -485,8 +475,8 @@ errors:
     - "Multiple rescue blocks allowed"
 
 platforms:
-  summary: "OS-conditional and PowerShell block syntax"
-  keywords: [macos, linux, win64, win32, isssh, ps, ps5]
+  summary: "OS-conditional block syntax"
+  keywords: [macos, linux, win64, win32, isssh]
 
   syntax: |
     macos
@@ -498,7 +488,7 @@ platforms:
     end
 
     win64
-      puts "64-bit Windows (PS 7)"
+      puts "64-bit Windows"
     end
 
     isssh
@@ -516,49 +506,14 @@ platforms:
       end
 
   win32:
-    note: "win32 body is RAW PowerShell 5.1, not Rush syntax"
+    note: "win32 body targets 32-bit Windows APIs"
     purpose: "32-bit OLEDB/ODBC drivers (ACE, Business Central)"
-    example: |
-      win32
-        $conn = New-Object System.Data.OleDb.OleDbConnection(...)
-        $conn.Open()
-      end
-
-  ps_blocks:
-    note: "ps/ps5 blocks pass content directly to PowerShell with NO Rush expansion"
-    purpose: "Raw PowerShell passthrough — $_, $job, script blocks all survive untouched"
-    ps: |
-      ps
-        Get-Service | Where-Object { $_.Status -eq "Running" }
-        $fw = Get-NetFirewallProfile
-        $fw | Format-Table Name, Enabled
-      end
-    ps_version: |
-      ps.version >= "7.4"
-        # Requires PS 7.4+ features
-        $result = Get-Something -UseNewAPI
-      end
-    ps5: |
-      ps5
-        # Runs in Windows PowerShell 5.1 (for legacy modules)
-        Import-Module ActiveDirectory
-        Get-ADUser -Filter *
-      end
-
-  ps_vs_rush:
-    - { context: "Rush syntax (puts, if, for)", use: "Normal Rush code — Rush expands $variables" }
-    - { context: "PowerShell cmdlets with $_ or script blocks", use: "ps...end — no Rush expansion" }
-    - { context: "Legacy PS 5.1 modules (AD, OLEDB)", use: "ps5...end or win32...end" }
-    - { context: "Quick one-liner", use: "powershell -Command '...' (but ps block is cleaner)" }
 
   rules:
     - "Non-matching platform blocks are silently skipped"
     - "macos/linux/win64 contain normal Rush code"
-    - "win32 contains raw PowerShell 5.1"
-    - "ps...end runs raw PowerShell 7 on ALL platforms (cross-platform)"
-    - "ps5...end runs raw PowerShell 5.1 on Windows only"
+    - "win32 targets 32-bit Windows"
     - "isssh runs Rush code only when connected via SSH"
-    - "ps as a command (ps -ef, ps aux) still works — only bare ps triggers block mode"
     - "//server/share paths translate to native UNC on Windows (forward slashes always)"
 
   unc_paths:
@@ -711,7 +666,7 @@ cd:
     cd z:                         — drive letter
 
   features:
-    - "Syncs both PowerShell and .NET working directories"
+    - "Updates working directory for all child processes"
     - "Per-directory themes via .rushbg files"
     - "CDPATH support — search multiple directories"
     - "Symlink-aware — prompt shows the path you used, not the resolved path"
@@ -829,7 +784,7 @@ llm-mode:
     alternatives: "lcat to read, File.write() to write, ps aux for processes"
 
   object_mode:
-    note: "Structured .NET objects return as JSON array with curated projections"
+    note: "Structured objects return as JSON array with curated projections"
     projections:
       - "FileInfo → name, size, modified, type, path"
       - "Process → pid, name, memory, cpu"
@@ -846,7 +801,7 @@ mcp:
       hosts: "Local machine only"
       startup: "Loads init.rush and secrets.rush — Claude gets user's PATH, aliases, env"
       tools:
-        - { tool: "rush_execute", desc: "Execute Rush syntax, Unix commands, or PowerShell. State persists." }
+        - { tool: "rush_execute", desc: "Execute Rush syntax or Unix commands. State persists." }
         - { tool: "rush_read_file", desc: "Read file with MIME detection. Text as UTF-8, binary as base64." }
         - { tool: "rush_context", desc: "Current hostname, cwd, git branch/dirty, last exit code." }
 
@@ -952,6 +907,65 @@ config:
     - "unalias --save ll    — remove from config.json"
     - "sync                 — sync config across machines"
 
+sync:
+  summary: "Sync Rush configuration across machines via git, SSH, or shared path"
+
+  usage:
+    - "sync                        — show sync status"
+    - "sync setup git <repo-url>   — configure git-based sync"
+    - "sync setup ssh <host:path>  — configure SSH-based sync"
+    - "sync setup path <dir>       — configure shared-path sync (Dropbox, NAS, etc.)"
+    - "sync push                   — push local config to remote"
+    - "sync pull                   — pull remote config to local"
+    - "sync auto                   — enable auto-sync on shell launch"
+
+  what_syncs:
+    - "config.json — settings, aliases"
+    - "init.rush — startup script"
+    - "databases.json — SQL connection definitions"
+    - "objectify.rush — custom objectify rules"
+
+  what_never_syncs:
+    - "secrets.rush — API keys and tokens stay local"
+    - "history — command history stays local"
+
+  rules:
+    - "sync push/pull are explicit — no silent overwrites"
+    - "Conflicts show a diff and prompt for resolution"
+    - "sync auto runs pull on launch if remote is newer"
+    - "secrets.rush is always excluded from sync"
+
+setbg:
+  summary: "Terminal background color — set, pick, persist, per-project"
+
+  usage:
+    - 'setbg "#1a1a2e"             — set background for this session'
+    - 'setbg --save "#1a1a2e"      — persist globally to config.json'
+    - "setbg --selector            — interactive color picker in terminal"
+    - "setbg --selector --save     — pick and persist globally"
+    - "setbg --selector --local    — pick and save to .rushbg (per-project)"
+    - "setbg off                   — remove background color"
+    - 'set bg "#1a1a2e"            — alternative syntax via set command'
+
+  selector:
+    - "Curated palette of dark/light colors"
+    - "HSL-derived similar colors for fine-tuning"
+    - "Arrow keys to navigate, Enter to select"
+    - "Live preview — terminal updates as you browse"
+
+  per_project:
+    - ".rushbg file in project root sets background on cd"
+    - "Created by setbg --selector --local or manually"
+    - "Contains a single hex color value"
+    - "Helps visually distinguish project terminals"
+
+  rules:
+    - "setbg without --save is session-only"
+    - "setbg --save writes to config.json (applied at startup)"
+    - "setbg --local writes .rushbg in current directory"
+    - "Per-project .rushbg overrides global bg when you cd into that directory"
+    - "Respects NO_COLOR environment variable"
+
   tips:
     - "Coming from bash/zsh? You don't need a framework (oh-my-zsh, rcforge, etc.)."
     - "Rush handles prompt, completions, syntax highlighting, and vi/emacs modes natively."
@@ -1029,11 +1043,9 @@ known-issues:
 
     - problem: "Rush builtins (history, alias, cd, export) cannot be piped"
       reason: "Builtins write directly to console, bypassing the pipeline"
-      workaround: "history | distinct works (special-cased). For others, use PowerShell equivalents: Get-History, Get-ChildItem"
-      note: "history piping was added in v0.9.199 — other builtins not yet pipeable"
+      workaround: "history | distinct works (special-cased). Other builtins not yet pipeable."
 
-    - problem: "wc without coreutils on Windows shows PowerShell table format"
-      reason: "Without native wc, PowerShell's Measure-Object runs instead"
+    - problem: "wc not available on Windows without coreutils"
       workaround: "Install uutils (winget install uutils.coreutils) or use | count"
 
     - problem: "Variables matching builtin names (dirs, jobs, fg) can't be assigned"
@@ -1046,20 +1058,20 @@ known-issues:
       note: "Works correctly in rush -c and script files"
 
     - problem: "Platform blocks (macos/linux/win64) require Rush syntax in body"
-      reason: "Block bodies are parsed and transpiled — raw shell commands need quoting or variables"
+      reason: "Block bodies are parsed as Rush — raw shell commands need quoting or variables"
       workaround: "Assign shell output to variables: result = $(shell command)"
 
     - problem: "Single-file binary on Linux self-extracts on first run (~2-3s delay)"
-      reason: "PowerShell SDK assemblies extracted to ~/.net/rush/ on first execution"
+      reason: "Bundled libraries extracted to ~/.local/share/rush/ on first execution"
       workaround: "Normal — subsequent launches are instant. Pre-warm by running rush --version after install"
 
   windows_specific:
-    - problem: "ls output looks different from Unix (PowerShell Get-ChildItem)"
-      reason: "Without coreutils, ls is a PowerShell alias to Get-ChildItem"
+    - problem: "ls output looks different from Unix on Windows"
+      reason: "Without coreutils, Windows has no native ls"
       workaround: "Install uutils: winget install uutils.coreutils (or deploy zip to PATH)"
-      note: "Rush auto-shims coreutils.exe if detected, or add individual binaries to PATH"
+      note: "Rush auto-shims coreutils if detected, or add individual binaries to PATH"
 
-    - problem: "Some Unix commands missing (grep, find, head, tail)"
+    - problem: "Some Unix commands missing on Windows (grep, find, head, tail)"
       reason: "Windows has no native GNU tools"
       workaround: "Install uutils or Git for Windows. Rush auto-detects and configures on startup."
 

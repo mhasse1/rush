@@ -1,6 +1,6 @@
 # Rush User Manual
 
-> **Version 0.9.x (beta)** — A modern shell with clean, readable syntax on PowerShell 7
+> **Version 0.9.x (beta)** — A modern shell with clean, readable syntax, built in Rust
 
 ---
 
@@ -16,20 +16,17 @@
 8. [Platform Blocks](#platform-blocks)
 9. [Standard Library](#standard-library)
 10. [Built-in Commands](#built-in-commands)
-11. [The `ls` Builtin](#the-ls-builtin)
-12. [The `cat` Builtin](#the-cat-builtin)
-13. [The `sql` Command](#the-sql-command)
-14. [Command Translations](#command-translations)
-15. [Built-in Variables](#built-in-variables)
-16. [LLM Mode](#llm-mode)
-17. [MCP Server Mode](#mcp-server-mode)
-18. [Tips & Tricks](#tips--tricks)
+11. [The `sql` Command](#the-sql-command)
+12. [Built-in Variables](#built-in-variables)
+13. [LLM Mode](#llm-mode)
+14. [MCP Server Mode](#mcp-server-mode)
+15. [Tips & Tricks](#tips--tricks)
 
 ---
 
 ## Overview
 
-Rush is a Unix shell that combines Bash's pipeline and process model with clean, readable syntax. Under the hood, Rush code transpiles to PowerShell 7, giving you access to the full .NET runtime while writing natural, expressive commands.
+Rush is a Unix shell that combines Bash's pipeline and process model with clean, readable syntax. Rush code is parsed and evaluated by a native Rust interpreter. Shell commands run via fork/exec with proper process groups and signal handling.
 
 **Design principles:**
 
@@ -47,24 +44,18 @@ Rush is a Unix shell that combines Bash's pipeline and process model with clean,
 
 ### Prerequisites
 
-- .NET 8 SDK
-- macOS (arm64) or Linux
+- Rust toolchain (install via [rustup](https://rustup.rs/))
+- macOS, Linux, or Windows
 
 ### Build from Source
 
 ```bash
-export PATH="/opt/homebrew/opt/dotnet@8/bin:$PATH"
-export DOTNET_ROOT="/opt/homebrew/opt/dotnet@8/libexec"
-dotnet publish -c Release -r osx-arm64
+git clone https://github.com/mhasse1/rush && cd rush
+cargo build --release
+sudo cp target/release/rush-cli /usr/local/bin/rush
 ```
 
-### Install
-
-```bash
-./install.sh
-```
-
-This copies the self-contained binary to `/usr/local/lib/rush/` and creates a symlink at `/usr/local/bin/rush`. No runtime dependencies needed.
+The resulting binary is fully self-contained with no runtime dependencies.
 
 ### Set as Login Shell (Optional)
 
@@ -78,6 +69,7 @@ chsh -s /usr/local/bin/rush
 rush                     Start interactive shell
 rush script.rush         Execute a Rush script
 rush -c 'command'        Execute command and exit
+rush --login             Start as login shell (runs profile scripts)
 rush --llm               LLM agent mode (JSON wire protocol)
 rush --mcp               MCP server mode (local stdio)
 rush --mcp-ssh           MCP server mode (SSH gateway)
@@ -88,7 +80,7 @@ rush --help (-h)         Show help
 
 #### Multi-line `rush -c`
 
-`rush -c` supports multi-line scripts. All lines are checked for Rush syntax (not just the first line), and mixed Rush/shell lines work correctly — Rush lines are transpiled while shell lines pass through:
+`rush -c` supports multi-line scripts. All lines are checked for Rush syntax (not just the first line), and mixed Rush/shell lines work correctly — Rush lines are interpreted while shell lines pass through:
 
 ```bash
 # Mixed Rush and shell in one invocation
@@ -160,7 +152,7 @@ Created automatically on first run. All settings with their defaults:
 
 ### Startup Script
 
-**`init.rush`** runs on every shell launch, fully transpiled through the Rush engine. Everything goes here — exports, aliases, functions, and prompt customization:
+**`init.rush`** runs on every shell launch, fully interpreted by the Rush engine. Everything goes here — exports, aliases, functions, and prompt customization:
 
 ```rush
 # ~/.config/rush/init.rush
@@ -211,6 +203,9 @@ set --save bg "#222733"    # Persist across sessions
 setbg "#222733"            # Shorthand (same as set bg)
 setbg --save "#222733"     # Shorthand with persist
 set bg off                 # Turn off (let terminal control background)
+setbg --selector           # Interactive in-terminal color picker
+setbg --selector --save    # Pick and persist globally
+setbg --selector --local   # Pick and save per-project (.rushbg)
 ```
 
 If you've customized `LS_COLORS` or `GREP_COLORS` in your shell profile, Rush respects your values.
@@ -387,7 +382,7 @@ Partial acceptance with `Alt+Right` lets you incrementally accept a suggestion w
 | `Ctrl+R` | Reverse incremental search |
 | `\` (trailing) | Line continuation |
 
-`Ctrl+C` works for all command types: builtins (`cat`, `read`), native commands (`sleep`, `curl`), and PowerShell pipelines. Running processes are killed and Rush returns to the prompt.
+`Ctrl+C` works for all command types: builtins (`cat`, `read`), native commands (`sleep`, `curl`), and pipelines. Running processes are killed and Rush returns to the prompt.
 
 ---
 
@@ -544,7 +539,7 @@ Both use forward slashes consistently. Rush always displays `/`, never `\`.
 
 ## Objectify & Auto-Objectify
 
-Native commands like `netstat`, `docker ps`, and `lsof` produce text tables. The `objectify` pipe converts text output into PowerShell objects so they can participate in the object pipeline (`where`, `select`, `sort`, `as json`, etc.).
+Native commands like `netstat`, `docker ps`, and `lsof` produce text tables. The `objectify` pipe converts text output into structured objects so they can participate in the object pipeline (`where`, `select`, `sort`, `as json`, etc.).
 
 ### Explicit Objectify
 
@@ -1292,7 +1287,7 @@ linux
 end
 
 win64
-  puts "Running on Windows (64-bit PS 7)"
+  puts "Running on Windows (64-bit)"
 end
 ```
 
@@ -1329,9 +1324,9 @@ end
 
 Version comparisons use numeric ordering, so `"25.3.0" >= "6.8.0"` works correctly.
 
-### win64 — Windows with PowerShell 7
+### win64 — Windows (64-bit)
 
-`win64` blocks run normal Rush code on 64-bit Windows. Since Rush runs on PowerShell 7 (which is 64-bit only), `win64` is the standard Windows block. Use it for Windows-specific paths, commands, and 64-bit driver access:
+`win64` blocks run normal Rush code on 64-bit Windows. Use it for Windows-specific paths, commands, and configuration:
 
 ```rush
 win64
@@ -1354,72 +1349,6 @@ win64.version >= "10.0.22000"
 end
 ```
 
-### win32 — 32-bit PowerShell Escape Hatch
-
-The `win32` block is special: its body is **raw PowerShell 5.1** (not Rush syntax) and executes in the 32-bit PowerShell process at `C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`. This is needed for 32-bit ODBC/OLEDB drivers like ACE and BC that cannot load in 64-bit processes.
-
-```rush
-win32
-  # Raw PowerShell 5.1 — runs in 32-bit powershell.exe
-  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\Data\customers.accdb")
-  $conn.Open()
-  $cmd = $conn.CreateCommand()
-  $cmd.CommandText = "SELECT * FROM Customers"
-  $reader = $cmd.ExecuteReader()
-  while ($reader.Read()) {
-    Write-Output "$($reader[0]) | $($reader[1])"
-  }
-  $conn.Close()
-end
-```
-
-**Key differences from other platform blocks:**
-
-- Body is **raw PowerShell 5.1**, not Rush syntax
-- Executes in a **32-bit process** (SysWOW64 path)
-- Rush variables are automatically injected as `$var = 'value'` preamble
-- On macOS/Linux, win32 blocks are silently skipped
-
-### ps — Raw PowerShell Passthrough
-
-The `ps` block passes content directly to the embedded PowerShell 7 engine with **NO Rush variable expansion**. `$_`, `$job`, script blocks, and all PowerShell syntax survive untouched. This is the recommended way to use PowerShell cmdlets that rely on `$_`, `Where-Object` script blocks, or PS-native variable scoping.
-
-```rush
-ps
-  Get-Service | Where-Object { $_.Status -eq "Running" }
-  $fw = Get-NetFirewallProfile
-  $fw | Format-Table Name, Enabled
-end
-```
-
-**Key features:**
-- `$` variables are NOT expanded by Rush — they reach PowerShell as-is
-- Works on **all platforms** (Rush bundles the PS 7 SDK)
-- Supports version gating: `ps.version >= "7.4" ... end`
-- Bare `ps` starts a block; `ps -ef` and `ps aux` still run the Unix `ps` command
-
-**When to use `ps` vs regular Rush:**
-
-| Scenario | Use |
-|----------|-----|
-| Simple commands, file ops, pipelines | Regular Rush |
-| PowerShell cmdlets with `$_` or `{}` script blocks | `ps ... end` |
-| Windows admin (Get-Service, Get-NetFirewall, etc.) | `ps ... end` |
-| Legacy PS 5.1 modules (AD, OLEDB) | `ps5 ... end` or `win32 ... end` |
-
-### ps5 — PowerShell 5.1 (Windows Only)
-
-The `ps5` block runs raw PowerShell 5.1 via `powershell.exe` on Windows. Use it for modules that require Windows PowerShell 5.1 (not PS 7), such as some Active Directory cmdlets or older management tools.
-
-```rush
-ps5
-  Import-Module ActiveDirectory
-  Get-ADUser -Filter * | Select-Object Name, Enabled
-end
-```
-
-On macOS/Linux, `ps5` blocks are silently skipped (PS 5.1 doesn't exist there).
-
 ### Cross-Platform Scripts
 
 Combine platform blocks for scripts that run everywhere:
@@ -1438,14 +1367,6 @@ end
 
 win64
   export ODBC_DRIVER="{MySQL ODBC 8.0 Unicode Driver}"
-end
-
-win32
-  # 32-bit Access database via ACE driver
-  $conn = New-Object System.Data.OleDb.OleDbConnection("Provider=Microsoft.ACE.OLEDB.12.0;Data Source=C:\legacy\data.accdb")
-  $conn.Open()
-  # ... query legacy data ...
-  $conn.Close()
 end
 
 # Common code runs on all platforms
@@ -1788,7 +1709,7 @@ ai --agent --model claude-sonnet-4-20250514 "deploy the app"
 
 The agent:
 - Receives your task as a goal
-- Executes commands via Rush's LLM mode engine (same process, shared runspace)
+- Executes commands via Rush's LLM mode engine (same process, shared session)
 - Observes structured JSON results (including object-mode output)
 - Iterates up to 25 turns until the task is done
 - Streams thinking text and command results to the terminal
@@ -1863,43 +1784,6 @@ Rush configures theme-aware colors for native commands at startup (see [Colors &
 
 ---
 
-## The `cat` Builtin
-
-Rush includes a native `cat` implementation built on .NET (not PowerShell's `Get-Content`). It provides Unix-compatible behavior for file reading, concatenation, and stdin.
-
-### Basic Usage
-
-```rush
-cat file.txt                # Print file contents
-cat file1.txt file2.txt     # Concatenate multiple files
-cat -n file.txt             # Print with line numbers
-cat --number file.txt       # Same as -n
-```
-
-### Stdin Reading
-
-```rush
-cat                         # Read from stdin (type lines, Ctrl+D to end)
-cat > output.txt            # Read stdin, write to file
-cat >> output.txt           # Read stdin, append to file
-```
-
-Press **Ctrl+D** on an empty line to signal EOF (end of input). Press **Ctrl+C** to cancel.
-
-### Redirection
-
-```rush
-cat file.txt > copy.txt     # Copy file contents
-cat file.txt >> log.txt     # Append to file
-cat < input.txt             # Read via stdin redirection
-```
-
-### Pipeline Fallthrough
-
-When `cat` is used in a pipeline (`cat file | grep pattern`) or with process substitution (`cat <(cmd)`), Rush falls through to the native `/bin/cat` so pipeline semantics work naturally.
-
----
-
 ## The `sql` Command
 
 Rush includes a native `sql` command for querying databases directly from the shell. Results are formatted as aligned tables for human consumption, or as structured JSON for AI agents.
@@ -1964,9 +1848,7 @@ Connections are stored in `~/.config/rush/databases.json`. Passwords are never s
 
 ## Command Execution
 
-On macOS and Linux, Unix commands (`ls`, `grep`, `find`, `cp`, `mv`, `rm`, `head`, `tail`, `sort`, `ps`, `kill`, etc.) run **natively** — Rush does not translate or intercept them. All flags work exactly as the OS provides.
-
-`echo` is the only standalone command Rush translates (to PowerShell's `Write-Output`) for PowerShell variable expansion.
+On macOS and Linux, Unix commands (`ls`, `grep`, `find`, `cp`, `mv`, `rm`, `head`, `tail`, `sort`, `ps`, `kill`, etc.) run **natively** via fork/exec — Rush does not translate or intercept them. All flags work exactly as the OS provides.
 
 ### Pipeline Operations (After `|`)
 
@@ -2054,24 +1936,28 @@ ls | tee -a log.txt             # Append mode
 | `$?.ok?` | True if last command succeeded |
 | `$?.failed?` | True if last command failed |
 | `$?.code` | Numeric exit code |
+| `$os` | Operating system name (`macos`, `linux`, `windows`) |
+| `$arch` | CPU architecture (`arm64`, `x86_64`) |
+| `$hostname` | Machine hostname |
+| `$user` | Current username |
+| `$rush_version` | Rush version string |
+| `$pid` | Current process ID |
 | `ARGV` | Script arguments (array) |
 | `__FILE__` | Current script file path |
 | `__DIR__` | Current script directory |
 | `env.HOME` | Environment variable (dot access) |
 | `env["PATH"]` | Environment variable (bracket access) |
-| `os` | Operating system name |
-| `hostname` | Machine name |
-| `rush_version` | Rush version string |
 | `is_login_shell` | True if launched as login shell |
 | `needs_reload` | True if binary updated since startup (prompt context) |
-| `__rush_arch` | CPU architecture: `x64`, `arm64`, `x86` |
-| `__rush_os_version` | OS version string (Darwin/kernel/Windows) |
+| `RUSH_OS` | Environment variable: OS name |
+| `RUSH_ARCH` | Environment variable: CPU architecture |
+| `RUSH_VERSION` | Environment variable: Rush version string |
 
 ---
 
 ## LLM Mode
 
-`rush --llm` replaces the human shell interface with a structured JSON wire protocol for LLM agents. Every interaction is machine-readable — no ANSI colors, no decorations, no human prompts. Environment variables (`CI=true`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive`) are forced to prevent hidden interactive prompts from hanging the session.
+`rush --llm` replaces the human shell interface with a structured JSON wire protocol for LLM agents. Every command request and result is machine-readable JSON — no ANSI colors, no decorations, no human prompts. Environment variables (`CI=true`, `GIT_TERMINAL_PROMPT=0`, `DEBIAN_FRONTEND=noninteractive`) are forced to prevent hidden interactive prompts from hanging the session.
 
 ### Session Initialization
 
@@ -2082,7 +1968,7 @@ ls | tee -a log.txt             # Append mode
 `rush --llm --inherit /path/to/state.json` carries over live runtime state from a parent interactive session:
 
 - Environment variables (user-defined)
-- PowerShell variables (user-defined)
+- Rush variables (user-defined)
 - Aliases (from running session)
 - CWD + previous directory (for `cd -`)
 - Shell flags (`set -e`, `set -x`, `set -o pipefail`)
@@ -2105,7 +1991,7 @@ Every turn follows the same pattern:
 
 ### Object-Mode Output
 
-When a command produces structured .NET objects (e.g., `ls` returns `FileInfo`/`DirectoryInfo`, `ps` returns `Process`), Rush auto-detects this and serializes them as a JSON array instead of formatted text. The `stdout_type` field is set to `"objects"` and `stdout` becomes an array of curated property projections:
+When a command produces structured objects (e.g., `ls` returns file metadata, `ps` returns process info), Rush auto-detects this and serializes them as a JSON array instead of formatted text. The `stdout_type` field is set to `"objects"` and `stdout` becomes an array of curated property projections:
 
 ```
 ← ls docs
@@ -2208,13 +2094,13 @@ Restart Claude Code / Claude Desktop after installing.
 
 Server name: `rush-local`
 
-A stateful MCP server with a persistent PowerShell runspace. Variables, working directory, and environment changes survive across tool calls.
+A stateful MCP server with a persistent Rush session. Variables, working directory, and environment changes survive across tool calls.
 
 **Tools:**
 
 | Tool | Description |
 |------|-------------|
-| `rush_execute` | Execute Rush syntax, Unix commands, or PowerShell. State persists. |
+| `rush_execute` | Execute Rush syntax or Unix commands. State persists. |
 | `rush_read_file` | Read a file with MIME detection. Text as UTF-8, binary as base64. |
 | `rush_context` | Get current context: hostname, cwd, git branch/dirty, last exit code. |
 
@@ -2272,11 +2158,11 @@ Rush uses SSH in several ways, with different requirements for each:
 ### Deploying Rush to Remote Hosts
 
 ```bash
-# Build for the target platform
-dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true
+# Build for the target platform (cross-compile with Rust)
+cargo build --release --target x86_64-unknown-linux-gnu
 
 # Copy the binary
-scp bin/Release/net8.0/linux-x64/publish/rush server:/usr/local/bin/
+scp target/x86_64-unknown-linux-gnu/release/rush-cli server:/usr/local/bin/rush
 
 # Verify
 ssh server "rush --version"
@@ -2289,17 +2175,6 @@ Rush automatically uses OpenSSH ControlMaster multiplexing for UNC paths and MCP
 ---
 
 ## Tips & Tricks
-
-### PowerShell Passthrough
-
-Any PowerShell cmdlet works directly in Rush:
-
-```rush
-Get-Process | Where-Object CPU -gt 50
-[Math]::PI                      # → 3.14159265358979
-[DateTime]::Now.DayOfWeek       # → Monday
-[System.IO.Path]::GetExtension("file.txt")  # → .txt
-```
 
 ### Debugging
 
@@ -2342,8 +2217,6 @@ end
 ```
 
 ### Size Literals
-
-PowerShell size constants work in Rush:
 
 ```rush
 1kb                             # 1,024
