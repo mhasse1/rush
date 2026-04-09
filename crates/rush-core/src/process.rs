@@ -1674,6 +1674,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn native_pipeline() {
         let result = run_native_capture("echo hello | wc -c");
         let count: i32 = result.stdout.trim().parse().unwrap_or(0);
@@ -1681,12 +1682,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn native_false() {
         let result = run_native("/usr/bin/false");
         assert_ne!(result.exit_code, 0);
     }
 
     #[test]
+    #[cfg(unix)]
     fn redirect_stdout() {
         let tmp = std::env::temp_dir().join("rush_redirect_test.txt");
         let path = tmp.to_string_lossy().to_string();
@@ -1697,6 +1700,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn redirect_append() {
         let tmp = std::env::temp_dir().join("rush_append_test.txt");
         let path = tmp.to_string_lossy().to_string();

@@ -119,6 +119,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn dispatch_pipeline_native() {
         let result = process::run_native_capture("echo hello | tr h H");
         assert_eq!(result.stdout.trim(), "Hello");

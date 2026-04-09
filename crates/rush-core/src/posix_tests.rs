@@ -1,7 +1,9 @@
 //! POSIX compliance test suite.
 //! Tests shell execution features against IEEE Std 1003.1-2024.
+//! These tests are Unix-only — POSIX is a Unix standard.
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use crate::dispatch;
     use crate::eval::{Evaluator, Output};
