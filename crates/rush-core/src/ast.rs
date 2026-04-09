@@ -236,6 +236,13 @@ pub enum Node {
         property_value: Option<String>,
     },
 
+    /// Plugin block: `plugin.NAME ... end`
+    /// Body is captured raw (not parsed as Rush) and sent to companion binary.
+    PluginBlock {
+        plugin_name: String,
+        raw_body: String,
+    },
+
     /// Shell passthrough
     ShellPassthrough {
         raw_command: String,

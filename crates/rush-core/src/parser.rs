@@ -148,6 +148,7 @@ impl Parser {
             }
             TokenType::Win32 => self.parse_win32_block()?,
             TokenType::Ps | TokenType::Ps5 => self.parse_raw_ps_block()?,
+            TokenType::Plugin => self.parse_plugin_block()?,
             TokenType::Next | TokenType::Continue | TokenType::Break => {
                 self.parse_loop_control()?
             }
@@ -609,6 +610,32 @@ impl Parser {
             property,
             operator,
             property_value,
+        })
+    }
+
+    /// Parse `plugin.NAME ... end` — raw body sent to companion binary.
+    fn parse_plugin_block(&mut self) -> ParseResult<Node> {
+        self.pos += 1; // skip 'plugin'
+
+        // Expect dot + name
+        if !self.check(TokenType::Dot) {
+            return Err(ParseError {
+                message: "Expected '.' after 'plugin' (e.g., plugin.ps)".into(),
+                position: self.current().position,
+            });
+        }
+        self.pos += 1; // skip '.'
+
+        // Accept identifiers OR keywords as plugin names (ps, win32, python, etc.)
+        let name = self.advance_clone().value.to_ascii_lowercase();
+
+        self.skip_newlines();
+        let raw_body = self.capture_raw_body();
+        self.expect(TokenType::End)?;
+
+        Ok(Node::PluginBlock {
+            plugin_name: name,
+            raw_body,
         })
     }
 

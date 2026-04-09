@@ -53,6 +53,7 @@ pub enum TokenType {
     Isssh,
     Ps,
     Ps5,
+    Plugin,
 
     // Operators
     Assign,       // =

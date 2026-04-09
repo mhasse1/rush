@@ -607,6 +607,21 @@ impl<'a> Evaluator<'a> {
                 Ok(Value::Nil)
             }
 
+            Node::PluginBlock { plugin_name, raw_body } => {
+                match crate::plugin::execute(plugin_name, raw_body) {
+                    Ok(output) => {
+                        if !output.is_empty() {
+                            self.output.puts(&output);
+                        }
+                        Ok(Value::Nil)
+                    }
+                    Err(e) => {
+                        self.output.warn(&format!("plugin.{plugin_name}: {e}"));
+                        Ok(Value::Nil)
+                    }
+                }
+            }
+
             Node::StaticMember { .. }
             | Node::SuperCall { .. }
             | Node::PlatformBlock { .. }

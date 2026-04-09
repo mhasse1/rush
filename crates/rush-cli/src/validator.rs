@@ -95,7 +95,8 @@ fn is_incomplete(source: &str) -> bool {
                 "if" | "unless" | "while" | "until" | "for" | "loop"
                 | "def" | "class" | "enum" | "case" | "match"
                 | "try" | "begin" | "do"
-                | "macos" | "linux" | "win64" | "win32" | "ps" | "ps5" => {
+                | "macos" | "linux" | "win64" | "win32" | "ps" | "ps5"
+                | "plugin" => {
                     depth += 1;
                 }
                 "end" => {

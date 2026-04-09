@@ -20,6 +20,11 @@ pub fn is_rush_syntax(input: &str) -> bool {
         "macos", "linux", "win64", "win32", "isssh",
         "do",
     ];
+    // plugin.NAME is always Rush syntax
+    if first_word.eq_ignore_ascii_case("plugin") {
+        return true;
+    }
+
     // ps/ps5 are block keywords only when bare (no args)
     if first_word.eq_ignore_ascii_case("ps") || first_word.eq_ignore_ascii_case("ps5") {
         if trimmed.len() == first_word.len() {

@@ -43,6 +43,7 @@ fn keyword_type(word: &str) -> Option<TokenType> {
         "isssh" => Some(TokenType::Isssh),
         "ps" => Some(TokenType::Ps),
         "ps5" => Some(TokenType::Ps5),
+        "plugin" => Some(TokenType::Plugin),
         _ => None,
     }
 }
