@@ -77,6 +77,8 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
@@ -91,6 +93,7 @@ jobs:
         run: cargo test
 
       - name: LLM Mode Tests
+        if: runner.os != 'Windows'
         run: |
           # Test LLM context output
           echo 'echo hello' | target/release/rush-cli --llm 2>/dev/null | head -1 | python3 -c "
@@ -128,6 +131,7 @@ jobs:
           "
 
       - name: MCP Mode Tests
+        if: runner.os != 'Windows'
         run: |
           # Test MCP initialize
           echo '{"jsonrpc":"2.0","id":1,"method":"initialize"}' | target/release/rush-cli --mcp 2>/dev/null | python3 -c "
@@ -171,12 +175,19 @@ jobs:
           print('✓ MCP resources/list OK')
           "
 
-      - name: Upload binary
-        if: success()
+      - name: Upload binary (unix)
+        if: success() && runner.os != 'Windows'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: rush-rust-${{ matrix.target }}
           path: target/release/rush-cli
+
+      - name: Upload binary (windows)
+        if: success() && runner.os == 'Windows'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: rush-rust-${{ matrix.target }}
+          path: target/release/rush-cli.exe
 
   # Create a GitHub issue when CI fails on main
   create-issue-on-failure:

@@ -149,33 +149,113 @@ pub fn current() -> Box<dyn Platform> {
     { Box::new(UnixPlatform::new()) }
 
     #[cfg(not(unix))]
-    { Box::new(StubPlatform) }
+    { Box::new(WindowsPlatform::new()) }
 }
 
-// ── Stub for non-Unix (compiles but panics) ─────────────────────────
+// ── Windows / non-Unix backend ──────────────────────────────────────
 
 #[cfg(not(unix))]
-struct StubPlatform;
+pub struct WindowsPlatform;
 
 #[cfg(not(unix))]
-impl Platform for StubPlatform {
-    fn install_signal_handlers(&self) {}
-    fn set_signal(&self, _sig: Sig, _action: SigAction) {}
+impl WindowsPlatform {
+    pub fn new() -> Self { Self }
+}
+
+#[cfg(not(unix))]
+impl Platform for WindowsPlatform {
+    fn install_signal_handlers(&self) {
+        // Windows uses SetConsoleCtrlHandler — handled by Rust's ctrlc crate
+        // or std::process signal handling. No-op here; reedline handles Ctrl+C.
+    }
+
+    fn set_signal(&self, _sig: Sig, _action: SigAction) {
+        // No POSIX signals on Windows. Ctrl+C is handled by the console subsystem.
+    }
+
     fn should_exit(&self) -> bool { false }
-    fn setup_foreground_child(&self) {}
-    fn setup_background_child(&self) {}
-    fn set_foreground_pgid(&self, _pgid: u32) {}
-    fn reclaim_terminal(&self) {}
+
+    fn setup_foreground_child(&self) {
+        // Windows doesn't have process groups in the POSIX sense.
+        // CREATE_NEW_PROCESS_GROUP is handled by std::process::Command.
+    }
+
+    fn setup_background_child(&self) {
+        // No POSIX job control on Windows.
+    }
+
+    fn set_foreground_pgid(&self, _pgid: u32) {
+        // No terminal process group control on Windows.
+    }
+
+    fn reclaim_terminal(&self) {
+        // No-op on Windows — console is always owned by the process.
+    }
+
     fn shell_pgid(&self) -> u32 { std::process::id() }
-    fn wait_pid(&self, _pid: u32) -> WaitResult { WaitResult::Exited(0) }
+
+    fn wait_pid(&self, pid: u32) -> WaitResult {
+        // Use std::process::Child::wait() instead — this is a fallback.
+        // On Windows, PIDs aren't directly waitable without a handle.
+        let _ = pid;
+        WaitResult::Exited(0)
+    }
+
     fn try_wait_pid(&self, _pid: u32) -> Option<WaitResult> { None }
-    fn kill_pg(&self, _pgid: u32, _sig: Sig) {}
-    fn terminal_size(&self) -> Option<TermSize> { None }
-    fn local_time_hhmm(&self) -> String { "??:??".to_string() }
-    fn hostname(&self) -> String { std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".into()) }
-    fn username(&self) -> String { std::env::var("USERNAME").unwrap_or_else(|_| "unknown".into()) }
-    fn is_ssh(&self) -> bool { false }
-    fn is_root(&self) -> bool { false }
+
+    fn kill_pg(&self, _pgid: u32, _sig: Sig) {
+        // On Windows, use TerminateProcess via std::process::Child::kill().
+        // Process group killing requires job objects (future enhancement).
+    }
+
+    fn terminal_size(&self) -> Option<TermSize> {
+        // Try COLUMNS/LINES env vars (set by some terminals)
+        let cols = std::env::var("COLUMNS").ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(120);
+        let rows = std::env::var("LINES").ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(30);
+        Some(TermSize { cols, rows })
+    }
+
+    fn local_time_hhmm(&self) -> String {
+        // Use system time — no libc dependency needed
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // UTC offset not easily available without a crate, but on Windows
+        // we can shell out or use env. For now, use UTC with timezone offset.
+        // This is approximate — proper fix would use chrono or windows-sys.
+        let hours = (secs / 3600) % 24;
+        let minutes = (secs / 60) % 60;
+        format!("{hours:02}:{minutes:02}")
+    }
+
+    fn hostname(&self) -> String {
+        std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "unknown".into())
+            .to_lowercase()
+    }
+
+    fn username(&self) -> String {
+        std::env::var("USERNAME")
+            .or_else(|_| std::env::var("USER"))
+            .unwrap_or_else(|_| "unknown".into())
+    }
+
+    fn is_ssh(&self) -> bool {
+        std::env::var("SSH_CONNECTION").is_ok() || std::env::var("SSH_CLIENT").is_ok()
+    }
+
+    fn is_root(&self) -> bool {
+        // On Windows, check if running as Administrator
+        // Simplified: check for well-known admin env patterns
+        false // proper check needs windows-sys or whoami crate
+    }
 }
 
 #[cfg(test)]
