@@ -22,6 +22,7 @@ pub mod flags;
 pub mod hints;
 pub mod sync;
 pub mod mcp_ssh;
+pub mod mcp_install;
 #[cfg(test)]
 mod posix_tests;
 #[cfg(test)]

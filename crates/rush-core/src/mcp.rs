@@ -10,7 +10,7 @@ use std::io::{BufRead, Write};
 
 use crate::llm;
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const INSTRUCTIONS: &str = "\
 Rush is a Unix-style shell with clean, intent-driven syntax. \

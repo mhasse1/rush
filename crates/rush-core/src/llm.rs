@@ -384,7 +384,7 @@ impl Output for CaptureOutput {
 
 // ── Main REPL ───────────────────────────────────────────────────────
 
-const VERSION: &str = "0.1.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 const OUTPUT_LIMIT: usize = 32 * 1024; // 32KB
 
 /// Run the LLM mode REPL on stdin/stdout.

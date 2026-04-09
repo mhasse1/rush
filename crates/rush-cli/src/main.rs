@@ -12,6 +12,23 @@ use rush_core::lexer::Lexer;
 use rush_core::parser;
 use std::io;
 
+/// Build-time version: Cargo.toml version + git SHA
+pub fn rush_version() -> String {
+    let base = env!("CARGO_PKG_VERSION");
+    let sha = env!("RUSH_GIT_SHA");
+    let dirty = env!("RUSH_GIT_DIRTY");
+    if sha.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base} ({sha}{dirty})")
+    }
+}
+
+/// Short version for banners
+pub fn rush_version_short() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 fn main() {
     // Install signal handlers before anything else
     signals::install();
@@ -23,7 +40,47 @@ fn main() {
         .map(|d| d.as_secs()).unwrap_or(0);
     unsafe { std::env::set_var("RUSH_START_TIME", start_secs.to_string()) };
 
+    // Set RUSHPATH for child processes (MCP-SSH uses this to find Rush)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Ok(resolved) = std::fs::canonicalize(&exe) {
+            unsafe { std::env::set_var("RUSHPATH", resolved.to_string_lossy().as_ref()) };
+        }
+    }
+
     let args: Vec<String> = std::env::args().collect();
+
+    // Login shell detection: argv[0] starts with '-' or --login/-l flag
+    let is_login = args[0].starts_with('-')
+        || args.iter().any(|a| a == "--login" || a == "-l");
+
+    // Strip --login/-l from args for further processing
+    let args: Vec<String> = args.into_iter()
+        .filter(|a| a != "--login" && a != "-l")
+        .collect();
+
+    // rush --version / -v
+    if args.get(1).is_some_and(|a| a == "--version" || a == "-v") {
+        println!("rush {}", rush_version());
+        return;
+    }
+
+    // rush --help / -h
+    if args.get(1).is_some_and(|a| a == "--help" || a == "-h") {
+        println!("rush {} — a modern-day warrior", rush_version());
+        println!();
+        println!("Usage:");
+        println!("  rush                           Start interactive shell");
+        println!("  rush script.rush [args]        Execute Rush script file");
+        println!("  rush -c 'command'              Execute command and exit");
+        println!("  rush --llm                     LLM wire protocol mode (JSON I/O)");
+        println!("  rush --mcp                     MCP server mode (JSON-RPC over stdio)");
+        println!("  rush --mcp-ssh                 MCP SSH gateway (dynamic multi-host)");
+        println!("  rush install mcp --claude      Install MCP servers into Claude");
+        println!("  rush --login                   Start as login shell");
+        println!("  rush --version                 Show version");
+        println!("  rush --help                    Show this help");
+        return;
+    }
 
     // rush --lex: dump tokens
     if args.get(1).is_some_and(|a| a == "--lex") {
@@ -70,11 +127,22 @@ fn main() {
         return;
     }
 
+    // rush install mcp --claude
+    if args.get(1).is_some_and(|a| a == "install")
+        && args.get(2).is_some_and(|a| a == "mcp")
+        && args.iter().any(|a| a == "--claude")
+    {
+        rush_core::mcp_install::install_claude();
+        return;
+    }
+
     // rush -c "command": execute and exit
     if args.get(1).is_some_and(|a| a == "-c") {
         if let Some(cmd) = args.get(2) {
             let mut output = StdOutput;
             let mut evaluator = Evaluator::new(&mut output);
+            builtins::inject_env_vars(is_login);
+            builtins::inject_builtin_vars(&mut evaluator);
             run_line(&mut evaluator, cmd);
             std::process::exit(evaluator.exit_code);
         }
@@ -90,6 +158,8 @@ fn main() {
             });
             let mut output = StdOutput;
             let mut evaluator = Evaluator::new(&mut output);
+            builtins::inject_env_vars(is_login);
+            builtins::inject_builtin_vars(&mut evaluator);
 
             // Set ARGV and __FILE__
             let script_args: Vec<rush_core::value::Value> = args[2..]
@@ -120,7 +190,7 @@ fn main() {
     }
 
     // Interactive REPL with reedline
-    repl::run();
+    repl::run(is_login);
 }
 
 /// Execute a line through the unified dispatch system.

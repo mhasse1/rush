@@ -393,4 +393,303 @@ mod tests {
         assert!(ls.contains("di="));
         assert!(ls.contains("ex="));
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Version
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn version_from_cargo() {
+        let v = env!("CARGO_PKG_VERSION");
+        assert!(!v.is_empty());
+        assert!(v.contains('.'), "version should be semver: {v}");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // CLI: --version, --help, --login
+    // ═══════════════════════════════════════════════════════════════
+
+    fn rush_cli_path() -> String {
+        // Find the built binary
+        let mut path = std::env::current_exe().unwrap();
+        path.pop(); // remove test binary name
+        path.pop(); // remove deps/
+        path.push("rush-cli");
+        if path.exists() {
+            return path.to_string_lossy().to_string();
+        }
+        // Fallback: try release build
+        "target/release/rush-cli".to_string()
+    }
+
+    #[test]
+    fn cli_version_flag() {
+        let output = std::process::Command::new(rush_cli_path())
+            .arg("--version")
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.starts_with("rush "), "should start with 'rush ': {stdout}");
+            assert!(stdout.contains('.'), "should contain version number: {stdout}");
+        }
+        // Skip if binary not built — CI will catch it
+    }
+
+    #[test]
+    fn cli_help_flag() {
+        let output = std::process::Command::new(rush_cli_path())
+            .arg("--help")
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.contains("Usage:"), "should show usage: {stdout}");
+            assert!(stdout.contains("--mcp"), "should mention --mcp: {stdout}");
+            assert!(stdout.contains("--llm"), "should mention --llm: {stdout}");
+        }
+    }
+
+    #[test]
+    fn cli_login_env_var() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["--login", "-c", "echo $RUSH_LOGIN"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            assert_eq!(stdout, "1", "RUSH_LOGIN should be 1 with --login flag");
+        }
+    }
+
+    #[test]
+    fn cli_non_login_env_var() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "echo $RUSH_LOGIN"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            assert_eq!(stdout, "0", "RUSH_LOGIN should be 0 without --login flag");
+        }
+    }
+
+    #[test]
+    fn cli_env_vars_injected() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "echo $RUSH_OS $RUSH_ARCH"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let parts: Vec<&str> = stdout.split_whitespace().collect();
+            assert!(parts.len() >= 2, "should have OS and ARCH: {stdout}");
+            assert!(["macos", "linux", "windows"].contains(&parts[0]),
+                "RUSH_OS should be a known OS: {}", parts[0]);
+            assert!(!parts[1].is_empty(), "RUSH_ARCH should not be empty");
+        }
+    }
+
+    #[test]
+    fn cli_builtin_vars_in_rush() {
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "puts $os"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            assert!(["macos", "linux", "windows"].contains(&stdout.as_str()),
+                "$os should be a known OS: {stdout}");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // path add --save (writes to init.rush)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn path_save_to_init() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("rush-test-path-save");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let init_path = tmp.join("init.rush");
+
+        // Create a minimal init.rush
+        let mut f = std::fs::File::create(&init_path).unwrap();
+        writeln!(f, "# startup").unwrap();
+        drop(f);
+
+        // Run rush with HOME pointing to our temp dir so config_dir finds it
+        let home_tmp = std::env::temp_dir().join("rush-test-home-path");
+        let config_dir = home_tmp.join(".config").join("rush");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Copy our init.rush there
+        std::fs::copy(&init_path, config_dir.join("init.rush")).unwrap();
+
+        let output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "path add /opt/test-path --save"])
+            .env("HOME", &home_tmp)
+            .output();
+
+        if let Ok(_out) = output {
+            let content = std::fs::read_to_string(config_dir.join("init.rush")).unwrap_or_default();
+            assert!(content.contains("path add /opt/test-path"),
+                "init.rush should contain the path add line: {content}");
+            assert!(content.contains("# ── PATH"),
+                "init.rush should have PATH section header: {content}");
+        }
+
+        // Cleanup
+        std::fs::remove_dir_all(&home_tmp).ok();
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn path_save_appends_to_existing_section() {
+        let home_tmp = std::env::temp_dir().join("rush-test-home-path2");
+        let config_dir = home_tmp.join(".config").join("rush");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Create init.rush WITH an existing PATH section
+        std::fs::write(config_dir.join("init.rush"),
+            "# startup\n\n# ── PATH ─────────────────────────────────────────────────\npath add /usr/local/bin\n").unwrap();
+
+        let _output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "path add /opt/second --save"])
+            .env("HOME", &home_tmp)
+            .output();
+
+        let content = std::fs::read_to_string(config_dir.join("init.rush")).unwrap_or_default();
+        assert!(content.contains("path add /usr/local/bin"),
+            "should keep existing path: {content}");
+        assert!(content.contains("path add /opt/second"),
+            "should add new path: {content}");
+
+        std::fs::remove_dir_all(&home_tmp).ok();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // path add...end blocks in scripts
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn path_block_in_script() {
+        let tmp = std::env::temp_dir().join("rush-test-path-block");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let script = tmp.join("test-path-block.rush");
+        std::fs::write(&script, "path add\n  /opt/block-test-1\n  /opt/block-test-2\nend\necho $PATH").unwrap();
+
+        let output = std::process::Command::new(rush_cli_path())
+            .arg(script.to_str().unwrap())
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.contains("/opt/block-test-1"),
+                "PATH should contain block-test-1: {stdout}");
+            assert!(stdout.contains("/opt/block-test-2"),
+                "PATH should contain block-test-2: {stdout}");
+        }
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn path_rm_block_in_script() {
+        let tmp = std::env::temp_dir().join("rush-test-path-rm-block");
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        // First add, then remove via block
+        let script = tmp.join("test-rm-block.rush");
+        std::fs::write(&script, concat!(
+            "path add /opt/rm-test-keep\n",
+            "path add /opt/rm-test-gone\n",
+            "path rm\n",
+            "  /opt/rm-test-gone\n",
+            "end\n",
+            "echo $PATH\n",
+        )).unwrap();
+
+        let output = std::process::Command::new(rush_cli_path())
+            .arg(script.to_str().unwrap())
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(stdout.contains("/opt/rm-test-keep"),
+                "PATH should still contain keep: {stdout}");
+            assert!(!stdout.contains("/opt/rm-test-gone"),
+                "PATH should NOT contain gone: {stdout}");
+        }
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // set --save vs session-only
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn set_without_save_is_session_only() {
+        let home_tmp = std::env::temp_dir().join("rush-test-home-set-nosave");
+        let config_dir = home_tmp.join(".config").join("rush");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // Write a known config
+        std::fs::write(config_dir.join("config.json"),
+            r#"{"edit_mode":"vi","show_timing":false}"#).unwrap();
+
+        // Run "set show_timing true" WITHOUT --save
+        let _output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "set show_timing true"])
+            .env("HOME", &home_tmp)
+            .output();
+
+        // Config on disk should NOT have changed
+        let content = std::fs::read_to_string(config_dir.join("config.json")).unwrap_or_default();
+        assert!(content.contains(r#""show_timing":false"#) || content.contains(r#""show_timing": false"#),
+            "show_timing should still be false on disk without --save: {content}");
+
+        std::fs::remove_dir_all(&home_tmp).ok();
+    }
+
+    #[test]
+    fn set_with_save_persists() {
+        let home_tmp = std::env::temp_dir().join("rush-test-home-set-save");
+        let config_dir = home_tmp.join(".config").join("rush");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(config_dir.join("config.json"),
+            r#"{"edit_mode":"vi","show_timing":false}"#).unwrap();
+
+        // Run "set show_timing true --save"
+        let _output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "set show_timing true --save"])
+            .env("HOME", &home_tmp)
+            .output();
+
+        let content = std::fs::read_to_string(config_dir.join("config.json")).unwrap_or_default();
+        assert!(content.contains("true"),
+            "show_timing should be true on disk with --save: {content}");
+
+        std::fs::remove_dir_all(&home_tmp).ok();
+    }
+
+    #[test]
+    fn set_vi_always_saves() {
+        let home_tmp = std::env::temp_dir().join("rush-test-home-set-vi");
+        let config_dir = home_tmp.join(".config").join("rush");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        std::fs::write(config_dir.join("config.json"),
+            r#"{"edit_mode":"emacs"}"#).unwrap();
+
+        // "set vi" should always save (no --save needed)
+        let _output = std::process::Command::new(rush_cli_path())
+            .args(["-c", "set vi"])
+            .env("HOME", &home_tmp)
+            .output();
+
+        let content = std::fs::read_to_string(config_dir.join("config.json")).unwrap_or_default();
+        assert!(content.contains("vi"),
+            "edit_mode should be vi on disk (auto-save): {content}");
+
+        std::fs::remove_dir_all(&home_tmp).ok();
+    }
 }

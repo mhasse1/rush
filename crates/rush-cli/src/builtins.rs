@@ -53,6 +53,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "reload" => { handle_reload(evaluator, args); true }
         "sync" => { rush_core::sync::handle_sync(args); true }
         "ai" => { handle_ai(args); true }
+        "sql" => { handle_sql(args); true }
         "init" => { handle_init(); true }
         "printf" => { handle_printf(args); true }
         "mark" | "---" => { handle_mark(args); true }
@@ -390,7 +391,10 @@ fn handle_path(args: &str) {
             }
 
             if save {
-                eprintln!("path add --save: persistence not yet implemented");
+                for dir in &dirs {
+                    let expanded = expand_tilde(dir);
+                    save_path_to_init(&format!("path add {expanded}"));
+                }
             }
         }
         "rm" | "remove" => {
@@ -423,6 +427,50 @@ fn handle_path(args: &str) {
         }
         _ => eprintln!("path: unknown subcommand '{subcmd}'. Try: add, rm, check, dedupe"),
     }
+}
+
+/// Save a path command to init.rush under a PATH section header.
+fn save_path_to_init(path_line: &str) {
+    let init_path = config_dir().join("init.rush");
+
+    if !init_path.exists() {
+        std::fs::create_dir_all(init_path.parent().unwrap()).ok();
+        let content = format!("# ── PATH ─────────────────────────────────────────────────\n{path_line}\n");
+        std::fs::write(&init_path, content).ok();
+        eprintln!("  saved to:  ~/.config/rush/init.rush");
+        return;
+    }
+
+    let content = std::fs::read_to_string(&init_path).unwrap_or_default();
+    let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+    // Find PATH section header
+    let path_section_idx = lines.iter().position(|l| l.trim_start().starts_with("# ── PATH"));
+
+    if let Some(idx) = path_section_idx {
+        // Insert after the last path add line in this section
+        let mut insert_at = idx + 1;
+        while insert_at < lines.len() {
+            let trimmed = lines[insert_at].trim_start();
+            if trimmed.starts_with("path add") || trimmed.starts_with("# path add") || trimmed.is_empty() && insert_at == idx + 1 {
+                insert_at += 1;
+            } else {
+                break;
+            }
+        }
+        lines.insert(insert_at, path_line.to_string());
+    } else {
+        // No PATH section — append one
+        if !lines.last().map(|l| l.is_empty()).unwrap_or(true) {
+            lines.push(String::new());
+        }
+        lines.push("# ── PATH ─────────────────────────────────────────────────".to_string());
+        lines.push(path_line.to_string());
+    }
+
+    let new_content = lines.join("\n") + "\n";
+    std::fs::write(&init_path, new_content).ok();
+    eprintln!("  saved to:  ~/.config/rush/init.rush");
 }
 
 // ── help ────────────────────────────────────────────────────────────
@@ -665,6 +713,11 @@ fn handle_set(args: &str) {
         return;
     }
 
+    // --save flag: persist to config.json (otherwise session-only for most settings)
+    let save = args.contains("--save");
+    let args = args.replace("--save", "").trim().to_string();
+    let args = args.as_str();
+
     match args {
         "vi" => { config.set("vi", ""); }
         "emacs" => { config.set("emacs", ""); }
@@ -680,8 +733,11 @@ fn handle_set(args: &str) {
         }
     }
 
-    if let Err(e) = config.save() {
-        eprintln!("set: failed to save config: {e}");
+    // vi/emacs always save (mode is fundamental). Others require --save.
+    if save || args == "vi" || args == "emacs" {
+        if let Err(e) = config.save() {
+            eprintln!("set: failed to save config: {e}");
+        }
     }
 }
 
@@ -696,6 +752,24 @@ fn handle_setbg(args: &str) {
         use std::io::Write;
         std::io::stdout().flush().ok();
         println!("Background reset.");
+        return;
+    }
+
+    // --selector: interactive color picker
+    if args.contains("--selector") {
+        let save = args.contains("--save");
+        let local = args.contains("--local");
+        if let Some(hex) = run_color_selector() {
+            // Apply the selected color
+            let apply_args = if save {
+                format!("{hex} --save")
+            } else if local {
+                format!("{hex} --local")
+            } else {
+                hex
+            };
+            handle_setbg(&apply_args);
+        }
         return;
     }
 
@@ -972,6 +1046,60 @@ fn handle_ai(args: &str) {
         }
         Err(e) => eprintln!("ai: {e}"),
     }
+}
+
+// ── sql — native SQL command ────────────────────────────────────────
+
+fn handle_sql(args: &str) {
+    if args.is_empty() {
+        eprintln!("usage: sql <connection> <query>");
+        eprintln!("  sql :memory: \"SELECT 1+1\"              SQLite in-memory");
+        eprintln!("  sql path/to/db.sqlite \"SELECT ...\"     SQLite file");
+        eprintln!("  sql postgres://host/db \"SELECT ...\"    PostgreSQL");
+        return;
+    }
+
+    let parsed = rush_core::process::parse_command_line(args);
+    if parsed.len() < 2 {
+        eprintln!("sql: need <connection> and <query>");
+        return;
+    }
+
+    let conn = &parsed[0];
+    let query = &parsed[1];
+
+    // SQLite (file or :memory:)
+    if conn == ":memory:" || conn.ends_with(".sqlite") || conn.ends_with(".sqlite3") || conn.ends_with(".db") {
+        let result = std::process::Command::new("sqlite3")
+            .args(["-header", "-column", conn, query])
+            .status();
+        match result {
+            Ok(status) if !status.success() => {
+                eprintln!("sql: sqlite3 exited with {}", status.code().unwrap_or(-1));
+            }
+            Err(_) => eprintln!("sql: sqlite3 not found (install: brew install sqlite3)"),
+            _ => {}
+        }
+        return;
+    }
+
+    // PostgreSQL
+    if conn.starts_with("postgres://") || conn.starts_with("postgresql://") {
+        let result = std::process::Command::new("psql")
+            .args([conn.as_str(), "-c", query])
+            .status();
+        match result {
+            Ok(status) if !status.success() => {
+                eprintln!("sql: psql exited with {}", status.code().unwrap_or(-1));
+            }
+            Err(_) => eprintln!("sql: psql not found (install: brew install postgresql)"),
+            _ => {}
+        }
+        return;
+    }
+
+    eprintln!("sql: unsupported connection string '{conn}'");
+    eprintln!("     Supported: :memory:, *.sqlite, *.db, postgres://...");
 }
 
 // ── printf — formatted output ────────────────────────────────────────
@@ -1341,6 +1469,7 @@ pub fn load_init(evaluator: &mut Evaluator) {
 pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
     let mut rush_buf = String::new();
     let mut block_depth: i32 = 0; // track def/if/for/while...end nesting
+    let mut path_block: Option<Vec<String>> = None; // path add...end accumulator
 
     let block_openers = [
         "if", "unless", "while", "until", "for", "loop",
@@ -1350,6 +1479,46 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
 
     for line in content.lines() {
         let trimmed = line.trim();
+
+        // ── path add...end / path rm...end block accumulation ──
+        if let Some(ref mut paths) = path_block {
+            if trimmed.eq_ignore_ascii_case("end") {
+                // Execute accumulated path commands
+                let subcmd = if paths.first().map(|s| s.contains("rm")).unwrap_or(false) { "rm" } else { "add" };
+                for dir in paths.drain(..) {
+                    let dir = dir.trim().to_string();
+                    if !dir.is_empty() && !dir.starts_with('#') {
+                        handle_path(&format!("{subcmd} {dir}"));
+                    }
+                }
+                path_block = None;
+                continue;
+            }
+            paths.push(trimmed.to_string());
+            continue;
+        }
+
+        // Detect start of path add...end or path rm...end block
+        if (trimmed.starts_with("path add") || trimmed.starts_with("path rm"))
+            && !trimmed.contains("--save")
+        {
+            // Check if this is the start of a block (next lines until "end")
+            let rest = if trimmed.starts_with("path add") {
+                trimmed[8..].trim()
+            } else {
+                trimmed[7..].trim()
+            };
+            // If there are inline arguments, execute normally
+            if !rest.is_empty() {
+                flush_rush_buf(evaluator, &rush_buf, source_name);
+                rush_buf.clear();
+                handle(evaluator, trimmed);
+                continue;
+            }
+            // No inline args — this is a block start
+            path_block = Some(Vec::new());
+            continue;
+        }
 
         // Comments
         if trimmed.starts_with('#') {
@@ -1476,14 +1645,59 @@ pub fn load_aliases_from_config() {
 
 // ── Inject built-in variables ───────────────────────────────────────
 
+/// Inject environment variables that .NET's InjectRushEnvVars set.
+/// These are available to child processes and Rush scripts.
+pub fn inject_env_vars(is_login: bool) {
+    let os_name = if cfg!(target_os = "macos") { "macos" }
+        else if cfg!(target_os = "linux") { "linux" }
+        else { "windows" };
+    let arch_name = std::env::consts::ARCH;
+
+    unsafe {
+        std::env::set_var("RUSH_OS", os_name);
+        std::env::set_var("RUSH_ARCH", arch_name);
+        std::env::set_var("RUSH_VERSION", crate::rush_version_short());
+        std::env::set_var("RUSH_LOGIN", if is_login { "1" } else { "0" });
+    }
+
+    // OS version
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = std::process::Command::new("sw_vers")
+            .args(["-productVersion"])
+            .output()
+        {
+            let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !ver.is_empty() {
+                unsafe { std::env::set_var("RUSH_OS_VERSION", &ver) };
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(ver) = std::fs::read_to_string("/proc/version") {
+            let short = ver.split_whitespace().nth(2).unwrap_or("unknown");
+            unsafe { std::env::set_var("RUSH_OS_VERSION", short) };
+        }
+    }
+}
+
+/// Inject built-in Rush variables into the evaluator environment.
 pub fn inject_builtin_vars(evaluator: &mut Evaluator) {
     use rush_core::value::Value;
-    evaluator.env.set("$os", Value::String(std::env::consts::OS.to_string()));
+    let os_name = if cfg!(target_os = "macos") { "macos" }
+        else if cfg!(target_os = "linux") { "linux" }
+        else { "windows" };
+    evaluator.env.set("$os", Value::String(os_name.to_string()));
     evaluator.env.set("$arch", Value::String(std::env::consts::ARCH.to_string()));
     evaluator.env.set("$hostname", Value::String(rush_core::llm::get_hostname()));
     evaluator.env.set("$user", Value::String(rush_core::llm::get_username()));
-    evaluator.env.set("$rush_version", Value::String("0.1.0".to_string()));
+    evaluator.env.set("$rush_version", Value::String(crate::rush_version_short().to_string()));
     evaluator.env.set("$pid", Value::Int(std::process::id() as i64));
+    evaluator.env.set("__rush_arch", Value::String(std::env::consts::ARCH.to_string()));
+    evaluator.env.set("__rush_os_version", Value::String(
+        std::env::var("RUSH_OS_VERSION").unwrap_or_else(|_| "unknown".to_string())
+    ));
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -1496,6 +1710,153 @@ fn home_dir() -> String {
 
 fn config_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(home_dir()).join(".config").join("rush")
+}
+
+// ── Color selector (setbg --selector) ──────────────────────────────
+
+struct PaletteEntry {
+    hex: &'static str,
+    name: &'static str,
+}
+
+const DARK_PALETTE: &[PaletteEntry] = &[
+    PaletteEntry { hex: "#1A1A2E", name: "Midnight Blue" },
+    PaletteEntry { hex: "#16213E", name: "Navy" },
+    PaletteEntry { hex: "#0F3460", name: "Deep Blue" },
+    PaletteEntry { hex: "#002B36", name: "Solarized Dark" },
+    PaletteEntry { hex: "#1B4332", name: "Forest Green" },
+    PaletteEntry { hex: "#2D6A4F", name: "Emerald" },
+    PaletteEntry { hex: "#3A2E1F", name: "Espresso" },
+    PaletteEntry { hex: "#4A2020", name: "Dark Maroon" },
+    PaletteEntry { hex: "#6B2020", name: "Crimson" },
+    PaletteEntry { hex: "#2E1A47", name: "Deep Purple" },
+    PaletteEntry { hex: "#4A1942", name: "Plum" },
+    PaletteEntry { hex: "#3D1F4E", name: "Grape" },
+    PaletteEntry { hex: "#2E3440", name: "Nord" },
+    PaletteEntry { hex: "#282A36", name: "Dracula" },
+    PaletteEntry { hex: "#282828", name: "Gruvbox Dark" },
+    PaletteEntry { hex: "#1E1E2E", name: "Catppuccin" },
+    PaletteEntry { hex: "#282C34", name: "One Dark" },
+    PaletteEntry { hex: "#1A1B26", name: "Tokyo Night" },
+    PaletteEntry { hex: "#263238", name: "Material Ocean" },
+    PaletteEntry { hex: "#2D353B", name: "Everforest" },
+    PaletteEntry { hex: "#1F3044", name: "Steel Blue" },
+    PaletteEntry { hex: "#2A3F54", name: "Petrol" },
+    PaletteEntry { hex: "#3B4F2A", name: "Olive" },
+    PaletteEntry { hex: "#4E3B31", name: "Chocolate" },
+];
+
+const LIGHT_PALETTE: &[PaletteEntry] = &[
+    PaletteEntry { hex: "#FDF6E3", name: "Solarized Light" },
+    PaletteEntry { hex: "#FBF1C7", name: "Gruvbox Cream" },
+    PaletteEntry { hex: "#FFE8E8", name: "Rose Blush" },
+    PaletteEntry { hex: "#E8F0FF", name: "Ice Blue" },
+    PaletteEntry { hex: "#E8FFE8", name: "Mint" },
+    PaletteEntry { hex: "#FFF0E0", name: "Peach" },
+    PaletteEntry { hex: "#F0E0FF", name: "Lavender" },
+    PaletteEntry { hex: "#E0F0F0", name: "Seafoam" },
+    PaletteEntry { hex: "#FFF8E0", name: "Butter" },
+    PaletteEntry { hex: "#FFE0F0", name: "Pink" },
+    PaletteEntry { hex: "#E0FFE8", name: "Spring" },
+    PaletteEntry { hex: "#F5F5F5", name: "Paper" },
+];
+
+const GRAYSCALE_PALETTE: &[PaletteEntry] = &[
+    PaletteEntry { hex: "#0A0A0A", name: "Near Black" },
+    PaletteEntry { hex: "#1A1A1A", name: "Charcoal" },
+    PaletteEntry { hex: "#2A2A2A", name: "Dark Gray" },
+    PaletteEntry { hex: "#3A3A3A", name: "Gray 23%" },
+    PaletteEntry { hex: "#4A4A4A", name: "Gray 29%" },
+    PaletteEntry { hex: "#808080", name: "Mid Gray" },
+    PaletteEntry { hex: "#B8B8B8", name: "Gray 72%" },
+    PaletteEntry { hex: "#D0D0D0", name: "Light Gray" },
+    PaletteEntry { hex: "#F0F0F0", name: "Near White" },
+];
+
+/// Run the interactive color selector. Returns the selected hex color or None.
+fn run_color_selector() -> Option<String> {
+    use std::io::{Write, BufRead};
+
+    let sections: &[(&str, &[PaletteEntry])] = &[
+        ("Dark Themes", DARK_PALETTE),
+        ("Light Themes", LIGHT_PALETTE),
+        ("Grayscale", GRAYSCALE_PALETTE),
+    ];
+
+    // Display the palette with numbered entries
+    println!();
+    println!("  Background Color Selector");
+    println!("  ─────────────────────────────────────────────────");
+    println!();
+
+    let mut index = 1;
+    for (label, colors) in sections {
+        println!("  {label}:");
+        for row in colors.chunks(6) {
+            print!("  ");
+            for entry in row {
+                // Show color swatch using bg color + two spaces
+                let (r, g, b) = parse_hex(entry.hex);
+                // Use ANSI 24-bit bg color for the swatch
+                print!("  \x1b[48;2;{r};{g};{b}m  \x1b[0m ");
+                print!("{index:2}) {:<16}", entry.name);
+                index += 1;
+            }
+            println!();
+        }
+        println!();
+    }
+
+    // Also allow typing a hex value
+    println!("  Enter number (1-{}) or hex (#RRGGBB), q to cancel:", index - 1);
+    print!("  > ");
+    std::io::stdout().flush().ok();
+
+    let mut input = String::new();
+    std::io::stdin().lock().read_line(&mut input).ok()?;
+    let input = input.trim();
+
+    if input.eq_ignore_ascii_case("q") || input.is_empty() {
+        return None;
+    }
+
+    // Check if it's a hex color
+    if input.starts_with('#') && (input.len() == 4 || input.len() == 7) {
+        return Some(input.to_string());
+    }
+
+    // Parse as number
+    if let Ok(n) = input.parse::<usize>() {
+        let mut idx = 1;
+        for (_, colors) in sections {
+            for entry in *colors {
+                if idx == n {
+                    return Some(entry.hex.to_string());
+                }
+                idx += 1;
+            }
+        }
+    }
+
+    eprintln!("  Invalid selection.");
+    None
+}
+
+fn parse_hex(hex: &str) -> (u8, u8, u8) {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+        let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+        let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+        (r, g, b)
+    } else if hex.len() == 3 {
+        let r = u8::from_str_radix(&hex[0..1], 16).unwrap_or(0) * 17;
+        let g = u8::from_str_radix(&hex[1..2], 16).unwrap_or(0) * 17;
+        let b = u8::from_str_radix(&hex[2..3], 16).unwrap_or(0) * 17;
+        (r, g, b)
+    } else {
+        (0, 0, 0)
+    }
 }
 
 fn cwd_string() -> String {

@@ -25,7 +25,7 @@ fn history_path() -> std::path::PathBuf {
 }
 
 /// Run the interactive REPL.
-pub fn run() {
+pub fn run(is_login: bool) {
     let config = RushConfig::load();
 
     // Initialize theme (dark/light detection, LS_COLORS, GREP_COLORS)
@@ -39,7 +39,8 @@ pub fn run() {
     let mut output = StdOutput;
     let mut evaluator = Evaluator::new(&mut output);
 
-    // Inject built-in variables
+    // Inject env vars and built-in variables
+    builtins::inject_env_vars(is_login);
     builtins::inject_builtin_vars(&mut evaluator);
 
     // Load config, secrets, aliases, and init file
@@ -90,7 +91,7 @@ pub fn run() {
     let mut last_cmd: Option<String> = None;
 
     // Banner
-    let version = "0.1.0";
+    let version = crate::rush_version_short();
     let mode = if config.edit_mode == "emacs" { "emacs" } else { "vi" };
     let theme_name = if detected_theme.is_dark { "dark" } else { "light" };
     let has_256 = detected_theme.bg_rgb.is_some();
