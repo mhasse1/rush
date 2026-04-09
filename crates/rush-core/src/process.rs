@@ -1832,7 +1832,7 @@ mod tests {
     #[test]
     fn env_var_in_command() {
         let result = parse_and_expand("echo $HOME");
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_default().replace('\\', "/");
         assert_eq!(result, vec!["echo", &home]);
     }
 

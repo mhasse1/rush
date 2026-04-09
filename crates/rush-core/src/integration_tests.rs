@@ -776,10 +776,13 @@ mod tests {
     }
 
     #[test]
-    fn string_native_path_noop_on_unix() {
-        // On Unix, native_path is a no-op (forward slashes stay)
+    fn string_native_path() {
         let (_, lines) = run("puts \"/home/mark\".native_path");
-        assert_eq!(lines[0], "/home/mark");
+        if cfg!(windows) {
+            assert_eq!(lines[0], "\\home\\mark");
+        } else {
+            assert_eq!(lines[0], "/home/mark");
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
