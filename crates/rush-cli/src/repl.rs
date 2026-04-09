@@ -175,9 +175,15 @@ pub fn run(is_login: bool) {
                     }
                 }
 
-                // Training hints after failed commands
+                // Hints: error hints after failures, training hints after successes
                 if evaluator.exit_code != 0 {
                     if let Some(hint) = rush_core::hints::hint_for_command(trimmed, evaluator.exit_code) {
+                        eprintln!("{}  {hint}{}", detected_theme.muted, detected_theme.reset);
+                    }
+                } else {
+                    // Training hints: suggest Rush alternatives for bash patterns
+                    if let Some(hint) = rush_core::hints::training_hint(trimmed) {
+                        eprintln!();
                         eprintln!("{}  {hint}{}", detected_theme.muted, detected_theme.reset);
                     }
                 }
