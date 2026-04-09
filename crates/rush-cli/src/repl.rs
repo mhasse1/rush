@@ -101,6 +101,52 @@ pub fn run(is_login: bool) {
     println!("{}rush v{version} — a modern-day warrior{}", detected_theme.muted, detected_theme.reset);
     println!("{}Rust engine | {mode} mode | Tab | Ctrl+R | {theme_name} {color_info}{}", detected_theme.muted, detected_theme.reset);
 
+    // Rotating startup tip (one per session, changes daily)
+    if config.show_tips() {
+        let tips = [
+            // Navigation
+            "cd -  — jump back to previous directory",
+            "pushd /tmp && popd  — directory stack",
+            // History
+            "!!  — repeat last command  |  !$  — reuse last argument",
+            "Ctrl+R  — search history  |  /pattern (vi normal mode)",
+            // Pipes & Filters
+            "ps aux | where CPU > 50 | select USER, PID, COMMAND",
+            "ls | count  — count items (also: sum, avg, min, max)",
+            "ls -la | first 5  — slice results (also: last, skip)",
+            "df -h | where Capacity > 80%  — filter by field",
+            "cat data.json | from json | select name, version",
+            "ls | as json  — format as JSON (also: csv)",
+            // Stdlib
+            "File.read_lines(\"log.txt\") | where /error/i | count",
+            "Dir.list(\"src\", :recurse) | where /\\.rs$/",
+            "\"hello world\".upcase.split(\" \").reverse.join(\"-\")",
+            "Path.join(\"src\", \"main.rs\")  — cross-platform paths",
+            // PATH
+            "path  — list PATH entries with existence check",
+            "path add ~/bin --save  — persist to init.rush",
+            "path dedupe  — remove duplicate PATH entries",
+            // Settings
+            "set  — show all settings  |  set -x  — trace mode",
+            "set --secret ANTHROPIC_API_KEY \"sk-...\"  — save API key",
+            "alias ll='ls -la' --save  — persistent alias",
+            "setbg --selector  — pick terminal background color",
+            // AI & Integration
+            "ai \"explain this error\"  — ask AI from the prompt",
+            "rush --mcp  — MCP server for Claude Code",
+            "plugin.ps ... end  — run PowerShell blocks",
+            // Help
+            "help  — list all topics  |  help pipes  — pipeline operators",
+            "help objectify  — structured data from any command",
+            "file --help  — builtins support --help",
+        ];
+        let hint_idx = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 86400) as usize % tips.len())
+            .unwrap_or(0);
+        println!("{}  tip: {}{}", detected_theme.muted, tips[hint_idx], detected_theme.reset);
+    }
+
     // First-run welcome
     let config_path = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default())
         .join(".config").join("rush").join("config.json");

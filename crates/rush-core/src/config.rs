@@ -123,6 +123,11 @@ impl RushConfig {
                 self.show_timing = value == "true" || value == "on" || value == "1";
                 true
             }
+            "show_tips" | "showtips" => {
+                self.show_tips = value == "true" || value == "on" || value == "1"
+                    || value.is_empty(); // bare "set show_tips" toggles on
+                true
+            }
             "stop_on_error" | "stoponerror" => {
                 self.stop_on_error = value == "true" || value == "on" || value == "1";
                 true
@@ -145,6 +150,11 @@ impl RushConfig {
             }
             _ => false,
         }
+    }
+
+    /// Check if startup tips are enabled.
+    pub fn show_tips(&self) -> bool {
+        self.show_tips
     }
 
     /// Display all settings.
