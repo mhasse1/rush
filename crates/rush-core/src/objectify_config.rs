@@ -281,4 +281,102 @@ lsblk:
         let hint = parsed.get("lsblk").unwrap().as_ref().unwrap();
         assert_eq!(hint.cols.as_ref().unwrap(), &["NAME", "SIZE", "TYPE", "MOUNTPOINT"]);
     }
+
+    #[test]
+    fn load_from_yaml_file() {
+        let tmp = std::env::temp_dir().join("rush-test-objectify");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let config_path = tmp.join("objectify.yaml");
+        std::fs::write(&config_path, r#"
+mytool:
+  skip: 2
+  delim: '\t'
+
+"docker stats":
+  delim: '\s{3,}'
+"#).unwrap();
+
+        let mut commands = HashMap::new();
+        load_yaml_file(&config_path.to_string_lossy(), &mut commands);
+
+        assert!(commands.contains_key("mytool"), "should have mytool");
+        let hint = &commands["mytool"];
+        assert_eq!(hint.skip, 2);
+        assert_eq!(hint.delim.as_deref(), Some("\\t"));
+
+        assert!(commands.contains_key("docker stats"));
+        assert_eq!(commands["docker stats"].delim.as_deref(), Some("\\s{3,}"));
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn user_config_overrides_builtin() {
+        // Verify that loading a user file overrides built-in defaults
+        let tmp = std::env::temp_dir().join("rush-test-objectify-override");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let config_path = tmp.join("objectify.yaml");
+        std::fs::write(&config_path, "ps:\n  skip: 3\n").unwrap();
+
+        let mut commands = built_in_defaults();
+        // Before: ps has default (skip=0)
+        assert_eq!(commands["ps"].skip, 0);
+
+        load_yaml_file(&config_path.to_string_lossy(), &mut commands);
+        // After: ps has skip=3 from user config
+        assert_eq!(commands["ps"].skip, 3);
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn empty_config_file() {
+        let tmp = std::env::temp_dir().join("rush-test-objectify-empty");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let config_path = tmp.join("objectify.yaml");
+        std::fs::write(&config_path, "# just comments\n").unwrap();
+
+        let mut commands = HashMap::new();
+        load_yaml_file(&config_path.to_string_lossy(), &mut commands);
+        // Should not crash, no commands added
+        assert!(commands.is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn malformed_yaml_warns_but_continues() {
+        let tmp = std::env::temp_dir().join("rush-test-objectify-malformed");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let config_path = tmp.join("objectify.yaml");
+        std::fs::write(&config_path, "this is not valid yaml: [[[").unwrap();
+
+        let mut commands = HashMap::new();
+        // Should not panic
+        load_yaml_file(&config_path.to_string_lossy(), &mut commands);
+        assert!(commands.is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn command_names_sorted() {
+        let config = ObjectifyConfig::load();
+        let names = config.command_names();
+        assert!(!names.is_empty());
+        // Verify sorted
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn hint_defaults() {
+        let hint = ObjectifyHint::default();
+        assert!(!hint.fixed);
+        assert_eq!(hint.skip, 0);
+        assert_eq!(hint.header, 0);
+        assert!(hint.delim.is_none());
+        assert!(hint.cols.is_none());
+    }
 }

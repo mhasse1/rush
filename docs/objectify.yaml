@@ -1,0 +1,75 @@
+# Rush Objectify Configuration
+# ─────────────────────────────────────────────────────────────────
+#
+# Controls how Rush converts text command output into structured objects.
+# When a known command is piped (e.g., ps aux | where CPU > 50), Rush
+# auto-objectifies the text output into an array of hashes.
+#
+# Config layers (later overrides earlier):
+#   1. Built-in defaults (compiled into Rush)
+#   2. System: /etc/rush/objectify.yaml
+#   3. User:   ~/.config/rush/objectify.yaml
+#
+# ── Format ──────────────────────────────────────────────────────
+#
+# Each key is a command name (or "command subcommand" for 2-word commands).
+# Values are optional parse hints:
+#
+#   command:                        # default: whitespace split, last column joins
+#   command:
+#     delim: '\s{2,}'              # custom delimiter regex
+#     fixed: true                   # fixed-width (position-based) column parsing
+#     skip: 1                       # skip N data lines after header
+#     cols: [NAME, SIZE, TYPE]      # explicit column names (headerless output)
+#     header: 0                     # which line is the header (0-indexed)
+#
+# ── Examples ────────────────────────────────────────────────────
+#
+#   ps aux | where CPU > 50 | select USER, PID, COMMAND
+#   df -h | where Capacity > 80% | select Filesystem, Capacity
+#   docker ps | where Status =~ /Up/ | select NAMES, IMAGE
+#   free -h | select total, used, free
+#
+# ── Built-in Defaults ──────────────────────────────────────────
+#
+# These are compiled into Rush. You don't need to add them here
+# unless you want to override their settings.
+
+# Standard Unix — default whitespace split
+# ps:
+# df:
+# w:
+# who:
+# last:
+# ss:
+# mount:
+# ip:
+# ifconfig:
+# lsblk:
+# blkid:
+# kubectl get:
+
+# Commands needing special handling:
+# netstat:
+#   fixed: true          # fixed-width columns
+# lsof:
+#   fixed: true
+# free:
+#   skip: 1              # skip unit header line
+
+# Docker — columns separated by 2+ spaces (values contain single spaces)
+# docker ps:
+#   delim: '\s{2,}'
+# docker images:
+#   delim: '\s{2,}'
+
+# ── Your Custom Commands ───────────────────────────────────────
+# Add commands below. Examples:
+#
+# brew list:
+#
+# systemctl list-units:
+#   delim: '\s{2,}'
+#
+# my-tool status:
+#   cols: [SERVICE, STATUS, PID, UPTIME]

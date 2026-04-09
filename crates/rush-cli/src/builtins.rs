@@ -529,7 +529,8 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
         println!("  exit             Exit shell");
         println!();
         println!("Help topics: variables, strings, arrays, hashes, control-flow,");
-        println!("             functions, classes, file, dir, time, pipes, ai");
+        println!("             functions, classes, file, dir, time, path,");
+        println!("             pipes, objectify, ai");
         return;
     }
 
@@ -635,6 +636,25 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
             println!("  30.minutes → 1800");
             println!("  1.day      → 86400");
         }
+        "path" => {
+            println!("Path stdlib — cross-platform path handling:");
+            println!("  Path.sep                     \"/\" or \"\\\" (platform native)");
+            println!("  Path.join(\"a\", \"b\")          Join with /");
+            println!("  Path.normalize(p)            Convert \\ to /");
+            println!("  Path.native(p)               Convert / to \\ on Windows");
+            println!("  Path.expand(\"~/src\")          Expand ~ and normalize");
+            println!("  Path.exist?(p)               Check existence");
+            println!("  Path.absolute?(p)            Check if absolute");
+            println!("  Path.basename(p)             File name");
+            println!("  Path.dirname(p)              Parent directory");
+            println!("  Path.ext(p)                  Extension (.txt)");
+            println!();
+            println!("String methods:");
+            println!("  \"path\".native_path            / → \\ on Windows");
+            println!("  \"path\".unix_path              \\ → /");
+            println!();
+            println!("Variable: $sep — platform path separator");
+        }
         "pipes" | "pipeline" => {
             println!("Pipeline operators (after |):");
             println!("  where field op value        Filter rows");
@@ -650,6 +670,26 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
             println!("  from json  from csv         Parse input");
             println!("  objectify                   Text table → objects");
             println!("  grep pattern                String filter");
+        }
+        "objectify" => {
+            println!("Objectify — convert text tables to structured objects:");
+            println!();
+            println!("  ps aux | objectify | where CPU > 50 | select USER, PID, COMMAND");
+            println!("  df -h | objectify | where Capacity > 80%");
+            println!("  docker ps | objectify | where Status =~ /Up/");
+            println!();
+            println!("Auto-objectify: known commands objectify automatically when piped.");
+            println!("Built-in: ps, df, docker ps, netstat, free, kubectl get, and more.");
+            println!();
+            println!("Config: ~/.config/rush/objectify.yaml");
+            println!("  mycommand:                    # default whitespace split");
+            println!("  mycommand:");
+            println!("    delim: '\\s{{2,}}'            # custom delimiter regex");
+            println!("    fixed: true                  # position-based columns");
+            println!("    skip: 1                      # skip N lines after header");
+            println!("    cols: [A, B, C]              # explicit column names");
+            println!();
+            println!("See docs/objectify.yaml for the full reference.");
         }
         "ai" => {
             println!("AI integration:");
