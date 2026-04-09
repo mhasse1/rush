@@ -69,11 +69,17 @@ pub fn run(is_login: bool) {
             ]),
         );
         let mut normal_bindings = default_vi_normal_keybindings();
-        // Vi / search — reedline only binds ? by default, add /
+        // Vi search: ? works (built into reedline's vi parser), Ctrl+R also works.
+        // / is not supported by reedline's vi parser — would need upstream change.
+        // As a workaround, bind / to the same SearchHistory event.
+        // Note: this fires before vi's command parser, so it should work.
         normal_bindings.add_binding(
             KeyModifiers::NONE,
             KeyCode::Char('/'),
-            ReedlineEvent::SearchHistory,
+            ReedlineEvent::Multiple(vec![
+                ReedlineEvent::SearchHistory,
+                ReedlineEvent::Repaint,
+            ]),
         );
         Box::new(Vi::new(insert_bindings, normal_bindings))
     };
