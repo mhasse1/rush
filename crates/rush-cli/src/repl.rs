@@ -391,7 +391,7 @@ fn fzf_history_search() -> Option<String> {
     let output = if cfg!(unix) {
         std::process::Command::new("sh")
             .args(["-c", &format!(
-                "tac '{}' 2>/dev/null || tail -r '{}' | awk '!seen[$0]++' | fzf --height 40% --reverse --no-sort --prompt 'history> '",
+                "tac '{}' 2>/dev/null || tail -r '{}' | awk '!seen[$0]++' | fzf --height 40% --reverse --no-sort --exact --prompt '/ '",
                 history_path, history_path
             )])
             .stdin(std::process::Stdio::inherit())
@@ -403,7 +403,7 @@ fn fzf_history_search() -> Option<String> {
         // Windows: no tac, just pipe history directly
         std::process::Command::new("cmd")
             .args(["/C", &format!(
-                "type \"{}\" | fzf --height 40% --reverse --no-sort --prompt \"history> \"",
+                "type \"{}\" | fzf --height 40% --reverse --no-sort --exact --prompt \"/ \"",
                 history_path
             )])
             .stdin(std::process::Stdio::inherit())
