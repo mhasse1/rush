@@ -15,10 +15,13 @@ pub struct PipeOp {
 }
 
 /// Known pipeline operator names.
+/// NOTE: grep, head, tail are intentionally NOT here — they are native
+/// Unix commands that users expect to work in pipes. Rush's structured
+/// pipeline ops are only the ones that don't collide with real commands.
 const PIPE_OPS: &[&str] = &[
     "where", "select", "sort", "count", "first", "last", "skip",
     "sum", "avg", "min", "max", "distinct", "uniq", "reverse",
-    "as", "from", "objectify", "tee", "grep", "head", "tail",
+    "as", "from", "objectify", "tee",
     "each", "times", "columns", "json",
 ];
 
