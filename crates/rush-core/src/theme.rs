@@ -275,15 +275,15 @@ impl Theme {
         if is_dark {
             Self {
                 is_dark, bg_rgb,
-                prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
+                prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[91m".into(),
                 prompt_time: muted_code.clone(), prompt_user: "\x1b[36m".into(),
-                prompt_host: muted_code.clone(), prompt_ssh_host: "\x1b[33m".into(),
-                prompt_path: "\x1b[32m".into(), prompt_git_branch: "\x1b[33m".into(),
-                prompt_git_dirty: "\x1b[93m".into(), prompt_root: "\x1b[31m".into(),
-                muted: muted_code.clone(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
+                prompt_host: "\x1b[37m".into(), prompt_ssh_host: "\x1b[93m".into(),
+                prompt_path: "\x1b[92m".into(), prompt_git_branch: "\x1b[33m".into(),
+                prompt_git_dirty: "\x1b[93m".into(), prompt_root: "\x1b[91m".into(),
+                muted: muted_code.clone(), error: "\x1b[91m".into(), warning: "\x1b[33m".into(),
                 reset: reset.into(),
                 hl_keyword: "\x1b[38;5;204m".into(), hl_string: "\x1b[32m".into(),
-                hl_number: "\x1b[36m".into(), hl_command: "\x1b[36m".into(),
+                hl_number: "\x1b[36m".into(), hl_command: "\x1b[96m".into(),
                 hl_unknown_cmd: "\x1b[37m".into(), hl_flag: "\x1b[33m".into(),
                 hl_operator: "\x1b[35m".into(), hl_pipe: muted_code.clone(),
                 hl_comment: muted_code,
@@ -361,11 +361,19 @@ pub fn generate_grep_colors(theme: &Theme) -> String {
 }
 
 /// Generate BSD LSCOLORS string (macOS).
+/// Format: 11 pairs of foreground+background, one pair per file type:
+///   directory, symlink, socket, pipe, executable, block device,
+///   char device, setuid, setgid, dir+sticky+ow, dir+ow
+/// Letters: a=black b=red c=green d=brown e=blue f=magenta g=cyan h=grey
+/// Uppercase = bold. x = default.
 pub fn generate_lscolors(theme: &Theme) -> String {
     if theme.is_dark {
-        "ExGxFxDxCxDxDxBxBxExEx".to_string()
+        // Bold colors for dark backgrounds — high contrast
+        // dir=blue, sym=magenta, socket=cyan, pipe=yellow, exec=green
+        "Gxfxcxdxbxegedabagacad".to_string()
     } else {
-        "exgxfxdxcxdxdxbxbxexex".to_string()
+        // Non-bold for light backgrounds — softer
+        "gxfxcxdxbxegedabagacad".to_string()
     }
 }
 
@@ -433,20 +441,19 @@ pub fn detect() -> Theme {
 }
 
 /// Set LS_COLORS, LSCOLORS, GREP_COLORS, CLICOLOR env vars.
+/// Always sets Rush-generated values — we own the color environment.
+/// Respects NO_COLOR (https://no-color.org/).
 pub fn set_native_color_env_vars(theme: &Theme) {
     if std::env::var("NO_COLOR").is_ok() { return; }
 
-    if std::env::var("LS_COLORS").is_err() {
-        unsafe { std::env::set_var("LS_COLORS", generate_ls_colors(theme)) };
-    }
-    if std::env::var("LSCOLORS").is_err() {
-        unsafe { std::env::set_var("LSCOLORS", generate_lscolors(theme)) };
-    }
-    if std::env::var("GREP_COLORS").is_err() {
-        unsafe { std::env::set_var("GREP_COLORS", generate_grep_colors(theme)) };
-    }
-    if std::env::var("CLICOLOR").is_err() {
-        unsafe { std::env::set_var("CLICOLOR", "1") };
+    // Always set — Rush owns these. Inherited values from parent shell
+    // may not match Rush's detected dark/light theme.
+    unsafe {
+        std::env::set_var("LS_COLORS", generate_ls_colors(theme));
+        std::env::set_var("LSCOLORS", generate_lscolors(theme));
+        std::env::set_var("GREP_COLORS", generate_grep_colors(theme));
+        std::env::set_var("CLICOLOR", "1");
+        std::env::set_var("CLICOLOR_FORCE", "1");
     }
 }
 

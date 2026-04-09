@@ -28,8 +28,8 @@ impl RushCompleter {
                 "pushd", "popd", "dirs", "history", "path", "help", "set",
                 "setbg", "reload", "init", "clear", "pwd", "which", "type",
                 "command", "eval", "exec", "read", "trap", "jobs", "fg", "bg",
-                "wait", "kill", "umask", "ulimit", "fc", "o", "ai",
-                "File", "Dir", "Time", "env",
+                "wait", "kill", "umask", "ulimit", "fc", "o", "ai", "sql", "sync",
+                "File", "Dir", "Time", "Path", "env", "plugin",
             ].into_iter().map(String::from).collect(),
 
             pipe_ops: vec![
@@ -45,6 +45,7 @@ impl RushCompleter {
                 "include?", "start_with?", "end_with?", "empty?",
                 "replace", "gsub", "sub", "reverse",
                 "to_i", "to_f", "to_s",
+                "native_path", "unix_path",
             ].into_iter().map(String::from).collect(),
 
             array_methods: vec![
@@ -116,7 +117,7 @@ impl Completer for RushCompleter {
         let is_first_word = !line_to_pos[..word_start].contains(|c: char| !c.is_whitespace());
         let after_pipe = line_to_pos.rfind('|').map_or(false, |p| p > line_to_pos.rfind(|c: char| !c.is_whitespace() && c != '|').unwrap_or(0));
         let after_dot = word_start > 0 && line_to_pos.as_bytes().get(word_start - 1) == Some(&b'.');
-        let looks_like_path = partial.contains('/') || partial.starts_with('~') || partial.starts_with('.');
+        let looks_like_path = partial.contains('/') || partial.contains('\\') || partial.starts_with('~') || partial.starts_with('.');
 
         // 1. Dot-completion: variable.method
         if after_dot {
@@ -212,6 +213,19 @@ impl RushCompleter {
             "time" => return self.stdlib_methods.iter()
                 .filter(|m| ["now", "utc_now", "today", "epoch"].contains(&m.as_str()))
                 .cloned().collect(),
+            "path" => return vec![
+                "sep", "join", "normalize", "native", "expand",
+                "exist?", "absolute?", "basename", "dirname", "ext",
+            ].into_iter().map(String::from).collect(),
+            "plugin" => {
+                // Complete plugin names from available plugins
+                let mut names: Vec<String> = rush_core::plugin::list_available()
+                    .into_iter().map(|(name, _)| name).collect();
+                names.extend(["ps", "python", "node", "ruby"].iter().map(|s| s.to_string()));
+                names.sort();
+                names.dedup();
+                return names;
+            }
             _ => {}
         }
 
@@ -249,8 +263,14 @@ impl RushCompleter {
 fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
 
+    // Normalize backslashes to forward slashes (cross-platform)
+    let partial = &partial.replace('\\', "/");
+
     let expanded = if let Some(rest) = partial.strip_prefix("~/") {
-        let home = std::env::var("HOME").unwrap_or_default();
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+            .replace('\\', "/");
         format!("{home}/{rest}")
     } else {
         partial.to_string()

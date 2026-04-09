@@ -1718,6 +1718,35 @@ fn config_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(home_dir()).join(".config").join("rush")
 }
 
+// ── Windows coreutils detection ────────────────────────────────────
+
+/// Check for Unix coreutils on Windows. Returns true if found.
+/// Shows a one-time hint if not found (tracked via config).
+#[cfg(windows)]
+pub fn check_windows_coreutils(theme: &rush_core::theme::Theme) -> bool {
+    // Check if we already have Unix tools (from Git for Windows, uutils, MSYS2, etc.)
+    if rush_core::process::command_exists("ls") {
+        return true;
+    }
+
+    // Check if we already showed this hint
+    let hint_file = config_dir().join(".coreutils-hint-shown");
+    if hint_file.exists() {
+        return false;
+    }
+
+    // Show hint
+    eprintln!();
+    eprintln!("{}Tip: Install Unix coreutils for the best Rush experience on Windows:{}", theme.muted, theme.reset);
+    eprintln!("{}  cargo install coreutils       Rust-native (uutils){}", theme.muted, theme.reset);
+    eprintln!("{}  — or use Git for Windows which includes ls, cat, grep, etc.{}", theme.muted, theme.reset);
+    eprintln!();
+
+    // Mark hint as shown
+    std::fs::write(&hint_file, "").ok();
+    false
+}
+
 // ── Color selector (setbg --selector) ──────────────────────────────
 
 struct PaletteEntry {

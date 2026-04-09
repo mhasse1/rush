@@ -117,6 +117,14 @@ pub fn run(is_login: bool) {
         }
     }
 
+    // Windows: check for coreutils (provides ls, cat, grep, etc.)
+    #[cfg(windows)]
+    {
+        if crate::builtins::check_windows_coreutils(&detected_theme) {
+            // coreutils found or hint shown
+        }
+    }
+
     let mut prompt = RushPrompt::new(detected_theme.clone());
     println!();
 
