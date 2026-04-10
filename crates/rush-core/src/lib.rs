@@ -25,6 +25,7 @@ pub mod mcp_ssh;
 pub mod mcp_install;
 pub mod plugin;
 pub mod objectify_config;
+pub mod lang_spec;
 #[cfg(test)]
 mod posix_tests;
 #[cfg(test)]

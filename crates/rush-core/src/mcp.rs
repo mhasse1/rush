@@ -20,8 +20,7 @@ method chaining (\"hello\".upcase), pipeline operators (| where/select/sort/as j
 and a File/Dir/Time stdlib. Also runs standard Unix commands (ls, grep, find, etc.). \
 Read the rush://lang-spec resource for the full language specification.";
 
-// Embed the lang spec at compile time
-const LANG_SPEC: &str = include_str!("../../../docs/rush-lang-spec.yaml");
+use crate::lang_spec::LANG_SPEC;
 
 /// Run the MCP server on stdin/stdout.
 pub fn run() {
@@ -133,6 +132,29 @@ fn handle_tools_list() -> Result<JsonValue, (i32, String)> {
                 }
             },
             {
+                "name": "rush_write_file",
+                "description": "Write content to a file. Text by default; set encoding to 'base64' for binary data. Creates parent directories as needed.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to write (absolute or relative to cwd)"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "File content (text or base64-encoded binary)"
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "description": "Content encoding: 'utf8' (default) or 'base64'",
+                            "enum": ["utf8", "base64"]
+                        }
+                    },
+                    "required": ["path", "content"]
+                }
+            },
+            {
                 "name": "rush_context",
                 "description": "Get current shell context: hostname, cwd, git branch/dirty status, last exit code.",
                 "inputSchema": {
@@ -174,6 +196,21 @@ fn handle_tools_call(params: Option<&JsonValue>) -> Result<JsonValue, (i32, Stri
             let is_err = result.status != "success";
             (serde_json::to_value(&result).unwrap_or(json!(null)), is_err)
         }
+        "rush_write_file" => {
+            let path = arguments
+                .and_then(|a| a.get("path"))
+                .and_then(|p| p.as_str())
+                .ok_or((-32602, "Missing required parameter: path".to_string()))?;
+            let content = arguments
+                .and_then(|a| a.get("content"))
+                .and_then(|c| c.as_str())
+                .ok_or((-32602, "Missing required parameter: content".to_string()))?;
+            let encoding = arguments.and_then(|a| a.get("encoding")).and_then(|e| e.as_str());
+            let cwd = llm::get_cwd();
+            let result = llm::lwrite(path, content, encoding, &cwd);
+            let is_err = result.status != "success";
+            (serde_json::to_value(&result).unwrap_or(json!(null)), is_err)
+        }
         "rush_context" => {
             let cwd = llm::get_cwd();
             let (branch, dirty) = llm::get_git_info(&cwd);
@@ -187,6 +224,7 @@ fn handle_tools_call(params: Option<&JsonValue>) -> Result<JsonValue, (i32, Stri
                 last_exit_code: 0,
                 shell: "rush".into(),
                 version: VERSION.into(),
+                lang_spec: None,
             };
             (serde_json::to_value(&ctx).unwrap_or(json!(null)), false)
         }
@@ -278,13 +316,14 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_three_tools() {
+    fn tools_list_has_four_tools() {
         let result = handle_tools_list().unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"rush_execute"));
         assert!(names.contains(&"rush_read_file"));
+        assert!(names.contains(&"rush_write_file"));
         assert!(names.contains(&"rush_context"));
     }
 
@@ -319,6 +358,19 @@ mod tests {
         assert_eq!(parsed["status"], "success");
         assert_eq!(parsed["content"], "mcp test content");
         assert_eq!(parsed["mime"], "text/plain");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn tools_call_write_file() {
+        let tmp = std::env::temp_dir().join("rush_mcp_write_test.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let params = json!({"name": "rush_write_file", "arguments": {"path": tmp.to_string_lossy(), "content": "mcp write test"}});
+        let result = handle_tools_call(Some(&params)).unwrap();
+        let content = result["content"][0]["text"].as_str().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
+        assert_eq!(parsed["status"], "success");
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "mcp write test");
         std::fs::remove_file(&tmp).ok();
     }
 

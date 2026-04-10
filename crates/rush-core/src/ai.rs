@@ -78,7 +78,9 @@ pub fn build_system_prompt() -> String {
          Shell: rush (Rust)\n\
          Be concise. When suggesting commands, use Rush syntax where appropriate.\n\
          For file operations use File.read/write, Dir.list, etc.\n\
-         When showing code, use markdown fenced code blocks."
+         When showing code, use markdown fenced code blocks.\n\n\
+         ## Rush Language Specification\n\n{}",
+        crate::lang_spec::LANG_SPEC
     )
 }
 
@@ -419,5 +421,11 @@ mod tests {
         let prompt = build_system_prompt();
         assert!(prompt.contains("Rush shell"));
         assert!(prompt.contains("CWD:"));
+    }
+
+    #[test]
+    fn system_prompt_includes_lang_spec() {
+        let prompt = build_system_prompt();
+        assert!(prompt.contains("Rush Language Spec"));
     }
 }

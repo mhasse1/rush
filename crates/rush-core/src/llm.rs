@@ -30,6 +30,8 @@ pub struct LlmContext {
     pub last_exit_code: i32,
     pub shell: String,
     pub version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lang_spec: Option<String>,
 }
 
 #[derive(Serialize, Default)]
@@ -128,6 +130,17 @@ impl Spool {
         }
         let slice: Vec<&str> = self.lines[offset..offset + count].iter().map(|s| s.as_str()).collect();
         (slice.join("\n"), offset + count)
+    }
+
+    fn search(&self, pattern: &str) -> Result<Vec<(usize, String)>, String> {
+        let re = regex::Regex::new(pattern).map_err(|e| format!("Invalid regex: {e}"))?;
+        let mut matches = Vec::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            if re.is_match(line) {
+                matches.push((i + 1, line.clone())); // 1-based line numbers
+            }
+        }
+        Ok(matches)
     }
 
     fn preview(&self, max_bytes: usize) -> String {
@@ -293,6 +306,50 @@ fn is_likely_text(path: &str) -> bool {
     }
 }
 
+// ── lwrite (file writer) ────────────────────────────────────────────
+
+pub fn lwrite(path: &str, content: &str, encoding: Option<&str>, cwd: &str) -> LlmResult {
+    let path = path.trim();
+    if path.is_empty() {
+        return error_result("lwrite: missing file path", cwd);
+    }
+
+    let full_path = if Path::new(path).is_absolute() {
+        path.to_string()
+    } else {
+        Path::new(cwd).join(path).to_string_lossy().to_string()
+    };
+
+    let bytes = if encoding == Some("base64") {
+        match base64::engine::general_purpose::STANDARD.decode(content) {
+            Ok(b) => b,
+            Err(e) => return error_result(&format!("lwrite: base64 decode error: {e}"), cwd),
+        }
+    } else {
+        content.as_bytes().to_vec()
+    };
+
+    // Create parent directories if needed
+    if let Some(parent) = Path::new(&full_path).parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return error_result(&format!("lwrite: cannot create directory: {e}"), cwd);
+            }
+        }
+    }
+
+    match std::fs::write(&full_path, &bytes) {
+        Ok(()) => LlmResult {
+            status: "success".into(),
+            file: Some(full_path),
+            size_bytes: bytes.len() as i64,
+            cwd: cwd.into(),
+            ..Default::default()
+        },
+        Err(e) => error_result(&format!("lwrite: {path}: {e}"), cwd),
+    }
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────
 
 pub fn error_result(msg: &str, cwd: &str) -> LlmResult {
@@ -400,9 +457,10 @@ pub fn run() {
     let stdout = std::io::stdout();
     let mut spool = Spool::new();
     let mut last_exit_code: i32 = 0;
+    let mut first_context = true;
 
     loop {
-        // Emit context
+        // Emit context (include lang spec on first connection only)
         let cwd = get_cwd();
         let (branch, dirty) = get_git_info(&cwd);
         let context = LlmContext {
@@ -415,6 +473,12 @@ pub fn run() {
             last_exit_code,
             shell: "rush".into(),
             version: VERSION.into(),
+            lang_spec: if first_context {
+                first_context = false;
+                Some(crate::lang_spec::LANG_SPEC.to_string())
+            } else {
+                None
+            },
         };
         {
             let mut out = stdout.lock();
@@ -650,6 +714,47 @@ fn handle_spool(input: &str, spool: &mut Spool, cwd: &str, start: Instant) -> Ll
         };
     }
 
+    // spool search <pattern> | spool grep <pattern>
+    if parts.get(1) == Some(&"search") || parts.get(1) == Some(&"grep") {
+        let pattern = parts[2..].join(" ");
+        if pattern.is_empty() {
+            return LlmResult {
+                status: "error".into(),
+                exit_code: 1,
+                stderr: Some("spool search: missing pattern".into()),
+                cwd: cwd.into(),
+                duration_ms: start.elapsed().as_millis(),
+                ..Default::default()
+            };
+        }
+        return match spool.search(&pattern) {
+            Ok(matches) => {
+                let match_count = matches.len();
+                let content = matches.iter()
+                    .map(|(n, line)| format!("{n}: {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                LlmResult {
+                    status: "success".into(),
+                    stdout: if content.is_empty() { None } else { Some(content) },
+                    spool_total: spool.lines.len(),
+                    hint: Some(format!("{match_count} matches in {} spooled lines", spool.lines.len())),
+                    cwd: cwd.into(),
+                    duration_ms: start.elapsed().as_millis(),
+                    ..Default::default()
+                }
+            }
+            Err(e) => LlmResult {
+                status: "error".into(),
+                exit_code: 1,
+                stderr: Some(e),
+                cwd: cwd.into(),
+                duration_ms: start.elapsed().as_millis(),
+                ..Default::default()
+            },
+        };
+    }
+
     // spool clear
     if parts.get(1) == Some(&"clear") {
         spool.clear();
@@ -695,10 +800,32 @@ mod tests {
             last_exit_code: 0,
             shell: "rush".into(),
             version: "0.1.0".into(),
+            lang_spec: None,
         };
         let json = serde_json::to_string(&ctx).unwrap();
         assert!(json.contains("\"ready\":true"));
         assert!(json.contains("\"shell\":\"rush\""));
+        // lang_spec is None, should be omitted
+        assert!(!json.contains("lang_spec"));
+    }
+
+    #[test]
+    fn context_first_includes_lang_spec() {
+        let ctx = LlmContext {
+            ready: true,
+            host: "test".into(),
+            user: "mark".into(),
+            cwd: "/tmp".into(),
+            git_branch: None,
+            git_dirty: false,
+            last_exit_code: 0,
+            shell: "rush".into(),
+            version: "0.1.0".into(),
+            lang_spec: Some(crate::lang_spec::LANG_SPEC.to_string()),
+        };
+        let json = serde_json::to_string(&ctx).unwrap();
+        assert!(json.contains("lang_spec"));
+        assert!(json.contains("Rush Language Spec"));
     }
 
     #[test]
@@ -775,6 +902,83 @@ mod tests {
         spool.store("short line\nanother line");
         let preview = spool.preview(20);
         assert_eq!(preview, "short line");
+    }
+
+    #[test]
+    fn spool_search_literal() {
+        let mut spool = Spool::new();
+        spool.store("alpha\nbeta\ngamma\nalpha beta\ndelta");
+        let matches = spool.search("alpha").unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (1, "alpha".to_string()));
+        assert_eq!(matches[1], (4, "alpha beta".to_string()));
+    }
+
+    #[test]
+    fn spool_search_regex() {
+        let mut spool = Spool::new();
+        spool.store("line1\nline2\nline3\nother\nline22");
+        let matches = spool.search("line[23]").unwrap();
+        assert_eq!(matches.len(), 3);
+        assert_eq!(matches[0].0, 2); // line2
+        assert_eq!(matches[1].0, 3); // line3
+        assert_eq!(matches[2].0, 5); // line22
+    }
+
+    #[test]
+    fn spool_search_no_matches() {
+        let mut spool = Spool::new();
+        spool.store("alpha\nbeta\ngamma");
+        let matches = spool.search("delta").unwrap();
+        assert_eq!(matches.len(), 0);
+    }
+
+    #[test]
+    fn spool_search_invalid_regex() {
+        let mut spool = Spool::new();
+        spool.store("some content");
+        let result = spool.search("[invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid regex"));
+    }
+
+    #[test]
+    fn lwrite_creates_file() {
+        let tmp = std::env::temp_dir().join("rush_lwrite_test.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let result = lwrite(&tmp.to_string_lossy(), "hello write", None, "/tmp");
+        assert_eq!(result.status, "success");
+        assert_eq!(result.size_bytes, 11);
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "hello write");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn lwrite_base64() {
+        let tmp = std::env::temp_dir().join("rush_lwrite_b64.bin");
+        let _ = std::fs::remove_file(&tmp);
+        // "hello" in base64 = "aGVsbG8="
+        let result = lwrite(&tmp.to_string_lossy(), "aGVsbG8=", Some("base64"), "/tmp");
+        assert_eq!(result.status, "success");
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"hello");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn lwrite_creates_parents() {
+        let tmp = std::env::temp_dir().join("rush_lwrite_nested/sub/dir/test.txt");
+        let _ = std::fs::remove_file(&tmp);
+        let result = lwrite(&tmp.to_string_lossy(), "nested", None, "/tmp");
+        assert_eq!(result.status, "success");
+        assert_eq!(std::fs::read_to_string(&tmp).unwrap(), "nested");
+        // Clean up
+        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("rush_lwrite_nested"));
+    }
+
+    #[test]
+    fn lwrite_empty_path_error() {
+        let result = lwrite("", "content", None, "/tmp");
+        assert_eq!(result.status, "error");
     }
 
     #[test]

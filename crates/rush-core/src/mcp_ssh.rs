@@ -174,6 +174,65 @@ fn read_file_ssh(host: &str, path: &str, session: Option<&mut SshSession>) -> Js
     }
 }
 
+fn write_file_ssh(host: &str, path: &str, content: &str, encoding: Option<&str>, session: Option<&mut SshSession>) -> JsonValue {
+    if let Some(session) = session {
+        // Use Rush File.write via session
+        if encoding == Some("base64") {
+            // For binary, decode on the remote side
+            // Send base64 content and pipe through base64 -d
+            let cmd = format!("echo '{}' | base64 -d > '{}'", content.replace('\'', "'\\''"), path);
+            if let Some(result) = session.execute(&cmd) {
+                return result;
+            }
+        } else {
+            let escaped = content.replace('\\', "\\\\").replace('"', "\\\"");
+            let cmd = format!("File.write(\"{path}\", \"{escaped}\")");
+            if let Some(result) = session.execute(&cmd) {
+                return result;
+            }
+        }
+    }
+
+    // Fallback: write via raw SSH using stdin pipe
+    let cmd = if encoding == Some("base64") {
+        format!("base64 -d > '{path}'")
+    } else {
+        format!("cat > '{path}'")
+    };
+
+    let child = Command::new("ssh")
+        .args(["-o", "BatchMode=yes", host, &cmd])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+
+    match child {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                let _ = stdin.write_all(content.as_bytes());
+            }
+            match child.wait_with_output() {
+                Ok(output) if output.status.success() => {
+                    json!({
+                        "status": "success",
+                        "file": path,
+                        "size_bytes": content.len(),
+                        "shell": "raw"
+                    })
+                }
+                Ok(output) => json!({
+                    "status": "error",
+                    "stderr": String::from_utf8_lossy(&output.stderr).trim().to_string()
+                }),
+                Err(e) => json!({ "status": "error", "stderr": format!("SSH error: {e}") }),
+            }
+        }
+        Err(e) => json!({ "status": "error", "stderr": format!("SSH error: {e}") }),
+    }
+}
+
 // ── MCP Server ──────────────────────────────────────────────────────
 
 pub fn run() {
@@ -262,6 +321,20 @@ fn tools_list() -> JsonValue {
                 }
             },
             {
+                "name": "rush_write_file",
+                "description": "Write content to a file on a remote host. Text by default; set encoding to 'base64' for binary data.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "host": { "type": "string", "description": "SSH host" },
+                        "path": { "type": "string", "description": "File path on remote host" },
+                        "content": { "type": "string", "description": "File content (text or base64-encoded binary)" },
+                        "encoding": { "type": "string", "description": "Content encoding: 'utf8' (default) or 'base64'", "enum": ["utf8", "base64"] }
+                    },
+                    "required": ["host", "path", "content"]
+                }
+            },
+            {
                 "name": "rush_context",
                 "description": "Get shell context from remote host: hostname, cwd, git branch/dirty, exit code.",
                 "inputSchema": {
@@ -304,6 +377,17 @@ fn handle_tools_call(
 
             let session = sessions.get_mut(host);
             let result = read_file_ssh(host, path, session);
+            let is_err = result.get("status").and_then(|s| s.as_str()) != Some("success");
+            (result, is_err)
+        }
+        "rush_write_file" => {
+            let path = args.and_then(|a| a.get("path")).and_then(|p| p.as_str())
+                .ok_or((-32602, "Missing required parameter: path".into()))?;
+            let content = args.and_then(|a| a.get("content")).and_then(|c| c.as_str())
+                .ok_or((-32602, "Missing required parameter: content".into()))?;
+            let encoding = args.and_then(|a| a.get("encoding")).and_then(|e| e.as_str());
+
+            let result = write_file_ssh(host, path, content, encoding, sessions.get_mut(host));
             let is_err = result.get("status").and_then(|s| s.as_str()) != Some("success");
             (result, is_err)
         }
