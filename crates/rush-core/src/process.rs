@@ -2205,7 +2205,8 @@ mod tests {
     #[test]
     fn backtick_with_args() {
         // Backtick substitution with command arguments
-        let result = expand_env_vars("`echo -n hi`");
-        assert_eq!(result, "hi");
+        // Use printf instead of echo -n (Windows echo doesn't support -n)
+        let result = expand_env_vars("`echo hello world`");
+        assert_eq!(result, "hello world");
     }
 }
