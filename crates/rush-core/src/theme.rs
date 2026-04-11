@@ -1,10 +1,11 @@
-//! Theme system: dark/light detection, contrast-aware 256-color palette,
-//! LS_COLORS/GREP_COLORS generation, setbg support.
+//! Theme system: OKLCH-based contrast-aware color generation.
 //!
-//! Design: one contrast validation path, data-driven color tables,
-//! enum-indexed color roles. No duplication.
+//! Design: Generate colors in OKLCH (perceptually uniform), lock Lightness for
+//! contrast against background, cap Chroma for professional tones, rotate Hue
+//! for each semantic role. Find nearest 256-color match for terminal output.
+//! All foreground colors are validated against the actual background.
 
-// ── Color Math ──────────────────────────────────────────────────────
+// ── Color Math: sRGB ───────────────────────────────────────────────
 
 /// sRGB relative luminance (WCAG 2.0).
 pub fn luminance(r: f64, g: f64, b: f64) -> f64 {
@@ -30,30 +31,105 @@ pub fn parse_hex(hex: &str) -> Option<(f64, f64, f64)> {
     Some((r, g, b))
 }
 
-/// Convert RGB to HSL. All values 0.0-1.0 except hue which is 0-360.
-fn rgb_to_hsl(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let l = (max + min) / 2.0;
+/// sRGB gamma decode (to linear).
+fn srgb_to_linear(c: f64) -> f64 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
 
-    if (max - min).abs() < 1e-10 {
-        return (0.0, 0.0, l);
+/// Linear to sRGB gamma encode.
+fn linear_to_srgb(c: f64) -> f64 {
+    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+// ── Color Math: OKLAB / OKLCH ──────────────────────────────────────
+//
+// Björn Ottosson's OKLAB: perceptually uniform color space.
+// OKLCH is the polar form: L (lightness 0-1), C (chroma 0-~0.37), H (hue 0-360).
+// Reference: https://bottosson.github.io/posts/oklab/
+
+/// sRGB (0-1) → OKLAB (L, a, b).
+fn srgb_to_oklab(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let r = srgb_to_linear(r);
+    let g = srgb_to_linear(g);
+    let b = srgb_to_linear(b);
+
+    let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+    let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+
+    let l = l.cbrt();
+    let m = m.cbrt();
+    let s = s.cbrt();
+
+    let lab_l = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s;
+    let lab_a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s;
+    let lab_b = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+
+    (lab_l, lab_a, lab_b)
+}
+
+/// OKLAB (L, a, b) → sRGB (0-1). Returns None if out of gamut.
+fn oklab_to_srgb(lab_l: f64, lab_a: f64, lab_b: f64) -> Option<(f64, f64, f64)> {
+    let l = lab_l + 0.3963377774 * lab_a + 0.2158037573 * lab_b;
+    let m = lab_l - 0.1055613458 * lab_a - 0.0638541728 * lab_b;
+    let s = lab_l - 0.0894841775 * lab_a - 1.2914855480 * lab_b;
+
+    let l = l * l * l;
+    let m = m * m * m;
+    let s = s * s * s;
+
+    let r = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    let g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    let b = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+    let r = linear_to_srgb(r);
+    let g = linear_to_srgb(g);
+    let b = linear_to_srgb(b);
+
+    // Check gamut
+    if r < -0.001 || r > 1.001 || g < -0.001 || g > 1.001 || b < -0.001 || b > 1.001 {
+        return None;
     }
 
-    let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    Some((r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0)))
+}
 
-    let h = if (max - r).abs() < 1e-10 {
-        let mut h = (g - b) / d;
-        if g < b { h += 6.0; }
-        h
-    } else if (max - g).abs() < 1e-10 {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
+/// sRGB → OKLCH (L, C, H). H in degrees 0-360.
+fn srgb_to_oklch(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let (l, a, b) = srgb_to_oklab(r, g, b);
+    let c = (a * a + b * b).sqrt();
+    let h = b.atan2(a).to_degrees();
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    (l, c, h)
+}
 
-    (h * 60.0, s, l)
+/// OKLCH (L, C, H) → sRGB. Reduces chroma if out of gamut.
+fn oklch_to_srgb(l: f64, c: f64, h: f64) -> (f64, f64, f64) {
+    let h_rad = h.to_radians();
+    let a = c * h_rad.cos();
+    let b = c * h_rad.sin();
+
+    if let Some(rgb) = oklab_to_srgb(l, a, b) {
+        return rgb;
+    }
+
+    // Out of gamut — reduce chroma until it fits
+    let mut lo = 0.0;
+    let mut hi = c;
+    for _ in 0..20 {
+        let mid = (lo + hi) / 2.0;
+        let a = mid * h_rad.cos();
+        let b = mid * h_rad.sin();
+        if oklab_to_srgb(l, a, b).is_some() {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+
+    let a = lo * h_rad.cos();
+    let b = lo * h_rad.sin();
+    oklab_to_srgb(l, a, b).unwrap_or((0.5, 0.5, 0.5))
 }
 
 /// Angular distance between two hues (0-180).
@@ -67,7 +143,6 @@ fn hue_distance(h1: f64, h2: f64) -> f64 {
 /// Get RGB for a 256-color palette index.
 fn palette_rgb(idx: u8) -> (f64, f64, f64) {
     if idx < 16 {
-        // Basic 16 colors (approximate)
         let table: [(u8, u8, u8); 16] = [
             (0,0,0), (128,0,0), (0,128,0), (128,128,0), (0,0,128), (128,0,128), (0,128,128), (192,192,192),
             (128,128,128), (255,0,0), (0,255,0), (255,255,0), (0,0,255), (255,0,255), (0,255,255), (255,255,255),
@@ -75,7 +150,6 @@ fn palette_rgb(idx: u8) -> (f64, f64, f64) {
         let (r, g, b) = table[idx as usize];
         (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0)
     } else if idx < 232 {
-        // 6×6×6 color cube (indices 16-231)
         let i = idx - 16;
         let r = (i / 36) as f64;
         let g = ((i % 36) / 6) as f64;
@@ -83,72 +157,26 @@ fn palette_rgb(idx: u8) -> (f64, f64, f64) {
         let to_val = |c: f64| if c == 0.0 { 0.0 } else { (c * 40.0 + 55.0) / 255.0 };
         (to_val(r), to_val(g), to_val(b))
     } else {
-        // Grayscale ramp (indices 232-255)
         let v = (8 + 10 * (idx as u16 - 232)) as f64 / 255.0;
         (v, v, v)
     }
 }
 
-/// Select the best 256-color index for a given role.
-fn select_best_color(
-    bg_lum: f64,
-    bg_hue: f64,
-    min_contrast: f64,
-    max_contrast: f64,
-    preferred_hue: Option<f64>,
-    hue_weight: f64,
-    used_colors: &[u8],
-    is_dark: bool,
-) -> u8 {
-    let mut best_idx: u8 = if is_dark { 15 } else { 0 }; // fallback: white or black
-    let mut best_score: f64 = f64::NEG_INFINITY;
+/// Find the nearest 256-color index to a given sRGB color.
+/// Skips basic 16 (terminal-dependent), searches 16-255.
+#[cfg(test)]
+fn nearest_256(r: f64, g: f64, b: f64) -> u8 {
+    let mut best_idx: u8 = 7;
+    let mut best_dist = f64::MAX;
 
-    // Scan the 6×6×6 cube (16-231) + grayscale (232-255)
     for idx in 16..=255u8 {
-        let (r, g, b) = palette_rgb(idx);
-        let lum = luminance(r, g, b);
-        let cr = contrast_ratio(lum, bg_lum);
-
-        // Must be within contrast range
-        if cr < min_contrast || cr > max_contrast {
-            continue;
-        }
-
-        let (h, s, _l) = rgb_to_hsl(r, g, b);
-
-        // Score: contrast bonus (prefer mid-range, not extreme)
-        let contrast_mid = (min_contrast + max_contrast) / 2.0;
-        let contrast_score = 2.0 - (cr - contrast_mid).abs() / contrast_mid;
-
-        // Score: hue proximity to preferred hue
-        let hue_score = if let Some(pref) = preferred_hue {
-            let dist = hue_distance(h, pref);
-            if dist < 90.0 { (90.0 - dist) / 90.0 * 5.0 * hue_weight } else { 0.0 }
-        } else {
-            0.0
-        };
-
-        // Score: saturation (prefer vivid for dark, moderate for light)
-        let sat_score = if is_dark { s * 2.0 } else { (1.0 - (s - 0.5).abs()) * 1.5 };
-
-        // Penalty: too close to background hue
-        let bg_penalty = if hue_distance(h, bg_hue) < 40.0 { -8.0 } else { 0.0 };
-
-        // Penalty: too close to already-used colors
-        let collision_penalty: f64 = used_colors.iter().map(|&used| {
-            let (ur, ug, ub) = palette_rgb(used);
-            let ul = luminance(ur, ug, ub);
-            let dist = contrast_ratio(lum, ul);
-            if dist < 1.3 { -10.0 } else { 0.0 }
-        }).sum();
-
-        // Penalty: grayscale when hue is preferred
-        let gray_penalty = if preferred_hue.is_some() && s < 0.1 { -3.0 } else { 0.0 };
-
-        let score = contrast_score + hue_score + sat_score + bg_penalty + collision_penalty + gray_penalty;
-
-        if score > best_score {
-            best_score = score;
+        let (pr, pg, pb) = palette_rgb(idx);
+        // Perceptual distance in OKLAB
+        let (l1, a1, b1) = srgb_to_oklab(r, g, b);
+        let (l2, a2, b2) = srgb_to_oklab(pr, pg, pb);
+        let dist = (l1 - l2).powi(2) + (a1 - a2).powi(2) + (b1 - b2).powi(2);
+        if dist < best_dist {
+            best_dist = dist;
             best_idx = idx;
         }
     }
@@ -156,58 +184,163 @@ fn select_best_color(
     best_idx
 }
 
-// ── LS_COLORS / GREP_COLORS Slot Definitions ────────────────────────
+/// Find the nearest 256-color index that meets minimum contrast against bg.
+/// Prioritizes hue fidelity among colors that pass contrast.
+fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64) -> u8 {
+    let (target_l, target_a, target_b) = srgb_to_oklab(r, g, b);
+    let mut best_idx: Option<u8> = None;
+    let mut best_dist = f64::MAX;
 
-struct LsSlot {
-    key: &'static str,         // LS_COLORS key (di, ln, so, etc.)
-    min_contrast: f64,
-    max_contrast: f64,
-    hue: Option<f64>,          // preferred hue (0-360)
-    hue_weight: f64,
-    is_primary: bool,          // primary types get distinction enforcement
+    // Search all 240 extended colors for the closest match that passes contrast
+    for idx in 16..=255u8 {
+        let (pr, pg, pb) = palette_rgb(idx);
+        let lum = luminance(pr, pg, pb);
+        if contrast_ratio(lum, bg_lum) < min_cr {
+            continue;
+        }
+        let (pl, pa, pb_ok) = srgb_to_oklab(pr, pg, pb);
+        let dist = (target_l - pl).powi(2) + (target_a - pa).powi(2) + (target_b - pb_ok).powi(2);
+        if dist < best_dist {
+            best_dist = dist;
+            best_idx = Some(idx);
+        }
+    }
+
+    // Hard fallback: white on dark, black on light
+    best_idx.unwrap_or(if bg_lum < 0.5 { 15 } else { 0 })
 }
 
-const DARK_LS_SLOTS: &[LsSlot] = &[
-    LsSlot { key: "di", min_contrast: 5.0, max_contrast: 14.0, hue: Some(180.0), hue_weight: 1.5, is_primary: true },  // cyan
-    LsSlot { key: "ln", min_contrast: 5.0, max_contrast: 14.0, hue: Some(300.0), hue_weight: 1.5, is_primary: true },  // magenta
-    LsSlot { key: "so", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(280.0), hue_weight: 1.0, is_primary: false }, // purple
-    LsSlot { key: "pi", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(50.0),  hue_weight: 1.0, is_primary: false }, // yellow
-    LsSlot { key: "ex", min_contrast: 5.0, max_contrast: 14.0, hue: Some(120.0), hue_weight: 1.5, is_primary: true },  // green
-    LsSlot { key: "bd", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(40.0),  hue_weight: 1.0, is_primary: false }, // orange
-    LsSlot { key: "cd", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(40.0),  hue_weight: 1.0, is_primary: false }, // orange
-];
+// ── OKLCH Palette Generation ───────────────────────────────────────
 
-const LIGHT_LS_SLOTS: &[LsSlot] = &[
-    LsSlot { key: "di", min_contrast: 4.0, max_contrast: 10.0, hue: Some(220.0), hue_weight: 1.5, is_primary: true },  // navy
-    LsSlot { key: "ln", min_contrast: 4.0, max_contrast: 10.0, hue: Some(320.0), hue_weight: 1.5, is_primary: true },  // deep magenta
-    LsSlot { key: "so", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(280.0), hue_weight: 1.0, is_primary: false }, // purple
-    LsSlot { key: "pi", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(45.0),  hue_weight: 1.0, is_primary: false }, // olive
-    LsSlot { key: "ex", min_contrast: 4.0, max_contrast: 10.0, hue: Some(160.0), hue_weight: 1.5, is_primary: true },  // teal
-    LsSlot { key: "bd", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(30.0),  hue_weight: 1.0, is_primary: false }, // dark orange
-    LsSlot { key: "cd", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(30.0),  hue_weight: 1.0, is_primary: false }, // dark orange
-];
-
-struct GrepSlot {
-    key: &'static str,
+/// A semantic color role with its OKLCH parameters.
+struct ColorRole {
+    hue: f64,       // target hue (0-360)
+    chroma: f64,    // max chroma (vibrancy cap)
     min_contrast: f64,
-    max_contrast: f64,
-    hue: Option<f64>,
-    hue_weight: f64,
 }
 
-const DARK_GREP_SLOTS: &[GrepSlot] = &[
-    GrepSlot { key: "fn", min_contrast: 5.0, max_contrast: 14.0, hue: Some(300.0), hue_weight: 1.0 }, // filename
-    GrepSlot { key: "ln", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(120.0), hue_weight: 0.5 }, // line number
-    GrepSlot { key: "bn", min_contrast: 4.0, max_contrast: 9.0,  hue: Some(40.0),  hue_weight: 0.5 }, // byte offset
-    GrepSlot { key: "se", min_contrast: 3.0, max_contrast: 6.0,  hue: None,         hue_weight: 0.0 }, // separator
-];
+/// Generate an sRGB color for a role given the background.
+/// Picks lightness to achieve contrast, locks hue and caps chroma.
+fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, f64) {
+    let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    let (bg_l, _, bg_h) = srgb_to_oklch(bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    let is_dark = bg_lum <= 0.179;
 
-const LIGHT_GREP_SLOTS: &[GrepSlot] = &[
-    GrepSlot { key: "fn", min_contrast: 4.0, max_contrast: 10.0, hue: Some(280.0), hue_weight: 1.0 },
-    GrepSlot { key: "ln", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(160.0), hue_weight: 0.5 },
-    GrepSlot { key: "bn", min_contrast: 3.5, max_contrast: 8.0,  hue: Some(30.0),  hue_weight: 0.5 },
-    GrepSlot { key: "se", min_contrast: 2.5, max_contrast: 5.0,  hue: None,         hue_weight: 0.0 },
-];
+    // If the role hue is too close to the bg hue, shift it away
+    let hue = if role.chroma > 0.01 && hue_distance(role.hue, bg_h) < 35.0 {
+        (role.hue + 50.0) % 360.0
+    } else {
+        role.hue
+    };
+
+    // Search the full lightness range on the correct side of the background.
+    // For dark bg: search from bg_l upward (lighter foregrounds).
+    // For light bg: search from bg_l downward (darker foregrounds).
+    let (lo, hi) = if is_dark { (bg_l + 0.15, 0.97) } else { (0.10, bg_l - 0.10) };
+
+    // Ensure valid range
+    if lo >= hi {
+        // Extreme case — just use white on dark, black on light
+        return if is_dark { (0.9, 0.9, 0.9) } else { (0.1, 0.1, 0.1) };
+    }
+
+    // Binary search: find the L closest to the bg (least extreme) that still meets contrast.
+    // Start from the "comfortable" end and push toward "extreme" only if needed.
+    let mut best_rgb: Option<(f64, f64, f64)> = None;
+    let mut search_lo = lo;
+    let mut search_hi = hi;
+
+    for _ in 0..30 {
+        let mid = (search_lo + search_hi) / 2.0;
+        let rgb = oklch_to_srgb(mid, role.chroma, hue);
+        let fg_lum = luminance(rgb.0, rgb.1, rgb.2);
+        let cr = contrast_ratio(fg_lum, bg_lum);
+
+        if cr >= role.min_contrast {
+            best_rgb = Some(rgb);
+            // Good — try to get LESS extreme (closer to bg) while still passing
+            if is_dark { search_hi = mid; } else { search_lo = mid; }
+        } else {
+            // Not enough contrast — push further from bg
+            if is_dark { search_lo = mid; } else { search_hi = mid; }
+        }
+    }
+
+    // Post-validation: if nothing met contrast, use white/black
+    if let Some(rgb) = best_rgb {
+        let fg_lum = luminance(rgb.0, rgb.1, rgb.2);
+        let cr = contrast_ratio(fg_lum, bg_lum);
+        if cr >= role.min_contrast - 0.5 {
+            return rgb;
+        }
+    }
+
+    // Hard fallback
+    if is_dark { (0.85, 0.85, 0.85) } else { (0.15, 0.15, 0.15) }
+}
+
+/// Generate 256-color code for a role.
+fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> u8 {
+    let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    let (r, g, b) = generate_role_color(role, bg_rgb);
+    nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast)
+}
+
+/// Generate ANSI escape code (38;5;N) for a role.
+fn role_to_ansi(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> String {
+    let idx = role_to_256(role, bg_rgb);
+    format!("\x1b[38;5;{idx}m")
+}
+
+// ── Semantic Color Roles ───────────────────────────────────────────
+
+// OKLCH hues (approximate):
+//   0   = pink/red
+//   30  = orange
+//   90  = yellow
+//   140 = green
+//   180 = teal/cyan
+//   250 = blue
+//   300 = purple
+//   330 = magenta
+
+// Prompt roles
+const ROLE_SUCCESS: ColorRole    = ColorRole { hue: 145.0, chroma: 0.15, min_contrast: 4.5 };
+const ROLE_ERROR: ColorRole      = ColorRole { hue: 25.0,  chroma: 0.16, min_contrast: 4.5 };
+const ROLE_WARNING: ColorRole    = ColorRole { hue: 80.0,  chroma: 0.15, min_contrast: 4.5 };
+const ROLE_PATH: ColorRole       = ColorRole { hue: 250.0, chroma: 0.12, min_contrast: 4.5 };
+const ROLE_USER: ColorRole       = ColorRole { hue: 180.0, chroma: 0.10, min_contrast: 4.5 };
+const ROLE_HOST: ColorRole       = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.5 }; // neutral
+const ROLE_SSH_HOST: ColorRole   = ColorRole { hue: 80.0,  chroma: 0.14, min_contrast: 4.5 };
+const ROLE_GIT_BRANCH: ColorRole = ColorRole { hue: 80.0,  chroma: 0.12, min_contrast: 4.5 };
+const ROLE_GIT_DIRTY: ColorRole  = ColorRole { hue: 55.0,  chroma: 0.14, min_contrast: 4.5 };
+const ROLE_ROOT: ColorRole       = ColorRole { hue: 25.0,  chroma: 0.18, min_contrast: 4.5 };
+const ROLE_MUTED: ColorRole      = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 }; // gray, readable
+const ROLE_TIME: ColorRole       = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 };
+
+// Syntax highlighting roles
+const ROLE_HL_KEYWORD: ColorRole  = ColorRole { hue: 330.0, chroma: 0.14, min_contrast: 4.5 };
+const ROLE_HL_STRING: ColorRole   = ColorRole { hue: 145.0, chroma: 0.12, min_contrast: 4.5 };
+const ROLE_HL_NUMBER: ColorRole   = ColorRole { hue: 180.0, chroma: 0.10, min_contrast: 4.5 };
+const ROLE_HL_COMMAND: ColorRole  = ColorRole { hue: 210.0, chroma: 0.12, min_contrast: 4.5 };
+const ROLE_HL_UNKNOWN: ColorRole  = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.5 };
+const ROLE_HL_FLAG: ColorRole     = ColorRole { hue: 55.0,  chroma: 0.12, min_contrast: 4.5 };
+const ROLE_HL_OPERATOR: ColorRole = ColorRole { hue: 300.0, chroma: 0.12, min_contrast: 4.5 };
+
+// LS_COLORS roles
+const ROLE_LS_DIR: ColorRole  = ColorRole { hue: 210.0, chroma: 0.14, min_contrast: 4.5 };
+const ROLE_LS_LINK: ColorRole = ColorRole { hue: 310.0, chroma: 0.14, min_contrast: 4.5 };
+const ROLE_LS_SOCK: ColorRole = ColorRole { hue: 280.0, chroma: 0.10, min_contrast: 4.5 };
+const ROLE_LS_PIPE: ColorRole = ColorRole { hue: 55.0,  chroma: 0.10, min_contrast: 4.5 };
+const ROLE_LS_EXEC: ColorRole = ColorRole { hue: 145.0, chroma: 0.14, min_contrast: 4.5 };
+const ROLE_LS_BLK: ColorRole  = ColorRole { hue: 35.0,  chroma: 0.10, min_contrast: 4.5 };
+const ROLE_LS_CHR: ColorRole  = ColorRole { hue: 35.0,  chroma: 0.10, min_contrast: 4.5 };
+
+// GREP_COLORS roles
+const ROLE_GREP_FN: ColorRole = ColorRole { hue: 310.0, chroma: 0.12, min_contrast: 4.5 };
+const ROLE_GREP_LN: ColorRole = ColorRole { hue: 145.0, chroma: 0.08, min_contrast: 4.5 };
+const ROLE_GREP_BN: ColorRole = ColorRole { hue: 35.0,  chroma: 0.08, min_contrast: 4.5 };
+const ROLE_GREP_SE: ColorRole = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 };
 
 // ── Theme ───────────────────────────────────────────────────────────
 
@@ -246,63 +379,94 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Build a theme for the given background.
-    /// Prompt colors always use basic ANSI (proven visible across terminals).
-    /// 256-color is only used for LS_COLORS/GREP_COLORS (via generate_ls_colors).
-    pub fn new(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>) -> Self {
-        let reset = "\x1b[0m".to_string();
-        // Prompt and syntax colors: always basic ANSI (reliable, proven in C# Rush)
-        Self::build_basic(is_dark, bg_rgb, &reset)
+    /// Get the 256-color index for the muted/hint color.
+    pub fn muted_color_index(&self) -> u8 {
+        if let Some(bg) = self.bg_rgb {
+            role_to_256(&ROLE_MUTED, bg)
+        } else if self.is_dark {
+            250 // light gray
+        } else {
+            240 // dark gray
+        }
     }
 
-    /// Build theme using basic ANSI for bright colors, 256-color for muted.
-    /// When bg_rgb is known, picks a muted color with guaranteed contrast.
-    fn build_basic(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>, reset: &str) -> Self {
-        // The muted color needs to be readable on the background.
-        // \x1b[90m (dark gray) is invisible on #282828 and similar dark backgrounds.
-        // Use 256-color picker when bg is known, fallback to 90m otherwise.
-        let muted_code = if let Some((r, g, b)) = bg_rgb {
-            let bg_lum = luminance(r, g, b);
-            let (bg_hue, _, _) = rgb_to_hsl(r, g, b);
-            let idx = select_best_color(bg_lum, bg_hue, 3.0, 5.5, None, 0.0, &[], is_dark);
-            format!("\x1b[38;5;{idx}m")
-        } else if is_dark {
-            "\x1b[37m".into() // white instead of dark gray on dark unknown bg
-        } else {
-            "\x1b[90m".into() // dark gray is fine on light backgrounds
-        };
+    /// Build a theme for the given background.
+    /// When bg_rgb is known, all colors are generated via OKLCH for
+    /// guaranteed contrast. Without bg, falls back to safe ANSI defaults.
+    pub fn new(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>) -> Self {
+        let reset = "\x1b[0m".to_string();
 
+        if let Some(bg) = bg_rgb {
+            Self::build_oklch(is_dark, bg, &reset)
+        } else {
+            Self::build_fallback(is_dark, &reset)
+        }
+    }
+
+    /// Build theme with OKLCH-generated colors, all contrast-validated.
+    fn build_oklch(is_dark: bool, bg: (f64, f64, f64), reset: &str) -> Self {
+        Self {
+            is_dark,
+            bg_rgb: Some(bg),
+            prompt_success: role_to_ansi(&ROLE_SUCCESS, bg),
+            prompt_failed: role_to_ansi(&ROLE_ERROR, bg),
+            prompt_time: role_to_ansi(&ROLE_TIME, bg),
+            prompt_user: role_to_ansi(&ROLE_USER, bg),
+            prompt_host: role_to_ansi(&ROLE_HOST, bg),
+            prompt_ssh_host: role_to_ansi(&ROLE_SSH_HOST, bg),
+            prompt_path: role_to_ansi(&ROLE_PATH, bg),
+            prompt_git_branch: role_to_ansi(&ROLE_GIT_BRANCH, bg),
+            prompt_git_dirty: role_to_ansi(&ROLE_GIT_DIRTY, bg),
+            prompt_root: role_to_ansi(&ROLE_ROOT, bg),
+            muted: role_to_ansi(&ROLE_MUTED, bg),
+            error: role_to_ansi(&ROLE_ERROR, bg),
+            warning: role_to_ansi(&ROLE_WARNING, bg),
+            reset: reset.into(),
+            hl_keyword: role_to_ansi(&ROLE_HL_KEYWORD, bg),
+            hl_string: role_to_ansi(&ROLE_HL_STRING, bg),
+            hl_number: role_to_ansi(&ROLE_HL_NUMBER, bg),
+            hl_command: role_to_ansi(&ROLE_HL_COMMAND, bg),
+            hl_unknown_cmd: role_to_ansi(&ROLE_HL_UNKNOWN, bg),
+            hl_flag: role_to_ansi(&ROLE_HL_FLAG, bg),
+            hl_operator: role_to_ansi(&ROLE_HL_OPERATOR, bg),
+            hl_pipe: role_to_ansi(&ROLE_MUTED, bg),
+            hl_comment: role_to_ansi(&ROLE_MUTED, bg),
+        }
+    }
+
+    /// Fallback: safe ANSI colors when background is unknown.
+    fn build_fallback(is_dark: bool, reset: &str) -> Self {
         if is_dark {
             Self {
-                is_dark, bg_rgb,
+                is_dark, bg_rgb: None,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[91m".into(),
-                prompt_time: muted_code.clone(), prompt_user: "\x1b[36m".into(),
+                prompt_time: "\x1b[37m".into(), prompt_user: "\x1b[36m".into(),
                 prompt_host: "\x1b[37m".into(), prompt_ssh_host: "\x1b[93m".into(),
                 prompt_path: "\x1b[92m".into(), prompt_git_branch: "\x1b[33m".into(),
                 prompt_git_dirty: "\x1b[93m".into(), prompt_root: "\x1b[91m".into(),
-                muted: muted_code.clone(), error: "\x1b[91m".into(), warning: "\x1b[33m".into(),
+                muted: "\x1b[37m".into(), error: "\x1b[91m".into(), warning: "\x1b[33m".into(),
                 reset: reset.into(),
                 hl_keyword: "\x1b[38;5;204m".into(), hl_string: "\x1b[32m".into(),
                 hl_number: "\x1b[36m".into(), hl_command: "\x1b[96m".into(),
                 hl_unknown_cmd: "\x1b[37m".into(), hl_flag: "\x1b[33m".into(),
-                hl_operator: "\x1b[35m".into(), hl_pipe: muted_code.clone(),
-                hl_comment: muted_code,
+                hl_operator: "\x1b[35m".into(), hl_pipe: "\x1b[37m".into(),
+                hl_comment: "\x1b[37m".into(),
             }
         } else {
             Self {
-                is_dark, bg_rgb,
+                is_dark, bg_rgb: None,
                 prompt_success: "\x1b[32m".into(), prompt_failed: "\x1b[31m".into(),
-                prompt_time: muted_code.clone(), prompt_user: "\x1b[34m".into(),
-                prompt_host: muted_code.clone(), prompt_ssh_host: "\x1b[33m".into(),
+                prompt_time: "\x1b[90m".into(), prompt_user: "\x1b[34m".into(),
+                prompt_host: "\x1b[90m".into(), prompt_ssh_host: "\x1b[33m".into(),
                 prompt_path: "\x1b[34m".into(), prompt_git_branch: "\x1b[33m".into(),
                 prompt_git_dirty: "\x1b[33m".into(), prompt_root: "\x1b[31m".into(),
-                muted: muted_code.clone(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
+                muted: "\x1b[90m".into(), error: "\x1b[31m".into(), warning: "\x1b[33m".into(),
                 reset: reset.into(),
                 hl_keyword: "\x1b[38;5;161m".into(), hl_string: "\x1b[32m".into(),
                 hl_number: "\x1b[36m".into(), hl_command: "\x1b[34m".into(),
                 hl_unknown_cmd: "\x1b[30m".into(), hl_flag: "\x1b[38;5;130m".into(),
-                hl_operator: "\x1b[35m".into(), hl_pipe: muted_code.clone(),
-                hl_comment: muted_code,
+                hl_operator: "\x1b[35m".into(), hl_pipe: "\x1b[90m".into(),
+                hl_comment: "\x1b[90m".into(),
             }
         }
     }
@@ -310,69 +474,61 @@ impl Theme {
 
 // ── LS_COLORS / GREP_COLORS Generation ──────────────────────────────
 
-/// Generate 256-color LS_COLORS optimized for the background.
+/// Generate 256-color LS_COLORS optimized for the background via OKLCH.
 pub fn generate_ls_colors(theme: &Theme) -> String {
-    let (bg_r, bg_g, bg_b) = theme.bg_rgb.unwrap_or(if theme.is_dark { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) });
-    let bg_lum = luminance(bg_r, bg_g, bg_b);
-    let (bg_hue, _, _) = rgb_to_hsl(bg_r, bg_g, bg_b);
+    let bg = theme.bg_rgb.unwrap_or(if theme.is_dark { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) });
+    let roles = [
+        ("di", &ROLE_LS_DIR),
+        ("ln", &ROLE_LS_LINK),
+        ("so", &ROLE_LS_SOCK),
+        ("pi", &ROLE_LS_PIPE),
+        ("ex", &ROLE_LS_EXEC),
+        ("bd", &ROLE_LS_BLK),
+        ("cd", &ROLE_LS_CHR),
+    ];
 
-    let slots = if theme.is_dark { DARK_LS_SLOTS } else { LIGHT_LS_SLOTS };
-    let mut used: Vec<u8> = Vec::new();
-    let mut entries = Vec::new();
+    let mut entries: Vec<String> = roles.iter()
+        .map(|(key, role)| format!("{key}=38;5;{}", role_to_256(role, bg)))
+        .collect();
 
-    for slot in slots {
-        let idx = select_best_color(bg_lum, bg_hue, slot.min_contrast, slot.max_contrast,
-            slot.hue, slot.hue_weight, &used, theme.is_dark);
-        if slot.is_primary { used.push(idx); }
-        entries.push(format!("{}=38;5;{idx}", slot.key));
-    }
-
-    // Special entries (fixed, not hue-selected)
-    entries.push("su=37;41".into()); // setuid
-    entries.push("sg=30;43".into()); // setgid
-    entries.push("tw=30;42".into()); // sticky+other-writable
-    entries.push("ow=34;42".into()); // other-writable
+    // Special entries (fixed)
+    entries.push("su=37;41".into());
+    entries.push("sg=30;43".into());
+    entries.push("tw=30;42".into());
+    entries.push("ow=34;42".into());
 
     entries.join(":")
 }
 
-/// Generate 256-color GREP_COLORS optimized for the background.
+/// Generate 256-color GREP_COLORS optimized for the background via OKLCH.
 pub fn generate_grep_colors(theme: &Theme) -> String {
-    let (bg_r, bg_g, bg_b) = theme.bg_rgb.unwrap_or(if theme.is_dark { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) });
-    let bg_lum = luminance(bg_r, bg_g, bg_b);
-    let (bg_hue, _, _) = rgb_to_hsl(bg_r, bg_g, bg_b);
+    let bg = theme.bg_rgb.unwrap_or(if theme.is_dark { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) });
+    let roles = [
+        ("fn", &ROLE_GREP_FN),
+        ("ln", &ROLE_GREP_LN),
+        ("bn", &ROLE_GREP_BN),
+        ("se", &ROLE_GREP_SE),
+    ];
 
-    let slots = if theme.is_dark { DARK_GREP_SLOTS } else { LIGHT_GREP_SLOTS };
-    let mut entries = Vec::new();
+    let mut entries = vec![
+        "ms=01;31".to_string(),
+        "mc=01;31".to_string(),
+        "sl=".to_string(),
+        "cx=".to_string(),
+    ];
 
-    // Match highlight is always bold red
-    entries.push("ms=01;31".into());
-    entries.push("mc=01;31".into());
-    entries.push("sl=".into());
-    entries.push("cx=".into());
-
-    for slot in slots {
-        let idx = select_best_color(bg_lum, bg_hue, slot.min_contrast, slot.max_contrast,
-            slot.hue, slot.hue_weight, &[], theme.is_dark);
-        entries.push(format!("{}=38;5;{idx}", slot.key));
+    for (key, role) in &roles {
+        entries.push(format!("{key}=38;5;{}", role_to_256(role, bg)));
     }
 
     entries.join(":")
 }
 
 /// Generate BSD LSCOLORS string (macOS).
-/// Format: 11 pairs of foreground+background, one pair per file type:
-///   directory, symlink, socket, pipe, executable, block device,
-///   char device, setuid, setgid, dir+sticky+ow, dir+ow
-/// Letters: a=black b=red c=green d=brown e=blue f=magenta g=cyan h=grey
-/// Uppercase = bold. x = default.
 pub fn generate_lscolors(theme: &Theme) -> String {
     if theme.is_dark {
-        // Bold colors for dark backgrounds — high contrast
-        // dir=blue, sym=magenta, socket=cyan, pipe=yellow, exec=green
         "Gxfxcxdxbxegedabagacad".to_string()
     } else {
-        // Non-bold for light backgrounds — softer
         "gxfxcxdxbxegedabagacad".to_string()
     }
 }
@@ -382,20 +538,17 @@ pub fn generate_lscolors(theme: &Theme) -> String {
 /// Set terminal background via OSC 11 and re-theme.
 pub fn set_background(hex: &str, emit_osc: bool) -> Option<Theme> {
     let (r, g, b) = parse_hex(hex)?;
-    let is_dark = luminance(r, g, b) < 0.5;
+    let is_dark = luminance(r, g, b) <= 0.179;
 
     if emit_osc {
-        // OSC 11: set background color
         let hex_clean = hex.trim_start_matches('#');
         print!("\x1b]11;#{hex_clean}\x07");
-        // OSC 10: set foreground to contrast
         let fg = if is_dark { "ffffff" } else { "000000" };
         print!("\x1b]10;#{fg}\x07");
         use std::io::Write;
         std::io::stdout().flush().ok();
     }
 
-    // Propagate to child processes
     unsafe { std::env::set_var("RUSH_BG", hex) };
 
     Some(Theme::new(is_dark, Some((r, g, b))))
@@ -408,7 +561,7 @@ pub fn detect() -> Theme {
     // 1. RUSH_BG env var (explicit, highest priority)
     if let Ok(bg) = std::env::var("RUSH_BG") {
         if let Some((r, g, b)) = parse_hex(&bg) {
-            let is_dark = luminance(r, g, b) < 0.5;
+            let is_dark = luminance(r, g, b) <= 0.179;
             return Theme::new(is_dark, Some((r, g, b)));
         }
     }
@@ -441,13 +594,9 @@ pub fn detect() -> Theme {
 }
 
 /// Set LS_COLORS, LSCOLORS, GREP_COLORS, CLICOLOR env vars.
-/// Always sets Rush-generated values — we own the color environment.
-/// Respects NO_COLOR (https://no-color.org/).
 pub fn set_native_color_env_vars(theme: &Theme) {
     if std::env::var("NO_COLOR").is_ok() { return; }
 
-    // Always set — Rush owns these. Inherited values from parent shell
-    // may not match Rush's detected dark/light theme.
     unsafe {
         std::env::set_var("LS_COLORS", generate_ls_colors(theme));
         std::env::set_var("LSCOLORS", generate_lscolors(theme));
@@ -490,7 +639,7 @@ mod tests {
         let l1 = luminance(0.0, 0.0, 0.0);
         let l2 = luminance(1.0, 1.0, 1.0);
         let cr = contrast_ratio(l1, l2);
-        assert!(cr > 20.0); // WCAG max is 21:1
+        assert!(cr > 20.0);
     }
 
     #[test]
@@ -513,17 +662,87 @@ mod tests {
     }
 
     #[test]
-    fn hsl_red() {
-        let (h, s, _l) = rgb_to_hsl(1.0, 0.0, 0.0);
-        assert!((h - 0.0).abs() < 1.0); // hue ~0
-        assert!(s > 0.9);
+    fn oklch_roundtrip() {
+        // Test that sRGB → OKLCH → sRGB roundtrips reasonably
+        let colors = [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (0.5, 0.5, 0.5)];
+        for (r, g, b) in colors {
+            let (l, c, h) = srgb_to_oklch(r, g, b);
+            let (r2, g2, b2) = oklch_to_srgb(l, c, h);
+            assert!((r - r2).abs() < 0.02, "r: {r} vs {r2}");
+            assert!((g - g2).abs() < 0.02, "g: {g} vs {g2}");
+            assert!((b - b2).abs() < 0.02, "b: {b} vs {b2}");
+        }
     }
 
     #[test]
-    fn hsl_green() {
-        let (h, s, _l) = rgb_to_hsl(0.0, 1.0, 0.0);
-        assert!((h - 120.0).abs() < 1.0);
-        assert!(s > 0.9);
+    fn oklch_gamut_clamp() {
+        // Very high chroma should be clamped to gamut
+        let (r, g, b) = oklch_to_srgb(0.7, 0.4, 120.0);
+        assert!(r >= 0.0 && r <= 1.0);
+        assert!(g >= 0.0 && g <= 1.0);
+        assert!(b >= 0.0 && b <= 1.0);
+    }
+
+    #[test]
+    fn role_contrast_dark_bg() {
+        let bg = (0.1, 0.1, 0.1);
+        let bg_lum = luminance(bg.0, bg.1, bg.2);
+        let roles = [&ROLE_SUCCESS, &ROLE_ERROR, &ROLE_PATH, &ROLE_HL_KEYWORD, &ROLE_HL_COMMAND];
+        for role in roles {
+            let (r, g, b) = generate_role_color(role, bg);
+            let fg_lum = luminance(r, g, b);
+            let cr = contrast_ratio(fg_lum, bg_lum);
+            assert!(cr >= role.min_contrast - 0.5,
+                "hue={} contrast {cr:.1} < min {} on dark bg", role.hue, role.min_contrast);
+        }
+    }
+
+    #[test]
+    fn role_contrast_light_bg() {
+        let bg = (0.95, 0.95, 0.95);
+        let bg_lum = luminance(bg.0, bg.1, bg.2);
+        let roles = [&ROLE_SUCCESS, &ROLE_ERROR, &ROLE_PATH, &ROLE_HL_KEYWORD, &ROLE_HL_COMMAND];
+        for role in roles {
+            let (r, g, b) = generate_role_color(role, bg);
+            let fg_lum = luminance(r, g, b);
+            let cr = contrast_ratio(fg_lum, bg_lum);
+            assert!(cr >= role.min_contrast - 0.5,
+                "hue={} contrast {cr:.1} < min {} on light bg", role.hue, role.min_contrast);
+        }
+    }
+
+    #[test]
+    fn role_contrast_mid_gray() {
+        // The problematic zone — mid-gray backgrounds
+        let bg = (0.4, 0.4, 0.4);
+        let bg_lum = luminance(bg.0, bg.1, bg.2);
+        let roles = [&ROLE_SUCCESS, &ROLE_ERROR, &ROLE_PATH];
+        for role in roles {
+            let (r, g, b) = generate_role_color(role, bg);
+            let fg_lum = luminance(r, g, b);
+            let cr = contrast_ratio(fg_lum, bg_lum);
+            assert!(cr >= 3.0,
+                "hue={} contrast {cr:.1} < 3.0 on mid-gray bg", role.hue);
+        }
+    }
+
+    #[test]
+    fn role_contrast_blue_bg() {
+        // Blue background — path (also blue) should shift away
+        let bg = (0.1, 0.1, 0.4);
+        let bg_lum = luminance(bg.0, bg.1, bg.2);
+        let (r, g, b) = generate_role_color(&ROLE_PATH, bg);
+        let fg_lum = luminance(r, g, b);
+        let cr = contrast_ratio(fg_lum, bg_lum);
+        assert!(cr >= 3.0, "path on blue bg: contrast {cr:.1} < 3.0");
+    }
+
+    #[test]
+    fn nearest_256_finds_close_match() {
+        // Pure red should map to something reddish
+        let idx = nearest_256(1.0, 0.0, 0.0);
+        let (r, _g, _b) = palette_rgb(idx);
+        assert!(r > 0.5, "nearest to red should be reddish, got idx {idx}");
     }
 
     #[test]
@@ -534,32 +753,6 @@ mod tests {
             assert!(g >= 0.0 && g <= 1.0, "idx {i}: g={g}");
             assert!(b >= 0.0 && b <= 1.0, "idx {i}: b={b}");
         }
-    }
-
-    #[test]
-    fn select_color_dark_bg() {
-        // On dark background, selected color should have high luminance
-        let idx = select_best_color(0.01, 0.0, 5.0, 14.0, Some(120.0), 1.5, &[], true);
-        let (r, g, b) = palette_rgb(idx);
-        let lum = luminance(r, g, b);
-        let cr = contrast_ratio(lum, 0.01);
-        assert!(cr >= 5.0, "contrast {cr} < 5.0 for idx {idx}");
-    }
-
-    #[test]
-    fn select_color_light_bg() {
-        let idx = select_best_color(0.95, 0.0, 4.0, 10.0, Some(220.0), 1.5, &[], false);
-        let (r, g, b) = palette_rgb(idx);
-        let lum = luminance(r, g, b);
-        let cr = contrast_ratio(lum, 0.95);
-        assert!(cr >= 4.0, "contrast {cr} < 4.0 for idx {idx}");
-    }
-
-    #[test]
-    fn select_avoids_used_colors() {
-        let first = select_best_color(0.01, 0.0, 5.0, 14.0, Some(120.0), 1.5, &[], true);
-        let second = select_best_color(0.01, 0.0, 5.0, 14.0, Some(120.0), 1.5, &[first], true);
-        assert_ne!(first, second, "should pick different colors");
     }
 
     #[test]
@@ -584,10 +777,8 @@ mod tests {
     fn theme_with_and_without_bg() {
         let with_bg = Theme::new(true, Some((0.1, 0.1, 0.15)));
         let without_bg = Theme::new(true, None);
-        // Both use basic ANSI for prompt (proven visible)
-        assert!(with_bg.prompt_success.contains("\x1b["), "should have ANSI codes");
-        assert!(without_bg.prompt_success.contains("\x1b["), "should have ANSI codes");
-        // bg_rgb should be preserved for LS_COLORS generation
+        assert!(with_bg.prompt_success.contains("\x1b["));
+        assert!(without_bg.prompt_success.contains("\x1b["));
         assert!(with_bg.bg_rgb.is_some());
         assert!(without_bg.bg_rgb.is_none());
     }
@@ -606,9 +797,17 @@ mod tests {
     }
 
     #[test]
+    fn setbg_flip_point() {
+        // 18% gray (#303030 ≈ luminance 0.03) should be dark
+        let dark = set_background("#303030", false).unwrap();
+        assert!(dark.is_dark);
+        // 50% gray (#808080 ≈ luminance 0.22) should be light (above 0.179)
+        let light = set_background("#808080", false).unwrap();
+        assert!(!light.is_dark);
+    }
+
+    #[test]
     fn rushbg_nonexistent() {
-        // In test directory, .rushbg likely doesn't exist
-        // This just tests the function doesn't crash
         let _ = load_rushbg();
     }
 }

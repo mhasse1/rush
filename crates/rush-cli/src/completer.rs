@@ -285,8 +285,9 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(prefix) && !name.starts_with('.') {
-                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if name.starts_with(prefix) {
+                // Use entry.path().is_dir() to follow symlinks (e.g., /home@ → directory)
+                let is_dir = entry.path().is_dir();
                 let full = if partial.contains('/') {
                     let base = &partial[..partial.rfind('/').unwrap() + 1];
                     format!("{base}{name}{}", if is_dir { "/" } else { "" })
@@ -298,6 +299,16 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
         }
     }
 
+    // Sort: directories first, then alphabetical (case-insensitive)
+    suggestions.sort_by(|a, b| {
+        let a_dir = a.value.ends_with('/');
+        let b_dir = b.value.ends_with('/');
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.value.to_lowercase().cmp(&b.value.to_lowercase()),
+        }
+    });
     suggestions
 }
 

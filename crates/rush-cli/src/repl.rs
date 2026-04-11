@@ -70,29 +70,39 @@ pub fn run(is_login: bool) {
         );
         let mut normal_bindings = default_vi_normal_keybindings();
         if has_fzf() {
-            // fzf available: Ctrl+R and / and ? all go to fzf
+            // fzf available: Ctrl+R, /, and ? all go to fzf
             let fzf_event = ReedlineEvent::ExecuteHostCommand("__fzf_history__".to_string());
+            // Ctrl+R in both modes
             insert_bindings.add_binding(
                 KeyModifiers::CONTROL, KeyCode::Char('r'), fzf_event.clone(),
             );
             normal_bindings.add_binding(
                 KeyModifiers::CONTROL, KeyCode::Char('r'), fzf_event.clone(),
             );
+            // / and ? in vi normal mode
             normal_bindings.add_binding(
                 KeyModifiers::NONE, KeyCode::Char('/'), fzf_event.clone(),
             );
             normal_bindings.add_binding(
-                KeyModifiers::NONE, KeyCode::Char('?'), fzf_event,
+                KeyModifiers::NONE, KeyCode::Char('?'), fzf_event.clone(),
+            );
+            // Alt+/ and Alt+? in insert mode (Esc+/ sends Alt+/ in most terminals)
+            insert_bindings.add_binding(
+                KeyModifiers::ALT, KeyCode::Char('/'), fzf_event.clone(),
+            );
+            insert_bindings.add_binding(
+                KeyModifiers::ALT, KeyCode::Char('?'), fzf_event,
             );
         }
         // Without fzf: / and ? use reedline's built-in search (from our fork)
         Box::new(Vi::new(insert_bindings, normal_bindings))
     };
 
-    // Autosuggestions: fish-style ghost text from history
+    // Autosuggestions: most recent matching history entry, contrast-aware color
+    let hint_color = nu_ansi_term::Color::Fixed(detected_theme.muted_color_index());
     let hinter = Box::new(
         DefaultHinter::default()
-            .with_style(nu_ansi_term::Style::new().fg(nu_ansi_term::Color::DarkGray))
+            .with_style(nu_ansi_term::Style::new().fg(hint_color))
     );
 
     let mut editor = Reedline::create()
@@ -103,6 +113,8 @@ pub fn run(is_login: bool) {
         .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
         .with_highlighter(Box::new(RushHighlighter))
         .with_validator(Box::new(RushValidator))
+        .with_quick_completions(true)
+        .with_partial_completions(true)
         .with_ansi_colors(true);
 
     let show_timing = config.show_timing;
@@ -241,6 +253,11 @@ pub fn run(is_login: bool) {
                 let trimmed = trimmed.as_ref();
 
                 last_cmd = Some(trimmed.to_string());
+
+                // Flush history before reload --hard (exec replaces process)
+                if trimmed.starts_with("reload") && trimmed.contains("--hard") {
+                    let _ = editor.sync_history();
+                }
 
                 // Execute through unified dispatch
                 let start = std::time::Instant::now();
