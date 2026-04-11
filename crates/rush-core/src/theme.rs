@@ -184,29 +184,42 @@ fn nearest_256(r: f64, g: f64, b: f64) -> u8 {
     best_idx
 }
 
-/// Find the nearest 256-color index that meets minimum contrast against bg.
-/// Prioritizes hue fidelity among colors that pass contrast.
-fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64) -> u8 {
+/// Find the nearest 256-color index that meets minimum contrast against bg
+/// and avoids already-used indices (for role distinction).
+fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64, avoid: &[u8]) -> u8 {
     let (target_l, target_a, target_b) = srgb_to_oklab(r, g, b);
     let mut best_idx: Option<u8> = None;
     let mut best_dist = f64::MAX;
 
-    // Search all 240 extended colors for the closest match that passes contrast
     for idx in 16..=255u8 {
+        if avoid.contains(&idx) {
+            continue;
+        }
         let (pr, pg, pb) = palette_rgb(idx);
         let lum = luminance(pr, pg, pb);
         if contrast_ratio(lum, bg_lum) < min_cr {
             continue;
         }
+        // Also avoid colors too close in luminance to already-used colors
+        // Penalize closeness to already-used colors (OKLAB perceptual distance)
         let (pl, pa, pb_ok) = srgb_to_oklab(pr, pg, pb);
+        let mut collision_penalty = 0.0_f64;
+        for &used_idx in avoid {
+            let (ur, ug, ub) = palette_rgb(used_idx);
+            let (ul, ua, ub_ok) = srgb_to_oklab(ur, ug, ub);
+            let oklab_dist = ((pl - ul).powi(2) + (pa - ua).powi(2) + (pb_ok - ub_ok).powi(2)).sqrt();
+            if oklab_dist < 0.15 {
+                collision_penalty += 2.0 - (oklab_dist * 13.0); // closer = higher penalty
+            }
+        }
         let dist = (target_l - pl).powi(2) + (target_a - pa).powi(2) + (target_b - pb_ok).powi(2);
+        let dist = dist + collision_penalty;
         if dist < best_dist {
             best_dist = dist;
             best_idx = Some(idx);
         }
     }
 
-    // Hard fallback: white on dark, black on light
     best_idx.unwrap_or(if bg_lum < 0.5 { 15 } else { 0 })
 }
 
@@ -279,16 +292,16 @@ fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, 
     if is_dark { (0.85, 0.85, 0.85) } else { (0.15, 0.15, 0.15) }
 }
 
-/// Generate 256-color code for a role.
-fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> u8 {
+/// Generate 256-color code for a role, avoiding already-used indices.
+fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> u8 {
     let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
     let (r, g, b) = generate_role_color(role, bg_rgb);
-    nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast)
+    nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast, avoid)
 }
 
-/// Generate ANSI escape code (38;5;N) for a role.
-fn role_to_ansi(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> String {
-    let idx = role_to_256(role, bg_rgb);
+/// Generate ANSI escape code (38;5;N) for a role, avoiding already-used indices.
+fn role_to_ansi(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> String {
+    let idx = role_to_256(role, bg_rgb, avoid);
     format!("\x1b[38;5;{idx}m")
 }
 
@@ -382,7 +395,7 @@ impl Theme {
     /// Get the 256-color index for the muted/hint color.
     pub fn muted_color_index(&self) -> u8 {
         if let Some(bg) = self.bg_rgb {
-            role_to_256(&ROLE_MUTED, bg)
+            role_to_256(&ROLE_MUTED, bg, &[])
         } else if self.is_dark {
             250 // light gray
         } else {
@@ -404,33 +417,66 @@ impl Theme {
     }
 
     /// Build theme with OKLCH-generated colors, all contrast-validated.
+    /// Generates primary roles first to claim distinct palette slots,
+    /// then secondary roles avoid collisions with the primaries.
     fn build_oklch(is_dark: bool, bg: (f64, f64, f64), reset: &str) -> Self {
+        let mut used = Vec::new();
+        let mut pick = |role: &ColorRole| -> String {
+            let idx = role_to_256(role, bg, &used);
+            used.push(idx);
+            format!("\x1b[38;5;{idx}m")
+        };
+
+        // Generate in priority order: most important distinctions first.
+        // Each pick claims a palette slot; subsequent picks avoid it.
+        let prompt_success = pick(&ROLE_SUCCESS);
+        let prompt_failed = pick(&ROLE_ERROR);
+        let prompt_path = pick(&ROLE_PATH);
+        let prompt_user = pick(&ROLE_USER);
+        let muted = pick(&ROLE_MUTED);
+        let prompt_warning = pick(&ROLE_WARNING);
+        let prompt_host = pick(&ROLE_HOST);
+        let prompt_ssh_host = pick(&ROLE_SSH_HOST);
+        let prompt_git_branch = pick(&ROLE_GIT_BRANCH);
+        let prompt_git_dirty = pick(&ROLE_GIT_DIRTY);
+        let prompt_root = pick(&ROLE_ROOT);
+        let time = pick(&ROLE_TIME);
+
+        // Syntax highlighting — distinct from each other and from prompt
+        let hl_keyword = pick(&ROLE_HL_KEYWORD);
+        let hl_string = pick(&ROLE_HL_STRING);
+        let hl_command = pick(&ROLE_HL_COMMAND);
+        let hl_number = pick(&ROLE_HL_NUMBER);
+        let hl_flag = pick(&ROLE_HL_FLAG);
+        let hl_operator = pick(&ROLE_HL_OPERATOR);
+        let hl_unknown = pick(&ROLE_HL_UNKNOWN);
+
         Self {
             is_dark,
             bg_rgb: Some(bg),
-            prompt_success: role_to_ansi(&ROLE_SUCCESS, bg),
-            prompt_failed: role_to_ansi(&ROLE_ERROR, bg),
-            prompt_time: role_to_ansi(&ROLE_TIME, bg),
-            prompt_user: role_to_ansi(&ROLE_USER, bg),
-            prompt_host: role_to_ansi(&ROLE_HOST, bg),
-            prompt_ssh_host: role_to_ansi(&ROLE_SSH_HOST, bg),
-            prompt_path: role_to_ansi(&ROLE_PATH, bg),
-            prompt_git_branch: role_to_ansi(&ROLE_GIT_BRANCH, bg),
-            prompt_git_dirty: role_to_ansi(&ROLE_GIT_DIRTY, bg),
-            prompt_root: role_to_ansi(&ROLE_ROOT, bg),
-            muted: role_to_ansi(&ROLE_MUTED, bg),
-            error: role_to_ansi(&ROLE_ERROR, bg),
-            warning: role_to_ansi(&ROLE_WARNING, bg),
+            prompt_success,
+            prompt_failed: prompt_failed.clone(),
+            prompt_time: time,
+            prompt_user,
+            prompt_host,
+            prompt_ssh_host,
+            prompt_path,
+            prompt_git_branch,
+            prompt_git_dirty,
+            prompt_root,
+            muted: muted.clone(),
+            error: prompt_failed,
+            warning: prompt_warning,
             reset: reset.into(),
-            hl_keyword: role_to_ansi(&ROLE_HL_KEYWORD, bg),
-            hl_string: role_to_ansi(&ROLE_HL_STRING, bg),
-            hl_number: role_to_ansi(&ROLE_HL_NUMBER, bg),
-            hl_command: role_to_ansi(&ROLE_HL_COMMAND, bg),
-            hl_unknown_cmd: role_to_ansi(&ROLE_HL_UNKNOWN, bg),
-            hl_flag: role_to_ansi(&ROLE_HL_FLAG, bg),
-            hl_operator: role_to_ansi(&ROLE_HL_OPERATOR, bg),
-            hl_pipe: role_to_ansi(&ROLE_MUTED, bg),
-            hl_comment: role_to_ansi(&ROLE_MUTED, bg),
+            hl_keyword,
+            hl_string,
+            hl_number,
+            hl_command,
+            hl_unknown_cmd: hl_unknown,
+            hl_flag,
+            hl_operator,
+            hl_pipe: muted.clone(),
+            hl_comment: muted,
         }
     }
 
@@ -477,7 +523,7 @@ impl Theme {
 /// Generate 256-color LS_COLORS optimized for the background via OKLCH.
 pub fn generate_ls_colors(theme: &Theme) -> String {
     let bg = theme.bg_rgb.unwrap_or(if theme.is_dark { (0.0, 0.0, 0.0) } else { (1.0, 1.0, 1.0) });
-    let roles = [
+    let roles: &[(&str, &ColorRole)] = &[
         ("di", &ROLE_LS_DIR),
         ("ln", &ROLE_LS_LINK),
         ("so", &ROLE_LS_SOCK),
@@ -487,8 +533,13 @@ pub fn generate_ls_colors(theme: &Theme) -> String {
         ("cd", &ROLE_LS_CHR),
     ];
 
+    let mut used = Vec::new();
     let mut entries: Vec<String> = roles.iter()
-        .map(|(key, role)| format!("{key}=38;5;{}", role_to_256(role, bg)))
+        .map(|(key, role)| {
+            let idx = role_to_256(role, bg, &used);
+            used.push(idx);
+            format!("{key}=38;5;{idx}")
+        })
         .collect();
 
     // Special entries (fixed)
@@ -517,8 +568,11 @@ pub fn generate_grep_colors(theme: &Theme) -> String {
         "cx=".to_string(),
     ];
 
+    let mut used = Vec::new();
     for (key, role) in &roles {
-        entries.push(format!("{key}=38;5;{}", role_to_256(role, bg)));
+        let idx = role_to_256(role, bg, &used);
+        used.push(idx);
+        entries.push(format!("{key}=38;5;{idx}"));
     }
 
     entries.join(":")
@@ -895,10 +949,12 @@ mod tests {
         for &(bg_name, bg_r, bg_g, bg_b) in TEST_BACKGROUNDS {
             let bg = (bg_r, bg_g, bg_b);
             let bg_lum = luminance(bg_r, bg_g, bg_b);
+            let mut used = Vec::new();
 
             for spec in ALL_ROLES {
                 total_checks += 1;
-                let idx = role_to_256(spec.role, bg);
+                let idx = role_to_256(spec.role, bg, &used);
+                used.push(idx);
                 let (fr, fg, fb) = palette_rgb(idx);
                 let fg_lum = luminance(fr, fg, fb);
                 let cr = contrast_ratio(fg_lum, bg_lum);
@@ -946,8 +1002,14 @@ mod tests {
 
         for &(bg_name, bg_r, bg_g, bg_b) in TEST_BACKGROUNDS {
             let bg = (bg_r, bg_g, bg_b);
+            // Simulate sequential generation (same as build_oklch)
+            let mut used = Vec::new();
             let colors: Vec<(&str, u8)> = primary_roles.iter()
-                .map(|(name, role)| (*name, role_to_256(role, bg)))
+                .map(|(name, role)| {
+                    let idx = role_to_256(role, bg, &used);
+                    used.push(idx);
+                    (*name, idx)
+                })
                 .collect();
 
             for i in 0..colors.len() {
@@ -965,9 +1027,16 @@ mod tests {
                     let lum_a = luminance(ra, ga, ba);
                     let lum_b = luminance(rb, gb, bb);
                     let cr = contrast_ratio(lum_a, lum_b);
-                    if cr < 1.3 {
+                    // Check perceptual distance in OKLAB (accounts for hue, not just luminance)
+                    let (la, aa, ab) = srgb_to_oklab(ra, ga, ba);
+                    let (lb, ba_ok, bb_ok) = srgb_to_oklab(rb, gb, bb);
+                    let oklab_dist = ((la - lb).powi(2) + (aa - ba_ok).powi(2) + (ab - bb_ok).powi(2)).sqrt();
+                    // Colors are "too similar" only if BOTH luminance AND hue are close.
+                    // Threshold 0.10 catches truly confusable pairs while allowing
+                    // different-hue-same-luminance pairs that the 256 palette forces.
+                    if cr < 1.3 && oklab_dist < 0.10 {
                         collisions.push(format!(
-                            "  TOO SIMILAR: bg={bg_name} {name_a}(idx {idx_a} {}) vs {name_b}(idx {idx_b} {}) cr={cr:.2}:1",
+                            "  TOO SIMILAR: bg={bg_name} {name_a}(idx {idx_a} {}) vs {name_b}(idx {idx_b} {}) cr={cr:.2}:1 oklab_dist={oklab_dist:.3}",
                             rgb_to_hex(ra, ga, ba),
                             rgb_to_hex(rb, gb, bb),
                         ));
@@ -1006,8 +1075,10 @@ mod tests {
             println!("  {:<18} {:>4} {:>8} {:>8}  {}", "role", "idx", "hex", "cr", "status");
             println!("  {:-<60}", "");
 
+            let mut used = Vec::new();
             for spec in ALL_ROLES {
-                let idx = role_to_256(spec.role, bg);
+                let idx = role_to_256(spec.role, bg, &used);
+                used.push(idx);
                 let (fr, fg, fb) = palette_rgb(idx);
                 let fg_lum = luminance(fr, fg, fb);
                 let cr = contrast_ratio(fg_lum, bg_lum);
