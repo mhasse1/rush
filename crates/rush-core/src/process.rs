@@ -1670,9 +1670,15 @@ mod tests {
 
     #[test]
     fn tilde_expansion() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        assert_eq!(expand_tilde("~"), home);
-        assert_eq!(expand_tilde("~/bin"), format!("{home}/bin"));
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if home.is_empty() { return; } // skip if no home dir
+        let expanded = expand_tilde("~").replace('\\', "/");
+        assert_eq!(expanded, home);
+        let expanded_bin = expand_tilde("~/bin").replace('\\', "/");
+        assert_eq!(expanded_bin, format!("{home}/bin"));
         assert_eq!(expand_tilde("/usr/bin"), "/usr/bin");
     }
 
@@ -1831,8 +1837,16 @@ mod tests {
 
     #[test]
     fn env_var_in_command() {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_default()
+            .replace('\\', "/");
+        if home.is_empty() { return; }
+        // Use HOME on Unix, set it on Windows for the test
+        if std::env::var("HOME").is_err() {
+            unsafe { std::env::set_var("HOME", &home) };
+        }
         let result = parse_and_expand("echo $HOME");
-        let home = std::env::var("HOME").unwrap_or_default().replace('\\', "/");
         assert_eq!(result, vec!["echo", &home]);
     }
 
@@ -1979,8 +1993,10 @@ mod tests {
 
     #[test]
     fn param_default_exists() {
-        let home = std::env::var("HOME").unwrap_or_default();
-        assert_eq!(expand_parameter("HOME:-fallback"), home);
+        // Use a var we know exists on all platforms
+        unsafe { std::env::set_var("_TEST_DEFAULT", "exists") };
+        assert_eq!(expand_parameter("_TEST_DEFAULT:-fallback"), "exists");
+        unsafe { std::env::remove_var("_TEST_DEFAULT") };
     }
 
     #[test]

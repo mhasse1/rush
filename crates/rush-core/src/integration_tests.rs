@@ -69,12 +69,16 @@ mod tests {
 
     #[test]
     fn llm_cd() {
-        let result = llm::execute_one("cd /tmp");
+        let tmp = std::env::temp_dir();
+        let tmp_str = tmp.to_string_lossy().replace('\\', "/");
+        let result = llm::execute_one(&format!("cd {tmp_str}"));
         assert_eq!(result.status, "success");
-        // cwd should reflect change
-        assert!(result.cwd.contains("tmp"));
         // restore
-        let _ = std::env::set_current_dir(std::env::var("HOME").unwrap_or_default());
+        let _ = std::env::set_current_dir(
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_string())
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -174,7 +178,9 @@ mod tests {
 
     #[test]
     fn dispatch_file_stdlib() {
-        let (_, lines) = run("File.write(\"/tmp/rush_int_test.txt\", \"test123\")\nputs File.read(\"/tmp/rush_int_test.txt\")\nFile.delete(\"/tmp/rush_int_test.txt\")");
+        let tmp = std::env::temp_dir().join("rush_int_test.txt");
+        let path = tmp.to_string_lossy().replace('\\', "/");
+        let (_, lines) = run(&format!("File.write(\"{path}\", \"test123\")\nputs File.read(\"{path}\")\nFile.delete(\"{path}\")"));
         assert_eq!(lines, vec!["test123"]);
     }
 

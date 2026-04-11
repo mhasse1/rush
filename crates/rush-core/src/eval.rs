@@ -2159,8 +2159,10 @@ mod tests {
 
     #[test]
     fn file_write_read_delete() {
+        let tmp = std::env::temp_dir().join("rush_eval_test.txt");
+        let path = tmp.to_string_lossy().replace('\\', "/");
         let output = eval_output(
-            "File.write(\"/tmp/rush_eval_test.txt\", \"hello\")\nputs File.read(\"/tmp/rush_eval_test.txt\")\nFile.delete(\"/tmp/rush_eval_test.txt\")"
+            &format!("File.write(\"{path}\", \"hello\")\nputs File.read(\"{path}\")\nFile.delete(\"{path}\")")
         );
         assert_eq!(output, vec!["hello"]);
     }

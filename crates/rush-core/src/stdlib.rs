@@ -683,7 +683,8 @@ mod tests {
 
     #[test]
     fn dir_list() {
-        let list = dir_method("list", &[Value::String("/tmp".to_string())]);
+        let tmp = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+        let list = dir_method("list", &[Value::String(tmp)]);
         assert!(matches!(list, Value::Array(arr) if !arr.is_empty()));
     }
 
