@@ -210,4 +210,63 @@ mod tests {
         assert!(!is_rush_syntax("cd /tmp"));
         assert!(!is_rush_syntax("cd ~"));
     }
+
+    #[test]
+    fn sysadmin_edge_cases() {
+        // --- Shell commands (should all return false) ---
+
+        // AD distinguished names with = inside quoted args
+        assert!(!is_rush_syntax(r#"dsquery user "CN=John,OU=Users,DC=corp,DC=local""#));
+
+        // net commands (Windows admin)
+        assert!(!is_rush_syntax(r#"net stop "remoteaccess""#));
+        assert!(!is_rush_syntax("net user admin /add"));
+        assert!(!is_rush_syntax(r#"net group "Domain Admins" /domain"#));
+
+        // Windows commands with = in args
+        assert!(!is_rush_syntax(r#"setx PATH "C:\bin;%PATH%""#));
+
+        // UNC-style paths
+        assert!(!is_rush_syntax(r#"ls "\\\\server\\share""#));
+
+        // systemctl
+        assert!(!is_rush_syntax("systemctl restart nginx"));
+        assert!(!is_rush_syntax("systemctl status sshd"));
+
+        // journalctl
+        assert!(!is_rush_syntax("journalctl -u nginx --since today"));
+
+        // iptables
+        assert!(!is_rush_syntax("iptables -A INPUT -p tcp --dport 80 -j ACCEPT"));
+
+        // chmod / chown
+        assert!(!is_rush_syntax("chmod 755 /var/www"));
+        assert!(!is_rush_syntax("chown -R www-data:www-data /var/www"));
+
+        // rsync
+        assert!(!is_rush_syntax("rsync -avz /src/ user@host:/dest/"));
+
+        // curl with headers
+        assert!(!is_rush_syntax(r#"curl -H "Authorization: Bearer token123" https://api.example.com"#));
+
+        // Commands that LOOK like Rush but aren't (test builtin)
+        assert!(!is_rush_syntax("test -f /etc/hosts"));
+
+        // Commands with pipes that should stay as shell
+        assert!(!is_rush_syntax("ps aux | grep nginx"));
+
+        // --- Rush syntax (should all return true) ---
+
+        // Assignment
+        assert!(is_rush_syntax(r#"server = "cor1s04""#));
+
+        // Stdlib method call
+        assert!(is_rush_syntax(r#"File.exist?("/etc/hosts")"#));
+
+        // Method chain with block
+        assert!(is_rush_syntax("items.each { |x| puts x }"));
+
+        // Control flow with stdlib
+        assert!(is_rush_syntax(r#"if File.size("log") > 1mb"#));
+    }
 }
