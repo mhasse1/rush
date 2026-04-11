@@ -223,7 +223,12 @@ fn apply_first(input: Value, args: &[String]) -> Value {
 }
 
 fn apply_last(input: Value, args: &[String]) -> Value {
-    let n: usize = args.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+    let n: usize = args.first()
+        .and_then(|s| {
+            // Handle both "5" and "-5" (Unix tail convention)
+            s.strip_prefix('-').unwrap_or(s).parse().ok()
+        })
+        .unwrap_or(1);
     let items = to_items(input);
     let skip = items.len().saturating_sub(n);
     if n == 1 {

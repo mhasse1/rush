@@ -105,16 +105,28 @@ pub fn run(is_login: bool) {
             .with_style(nu_ansi_term::Style::new().fg(hint_color))
     );
 
+    // Configure external editor for vi 'v' command
+    let buffer_editor_cmd = {
+        let editor_var = std::env::var("VISUAL")
+            .or_else(|_| std::env::var("EDITOR"))
+            .unwrap_or_else(|_| "vi".to_string());
+        std::process::Command::new(editor_var)
+    };
+    let temp_file = std::env::temp_dir().join("rush_edit_buffer.rush");
+
     let mut editor = Reedline::create()
         .with_edit_mode(edit_mode)
         .with_history(Box::new(history))
+        .with_history_exclusion_prefix(Some(" ".to_string()))
         .with_completer(completer)
         .with_hinter(hinter)
         .with_menu(ReedlineMenu::EngineCompleter(completion_menu))
         .with_highlighter(Box::new(RushHighlighter))
         .with_validator(Box::new(RushValidator))
+        .with_buffer_editor(buffer_editor_cmd, temp_file)
         .with_quick_completions(true)
         .with_partial_completions(true)
+        .with_immediate_completions(true)
         .with_ansi_colors(true);
 
     let show_timing = config.show_timing;
@@ -254,10 +266,10 @@ pub fn run(is_login: bool) {
 
                 last_cmd = Some(trimmed.to_string());
 
-                // Flush history before reload --hard (exec replaces process)
-                if trimmed.starts_with("reload") && trimmed.contains("--hard") {
-                    let _ = editor.sync_history();
-                }
+                // Sync history to disk after every command (like bash histappend).
+                // Critical for reload --hard (exec replaces process, no Drop),
+                // but also ensures `history` command reads current state.
+                let _ = editor.sync_history();
 
                 // Execute through unified dispatch
                 let start = std::time::Instant::now();
