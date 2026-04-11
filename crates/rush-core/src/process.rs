@@ -1056,9 +1056,9 @@ fn normalize_path_separators(value: &str) -> String {
 }
 
 /// Expand $VAR, ${VAR}, ${VAR:-default}, ${VAR:=default}, ${#VAR},
-/// ${VAR%pattern}, ${VAR#pattern}, and $((arithmetic)) in a string.
+/// ${VAR%pattern}, ${VAR#pattern}, $((arithmetic)), and `backtick` substitution in a string.
 fn expand_env_vars(arg: &str) -> String {
-    if !arg.contains('$') {
+    if !arg.contains('$') && !arg.contains('`') {
         return arg.to_string();
     }
 
@@ -1067,6 +1067,33 @@ fn expand_env_vars(arg: &str) -> String {
     let mut i = 0;
 
     while i < chars.len() {
+        // `command` — backtick command substitution
+        if chars[i] == '`' {
+            i += 1; // skip opening backtick
+            let mut cmd = String::new();
+            while i < chars.len() && chars[i] != '`' {
+                // backslash escapes inside backticks: \` \$ \\ \newline
+                if chars[i] == '\\' && i + 1 < chars.len() {
+                    match chars[i + 1] {
+                        '`' | '$' | '\\' => {
+                            cmd.push(chars[i + 1]);
+                            i += 2;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+                cmd.push(chars[i]);
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1; // skip closing backtick
+            }
+            let output = run_native_capture(&cmd);
+            result.push_str(output.stdout.trim_end());
+            continue;
+        }
+
         if chars[i] == '$' && i + 1 < chars.len() {
             // $((arithmetic))
             if i + 2 < chars.len() && chars[i + 1] == '(' && chars[i + 2] == '(' {
@@ -2056,5 +2083,41 @@ mod tests {
         assert_eq!(expand_parameter("_TEST_PATH#*/"), "usr/local/bin"); // shortest: just "/"
         assert_eq!(expand_parameter("_TEST_PATH##*/"), "bin");          // longest: "/usr/local/"
         unsafe { std::env::remove_var("_TEST_PATH") };
+    }
+
+    #[test]
+    fn backtick_command_substitution() {
+        // Simple backtick substitution — `echo hello` should produce "hello"
+        let result = expand_env_vars("`echo hello`");
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn backtick_inline() {
+        // Backticks embedded in a larger string
+        let result = expand_env_vars("prefix-`echo world`-suffix");
+        assert_eq!(result, "prefix-world-suffix");
+    }
+
+    #[test]
+    fn backtick_matches_dollar_paren() {
+        // Backtick and $() should produce identical results
+        let bt = expand_env_vars("`echo test123`");
+        let dp = expand_env_vars("$(echo test123)");
+        assert_eq!(bt, dp);
+    }
+
+    #[test]
+    fn backtick_no_backticks_passthrough() {
+        // Strings without $ or ` should pass through unchanged
+        let result = expand_env_vars("plain text");
+        assert_eq!(result, "plain text");
+    }
+
+    #[test]
+    fn backtick_with_args() {
+        // Backtick substitution with command arguments
+        let result = expand_env_vars("`echo -n hi`");
+        assert_eq!(result, "hi");
     }
 }

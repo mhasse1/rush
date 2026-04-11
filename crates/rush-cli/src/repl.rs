@@ -266,9 +266,13 @@ pub fn run(is_login: bool) {
 
                 last_cmd = Some(trimmed.to_string());
 
+                // Remove meta-commands from history (noise in autosuggestions)
+                let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                if matches!(first_word, "history" | "clear" | "exit") {
+                    editor.delete_last_history_entry();
+                }
+
                 // Sync history to disk after every command (like bash histappend).
-                // Critical for reload --hard (exec replaces process, no Drop),
-                // but also ensures `history` command reads current state.
                 let _ = editor.sync_history();
 
                 // Execute through unified dispatch

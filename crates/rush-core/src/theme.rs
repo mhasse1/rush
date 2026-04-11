@@ -299,12 +299,6 @@ fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> u8 {
     nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast, avoid)
 }
 
-/// Generate ANSI escape code (38;5;N) for a role, avoiding already-used indices.
-fn role_to_ansi(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> String {
-    let idx = role_to_256(role, bg_rgb, avoid);
-    format!("\x1b[38;5;{idx}m")
-}
-
 // ── Semantic Color Roles ───────────────────────────────────────────
 
 // OKLCH hues (approximate):

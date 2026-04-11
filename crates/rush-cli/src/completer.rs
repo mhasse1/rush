@@ -260,6 +260,11 @@ impl RushCompleter {
     }
 }
 
+/// Returns true for backup/swap files that should be deprioritized in completion.
+fn is_backup_file(name: &str) -> bool {
+    name.ends_with('~') || name.ends_with(".swp") || name.ends_with(".swo")
+}
+
 fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
 
@@ -299,10 +304,17 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
         }
     }
 
-    // Sort: directories first, then alphabetical (case-insensitive)
+    // Sort: directories first, backup/swap files last, then alphabetical (case-insensitive)
     suggestions.sort_by(|a, b| {
         let a_dir = a.value.ends_with('/');
         let b_dir = b.value.ends_with('/');
+        let a_backup = is_backup_file(&a.value);
+        let b_backup = is_backup_file(&b.value);
+        match (a_backup, b_backup) {
+            (true, false) => return std::cmp::Ordering::Greater,
+            (false, true) => return std::cmp::Ordering::Less,
+            _ => {}
+        }
         match (a_dir, b_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
@@ -323,7 +335,7 @@ fn complete_commands(partial: &str, span: Span) -> Vec<Suggestion> {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(partial) && !seen.contains(&name) {
+                if name.starts_with(partial) && !seen.contains(&name) && !is_backup_file(&name) {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
