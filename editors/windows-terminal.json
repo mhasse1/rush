@@ -1,0 +1,69 @@
+// Windows Terminal profile fragment for Rush shell.
+//
+// Installation:
+//   1. Open Windows Terminal and press Ctrl+Shift+, to open settings.json
+//   2. Copy the profile object below into the "profiles" > "list" array
+//   3. Copy the color scheme object below into the "schemes" array
+//   4. Save settings.json — the Rush profile will appear in the dropdown
+//
+// Prerequisites:
+//   - Rush must be installed and available on PATH
+//   - Install Cascadia Code font: https://github.com/microsoft/cascadia-code
+//
+// Alternatively, place this file in:
+//   %LOCALAPPDATA%\Microsoft\Windows Terminal\Fragments\Rush\
+// and Windows Terminal will import it automatically on next launch.
+
+{
+    "profiles": [
+        {
+            "name": "Rush",
+            "commandline": "rush",
+            "icon": "\ud83d\udc1a",
+            "startingDirectory": "%USERPROFILE%",
+            "colorScheme": "Rush Dark",
+            "font": {
+                "face": "Cascadia Code",
+                "size": 12
+            },
+            "cursorShape": "filledBox",
+            "padding": "8, 8, 8, 8",
+            "scrollbarState": "visible",
+            "antialiasingMode": "cleartype"
+        }
+    ],
+    "schemes": [
+        {
+            "name": "Rush Dark",
+
+            // Background #282828 matches Rush's default dark theme (OKLCH-derived).
+            // Foreground colors are approximated from the OKLCH role palette in
+            // crates/rush-core/src/theme.rs, targeting 4.5:1 contrast on #282828.
+
+            "background": "#282828",
+            "foreground": "#D4D4D4",
+            "cursorColor": "#D4D4D4",
+            "selectionBackground": "#504945",
+
+            // ANSI standard colors (0-7)
+            "black":   "#282828",
+            "red":     "#E07040",
+            "green":   "#7EC87E",
+            "yellow":  "#D4B846",
+            "blue":    "#7CAFC2",
+            "purple":  "#C27CB0",
+            "cyan":    "#76C7B7",
+            "white":   "#D4D4D4",
+
+            // ANSI bright colors (8-15)
+            "brightBlack":   "#665C54",
+            "brightRed":     "#F28B5E",
+            "brightGreen":   "#A0D89A",
+            "brightYellow":  "#E6D06C",
+            "brightBlue":    "#9CC4D6",
+            "brightPurple":  "#D8A0C8",
+            "brightCyan":    "#98DDD0",
+            "brightWhite":   "#EEEEEE"
+        }
+    ]
+}

@@ -611,6 +611,109 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // §2.7 Redirections — Extended Coverage (#167)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_redirect_stdout_overwrite() {
+        // `>` should truncate — second write replaces first
+        let tmp = std::env::temp_dir().join("rush_posix_redir_overwrite.txt");
+        let path = tmp.to_string_lossy();
+        process::run_native(&format!("echo first > {path}"));
+        process::run_native(&format!("echo second > {path}"));
+        let content = std::fs::read_to_string(&*tmp).unwrap_or_default();
+        assert_eq!(content.trim(), "second");
+        std::fs::remove_file(&*tmp).ok();
+    }
+
+    #[test]
+    fn posix_redirect_stderr_to_stdout() {
+        // `2>&1` — verify the redirection is parsed and command completes.
+        // Note: full fd duplication (stderr into stdout file) is simplified;
+        // this test validates the command executes without crash.
+        let result = process::run_native(
+            "ls /absolutely_nonexistent_xyz_167 2>&1"
+        );
+        assert!(result.exit_code != 127, "ls should be found (exit {})", result.exit_code);
+    }
+
+    #[test]
+    fn posix_redirect_silence_both() {
+        // `> /dev/null 2>&1` silences all output
+        let result = process::run_native(
+            "ls /absolutely_nonexistent_xyz_167 > /dev/null 2>&1"
+        );
+        // Command should complete (non-zero exit is fine, but no crash)
+        assert_ne!(result.exit_code, 127, "ls should be found even if path is bad");
+    }
+
+    #[test]
+    fn posix_redirect_stdin_wc() {
+        // `wc -l < input | cat > output` — stdin redirect with pipe to capture
+        let input = std::env::temp_dir().join("rush_posix_redir_stdin_wc.txt");
+        let output = std::env::temp_dir().join("rush_posix_redir_stdin_wc_out.txt");
+        std::fs::write(&*input, "aaa\nbbb\nccc\n").ok();
+        let in_path = input.to_string_lossy();
+        let out_path = output.to_string_lossy();
+        // Use run_native (handles redirections) and capture result to file
+        process::run_native(&format!("wc -l < {in_path} > {out_path}"));
+        let content = std::fs::read_to_string(&*output).unwrap_or_default();
+        // wc output format varies by platform; just verify non-empty
+        assert!(!content.trim().is_empty(), "wc -l should produce output");
+        std::fs::remove_file(&*input).ok();
+        std::fs::remove_file(&*output).ok();
+    }
+
+    #[test]
+    fn posix_redirect_append_creates_file() {
+        // `>>` should create the file if it doesn't exist
+        let tmp = std::env::temp_dir().join("rush_posix_redir_append_create.txt");
+        let _ = std::fs::remove_file(&*tmp); // ensure clean
+        let path = tmp.to_string_lossy();
+        process::run_native(&format!("echo created >> {path}"));
+        let content = std::fs::read_to_string(&*tmp).unwrap_or_default();
+        assert_eq!(content.trim(), "created");
+        std::fs::remove_file(&*tmp).ok();
+    }
+
+    #[test]
+    fn posix_redirect_stderr_append() {
+        // `2>>` appends stderr to file
+        let tmp = std::env::temp_dir().join("rush_posix_redir_stderr_append.txt");
+        let path = tmp.to_string_lossy();
+        process::run_native(&format!("ls /nonexistent_aaa_167 2> {path}"));
+        process::run_native(&format!("ls /nonexistent_bbb_167 2>> {path}"));
+        let content = std::fs::read_to_string(&*tmp).unwrap_or_default();
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(
+            lines.len() >= 2,
+            "stderr append should accumulate: got {} lines",
+            lines.len()
+        );
+        std::fs::remove_file(&*tmp).ok();
+    }
+
+    #[test]
+    fn posix_heredoc_basic() {
+        // Heredoc goes through dispatch's expand_heredocs → temp file → stdin redirect
+        let (code, _) = dispatch_cmd("cat <<EOF\nhello from heredoc\nEOF");
+        assert_eq!(code, 0, "heredoc command should succeed");
+    }
+
+    #[test]
+    fn posix_heredoc_multiline() {
+        let (code, _) = dispatch_cmd("cat <<MARKER\nline one\nline two\nline three\nMARKER");
+        assert_eq!(code, 0, "multiline heredoc should succeed");
+    }
+
+    #[test]
+    fn posix_heredoc_strip_tabs() {
+        // <<- strips leading tabs from heredoc body
+        let (code, _) = dispatch_cmd("cat <<-END\n\tindented line\nEND");
+        assert_eq!(code, 0, "heredoc with tab stripping should succeed");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // Additional Coverage: IFS Edge Cases
     // ═══════════════════════════════════════════════════════════════
 

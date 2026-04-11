@@ -1800,6 +1800,94 @@ mod tests {
         assert!(matches!(&redir[1], Redirect::StderrWrite(f) if f == "err.txt"));
     }
 
+    // ── Extraction tests for additional redirect operators (#167) ──
+
+    #[test]
+    fn extract_redir_append() {
+        let parts = vec!["echo".into(), "data".into(), ">>".into(), "log.txt".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["echo", "data"]);
+        assert_eq!(redir.len(), 1);
+        assert!(matches!(&redir[0], Redirect::StdoutAppend(f) if f == "log.txt"));
+    }
+
+    #[test]
+    fn extract_redir_stdin() {
+        let parts = vec!["cat".into(), "<".into(), "input.txt".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cat"]);
+        assert_eq!(redir.len(), 1);
+        assert!(matches!(&redir[0], Redirect::StdinRead(f) if f == "input.txt"));
+    }
+
+    #[test]
+    fn extract_redir_clobber() {
+        let parts = vec!["echo".into(), "x".into(), ">|".into(), "out.txt".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["echo", "x"]);
+        assert_eq!(redir.len(), 1);
+        assert!(matches!(&redir[0], Redirect::StdoutClobber(f) if f == "out.txt"));
+    }
+
+    #[test]
+    fn extract_redir_stderr_append() {
+        let parts = vec!["cmd".into(), "2>>".into(), "err.log".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert_eq!(redir.len(), 1);
+        assert!(matches!(&redir[0], Redirect::StderrAppend(f) if f == "err.log"));
+    }
+
+    #[test]
+    fn extract_redir_combined_devnull() {
+        // > /dev/null 2>&1
+        let parts = vec!["cmd".into(), ">".into(), "/dev/null".into(), "2>&1".into()];
+        let (clean, redir) = extract_redirections(parts);
+        assert_eq!(clean, vec!["cmd"]);
+        assert_eq!(redir.len(), 2);
+        assert!(matches!(&redir[0], Redirect::StdoutWrite(f) if f == "/dev/null"));
+        assert!(matches!(&redir[1], Redirect::StderrToStdout));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn redirect_stderr_to_file() {
+        let tmp = std::env::temp_dir().join("rush_redir_stderr_167.txt");
+        let path = tmp.to_string_lossy().to_string();
+        run_native(&format!("ls /nonexistent_rush_167 2> {path}"));
+        let content = std::fs::read_to_string(&tmp).unwrap_or_default();
+        assert!(!content.is_empty(), "stderr should be captured in file");
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn redirect_stderr_to_stdout_standalone() {
+        // `2>&1` is accepted and the command completes without crash.
+        // Note: full fd dup (stderr→stdout file) is simplified in current impl.
+        let result = run_native("ls /nonexistent_rush_167 2>&1");
+        assert_ne!(result.exit_code, 127, "ls should be found");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn redirect_silence_both_devnull() {
+        let result = run_native("ls /nonexistent_rush_167 > /dev/null 2>&1");
+        // Should not crash; exit code is non-zero but ls was found
+        assert_ne!(result.exit_code, 127);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn redirect_stdin_from_file() {
+        let tmp = std::env::temp_dir().join("rush_redir_stdin_167.txt");
+        std::fs::write(&tmp, "stdin_line\n").ok();
+        let path = tmp.to_string_lossy().to_string();
+        let result = run_native_capture(&format!("cat < {path}"));
+        assert_eq!(result.stdout.trim(), "stdin_line");
+        std::fs::remove_file(&tmp).ok();
+    }
+
     // ── Glob expansion ──────────────────────────────────────────────
 
     #[test]
