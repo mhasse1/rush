@@ -810,4 +810,215 @@ mod tests {
     fn rushbg_nonexistent() {
         let _ = load_rushbg();
     }
+
+    // ── Comprehensive contrast audit ───────────────────────────────
+
+    struct RoleSpec {
+        name: &'static str,
+        role: &'static ColorRole,
+    }
+
+    const ALL_ROLES: &[RoleSpec] = &[
+        // Prompt
+        RoleSpec { name: "prompt_success",    role: &ROLE_SUCCESS },
+        RoleSpec { name: "prompt_error",      role: &ROLE_ERROR },
+        RoleSpec { name: "prompt_warning",    role: &ROLE_WARNING },
+        RoleSpec { name: "prompt_path",       role: &ROLE_PATH },
+        RoleSpec { name: "prompt_user",       role: &ROLE_USER },
+        RoleSpec { name: "prompt_host",       role: &ROLE_HOST },
+        RoleSpec { name: "prompt_ssh_host",   role: &ROLE_SSH_HOST },
+        RoleSpec { name: "prompt_git_branch", role: &ROLE_GIT_BRANCH },
+        RoleSpec { name: "prompt_git_dirty",  role: &ROLE_GIT_DIRTY },
+        RoleSpec { name: "prompt_root",       role: &ROLE_ROOT },
+        RoleSpec { name: "muted",             role: &ROLE_MUTED },
+        RoleSpec { name: "time",              role: &ROLE_TIME },
+        // Syntax
+        RoleSpec { name: "hl_keyword",        role: &ROLE_HL_KEYWORD },
+        RoleSpec { name: "hl_string",         role: &ROLE_HL_STRING },
+        RoleSpec { name: "hl_number",         role: &ROLE_HL_NUMBER },
+        RoleSpec { name: "hl_command",        role: &ROLE_HL_COMMAND },
+        RoleSpec { name: "hl_unknown",        role: &ROLE_HL_UNKNOWN },
+        RoleSpec { name: "hl_flag",           role: &ROLE_HL_FLAG },
+        RoleSpec { name: "hl_operator",       role: &ROLE_HL_OPERATOR },
+        // LS_COLORS
+        RoleSpec { name: "ls_dir",            role: &ROLE_LS_DIR },
+        RoleSpec { name: "ls_link",           role: &ROLE_LS_LINK },
+        RoleSpec { name: "ls_sock",           role: &ROLE_LS_SOCK },
+        RoleSpec { name: "ls_pipe",           role: &ROLE_LS_PIPE },
+        RoleSpec { name: "ls_exec",           role: &ROLE_LS_EXEC },
+        RoleSpec { name: "ls_blk",            role: &ROLE_LS_BLK },
+        RoleSpec { name: "ls_chr",            role: &ROLE_LS_CHR },
+        // GREP_COLORS
+        RoleSpec { name: "grep_fn",           role: &ROLE_GREP_FN },
+        RoleSpec { name: "grep_ln",           role: &ROLE_GREP_LN },
+        RoleSpec { name: "grep_bn",           role: &ROLE_GREP_BN },
+        RoleSpec { name: "grep_se",           role: &ROLE_GREP_SE },
+    ];
+
+    /// Test backgrounds: dark, mid-gray, light, plus problem colors
+    const TEST_BACKGROUNDS: &[(&str, f64, f64, f64)] = &[
+        // Dark backgrounds
+        ("black #000000",         0.0,   0.0,   0.0),
+        ("near-black #1a1a1a",    0.102, 0.102, 0.102),
+        ("dark gray #282828",     0.157, 0.157, 0.157),
+        ("gruvbox dark #282828",  0.157, 0.157, 0.157),
+        ("solarized dark #002b36",0.0,   0.169, 0.212),
+        ("dark blue #253B51",     0.145, 0.231, 0.318),
+        ("dark green #1a2e1a",    0.102, 0.180, 0.102),
+        ("dark red #2e1a1a",      0.180, 0.102, 0.102),
+        ("dark purple #2a1a2e",   0.165, 0.102, 0.180),
+        // Mid-tone (the danger zone)
+        ("mid gray #666666",      0.400, 0.400, 0.400),
+        ("mid blue #4466aa",      0.267, 0.400, 0.667),
+        ("mid green #446644",     0.267, 0.400, 0.267),
+        // Light backgrounds
+        ("light gray #c0c0c0",    0.753, 0.753, 0.753),
+        ("solarized light #fdf6e3", 0.992, 0.965, 0.890),
+        ("white #f5f5f5",         0.961, 0.961, 0.961),
+        ("pure white #ffffff",    1.0,   1.0,   1.0),
+    ];
+
+    fn rgb_to_hex(r: f64, g: f64, b: f64) -> String {
+        format!("#{:02X}{:02X}{:02X}",
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8)
+    }
+
+    /// Comprehensive contrast audit across all backgrounds and all roles.
+    /// Reports every failure with specific colors and contrast ratios.
+    #[test]
+    fn contrast_audit_all_backgrounds() {
+        let mut failures: Vec<String> = Vec::new();
+        let mut total_checks = 0;
+
+        for &(bg_name, bg_r, bg_g, bg_b) in TEST_BACKGROUNDS {
+            let bg = (bg_r, bg_g, bg_b);
+            let bg_lum = luminance(bg_r, bg_g, bg_b);
+
+            for spec in ALL_ROLES {
+                total_checks += 1;
+                let idx = role_to_256(spec.role, bg);
+                let (fr, fg, fb) = palette_rgb(idx);
+                let fg_lum = luminance(fr, fg, fb);
+                let cr = contrast_ratio(fg_lum, bg_lum);
+
+                if cr < spec.role.min_contrast {
+                    failures.push(format!(
+                        "  FAIL: bg={bg_name} role={:<18} fg=idx {:>3} {} cr={:.2}:1 (need {:.1}:1)",
+                        spec.name,
+                        idx,
+                        rgb_to_hex(fr, fg, fb),
+                        cr,
+                        spec.role.min_contrast
+                    ));
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            let report = format!(
+                "\n╔══════════════════════════════════════════════════════════════╗\n\
+                 ║  CONTRAST AUDIT: {} failures out of {} checks              \n\
+                 ╚══════════════════════════════════════════════════════════════╝\n\
+                 {}\n",
+                failures.len(),
+                total_checks,
+                failures.join("\n")
+            );
+            panic!("{report}");
+        }
+    }
+
+    /// Check that primary prompt roles don't collide with each other
+    /// (too similar in color on the same background).
+    #[test]
+    fn primary_roles_distinct() {
+        let primary_roles: &[(&str, &ColorRole)] = &[
+            ("success", &ROLE_SUCCESS),
+            ("error",   &ROLE_ERROR),
+            ("path",    &ROLE_PATH),
+            ("user",    &ROLE_USER),
+            ("muted",   &ROLE_MUTED),
+        ];
+
+        let mut collisions: Vec<String> = Vec::new();
+
+        for &(bg_name, bg_r, bg_g, bg_b) in TEST_BACKGROUNDS {
+            let bg = (bg_r, bg_g, bg_b);
+            let colors: Vec<(&str, u8)> = primary_roles.iter()
+                .map(|(name, role)| (*name, role_to_256(role, bg)))
+                .collect();
+
+            for i in 0..colors.len() {
+                for j in (i + 1)..colors.len() {
+                    let (name_a, idx_a) = colors[i];
+                    let (name_b, idx_b) = colors[j];
+                    if idx_a == idx_b {
+                        collisions.push(format!(
+                            "  COLLISION: bg={bg_name} {name_a} and {name_b} both use idx {idx_a}"
+                        ));
+                        continue;
+                    }
+                    let (ra, ga, ba) = palette_rgb(idx_a);
+                    let (rb, gb, bb) = palette_rgb(idx_b);
+                    let lum_a = luminance(ra, ga, ba);
+                    let lum_b = luminance(rb, gb, bb);
+                    let cr = contrast_ratio(lum_a, lum_b);
+                    if cr < 1.3 {
+                        collisions.push(format!(
+                            "  TOO SIMILAR: bg={bg_name} {name_a}(idx {idx_a} {}) vs {name_b}(idx {idx_b} {}) cr={cr:.2}:1",
+                            rgb_to_hex(ra, ga, ba),
+                            rgb_to_hex(rb, gb, bb),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if !collisions.is_empty() {
+            let report = format!(
+                "\n╔══════════════════════════════════════════════════════════════╗\n\
+                 ║  COLLISION AUDIT: {} issues                                  \n\
+                 ╚══════════════════════════════════════════════════════════════╝\n\
+                 {}\n",
+                collisions.len(),
+                collisions.join("\n")
+            );
+            panic!("{report}");
+        }
+    }
+
+    /// Printable report (not a pass/fail test) showing all color assignments.
+    /// Run with: cargo test -p rush-core -- contrast_report --nocapture
+    #[test]
+    fn contrast_report() {
+        println!("\n{:=<80}", "");
+        println!("OKLCH THEME CONTRAST REPORT");
+        println!("{:=<80}", "");
+
+        for &(bg_name, bg_r, bg_g, bg_b) in TEST_BACKGROUNDS {
+            let bg = (bg_r, bg_g, bg_b);
+            let bg_lum = luminance(bg_r, bg_g, bg_b);
+            let is_dark = bg_lum <= 0.179;
+
+            println!("\n  bg: {bg_name} (lum={bg_lum:.3}, {})", if is_dark { "DARK" } else { "LIGHT" });
+            println!("  {:<18} {:>4} {:>8} {:>8}  {}", "role", "idx", "hex", "cr", "status");
+            println!("  {:-<60}", "");
+
+            for spec in ALL_ROLES {
+                let idx = role_to_256(spec.role, bg);
+                let (fr, fg, fb) = palette_rgb(idx);
+                let fg_lum = luminance(fr, fg, fb);
+                let cr = contrast_ratio(fg_lum, bg_lum);
+                let status = if cr >= spec.role.min_contrast { "✓" }
+                    else if cr >= spec.role.min_contrast - 0.5 { "~" }
+                    else { "✗" };
+
+                println!("  {:<18} {:>4} {:>8} {:>7.2}:1  {}",
+                    spec.name, idx, rgb_to_hex(fr, fg, fb), cr, status);
+            }
+        }
+        println!("\n{:=<80}", "");
+    }
 }
