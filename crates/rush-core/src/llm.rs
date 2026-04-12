@@ -496,15 +496,19 @@ pub fn run() {
         if raw.is_empty() { continue; }
 
         // Dispatch
-        let result = if raw.starts_with('{') {
-            handle_envelope(raw, &mut spool)
+        let (result, is_exit) = if raw.starts_with('{') {
+            let r = handle_envelope(raw, &mut spool);
+            let exit = envelope_is_exit(raw);
+            (r, exit)
         } else {
             let input = if raw.starts_with('"') && raw.ends_with('"') {
                 serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.to_string())
             } else {
                 raw.to_string()
             };
-            execute_command(&input, &mut spool)
+            let first = input.split_whitespace().next().unwrap_or("");
+            let exit = first == "exit" || first == "quit";
+            (execute_command(&input, &mut spool), exit)
         };
 
         last_exit_code = result.exit_code;
@@ -516,6 +520,25 @@ pub fn run() {
             out.write_all(b"\n").ok();
             out.flush().ok();
         }
+
+        if is_exit {
+            break;
+        }
+    }
+}
+
+/// Detect whether a JSON envelope is an exit/quit command.
+fn envelope_is_exit(raw: &str) -> bool {
+    let env: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    match env.get("cmd").and_then(|c| c.as_str()) {
+        Some(c) => {
+            let first = c.split_whitespace().next().unwrap_or("");
+            first == "exit" || first == "quit"
+        }
+        None => false,
     }
 }
 
@@ -595,6 +618,21 @@ fn execute_command(input: &str, spool: &mut Spool) -> LlmResult {
             error_type: Some("tty_required".into()),
             command: Some(cmd),
             hint: Some(hint),
+            cwd,
+            duration_ms: start.elapsed().as_millis(),
+            ..Default::default()
+        };
+    }
+
+    if first_word == "exit" || first_word == "quit" {
+        let code: i32 = input
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        return LlmResult {
+            status: if code == 0 { "success".into() } else { "error".into() },
+            exit_code: code,
             cwd,
             duration_ms: start.elapsed().as_millis(),
             ..Default::default()
@@ -995,5 +1033,49 @@ mod tests {
         let result = execute_command("puts 1 + 2", &mut spool);
         assert_eq!(result.status, "success");
         assert_eq!(result.stdout.as_deref(), Some("3"));
+    }
+
+    #[test]
+    fn exit_plain_returns_success() {
+        let mut spool = Spool::new();
+        let result = execute_command("exit", &mut spool);
+        assert_eq!(result.status, "success");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn exit_with_code_returns_error_status() {
+        let mut spool = Spool::new();
+        let result = execute_command("exit 5", &mut spool);
+        assert_eq!(result.status, "error");
+        assert_eq!(result.exit_code, 5);
+    }
+
+    #[test]
+    fn quit_is_alias_for_exit() {
+        let mut spool = Spool::new();
+        let result = execute_command("quit", &mut spool);
+        assert_eq!(result.status, "success");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn exit_not_treated_as_shell_command() {
+        // Regression: previously 'exit' in --llm mode fell through to
+        // shell dispatch and returned 127 ("command not found").
+        let mut spool = Spool::new();
+        let result = execute_command("exit", &mut spool);
+        assert_ne!(result.exit_code, 127);
+        assert!(result.stderr.is_none() || !result.stderr.as_ref().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn envelope_exit_detection() {
+        assert!(envelope_is_exit(r#"{"cmd":"exit"}"#));
+        assert!(envelope_is_exit(r#"{"cmd":"quit"}"#));
+        assert!(envelope_is_exit(r#"{"cmd":"exit 3"}"#));
+        assert!(!envelope_is_exit(r#"{"cmd":"echo hello"}"#));
+        assert!(!envelope_is_exit(r#"{"not_a_cmd":"exit"}"#));
+        assert!(!envelope_is_exit("not json"));
     }
 }
