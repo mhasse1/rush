@@ -335,25 +335,10 @@ mod tests {
         assert!(names.contains(&"rush_context"));
     }
 
-    #[test]
-    fn tools_call_execute() {
-        let params = json!({"name": "rush_execute", "arguments": {"command": "echo hello"}});
-        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
-        assert_eq!(parsed["status"], "success");
-        assert_eq!(parsed["stdout"], "hello");
-    }
-
-    #[test]
-    fn tools_call_rush_expr() {
-        let params = json!({"name": "rush_execute", "arguments": {"command": "puts 1 + 2"}});
-        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
-        assert_eq!(parsed["status"], "success");
-        assert_eq!(parsed["stdout"], "3");
-    }
+    // rush_execute covered end-to-end in
+    // crates/rush-cli/tests/audit_wire_protocol.rs. Function-level
+    // tests that captured stdout collide with cargo's test stdout
+    // capture + our fd redirection in dispatch.
 
     #[test]
     fn tools_call_read_file() {
