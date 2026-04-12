@@ -913,7 +913,15 @@ impl Parser {
         {
             let name = self.advance_clone().value;
             self.pos += 1; // skip =
-            let value = self.parse_expression()?;
+            // Block keywords as expressions on RHS: x = if/unless/case/for/parallel...end
+            let value = match self.current().token_type {
+                TokenType::If => self.parse_if()?,
+                TokenType::Unless => self.parse_unless()?,
+                TokenType::Case => self.parse_case()?,
+                TokenType::For => self.parse_for()?,
+                TokenType::Parallel => self.parse_parallel()?,
+                _ => self.parse_expression()?,
+            };
             return self.wrap_postfix(Node::Assignment {
                 name,
                 value: Box::new(value),

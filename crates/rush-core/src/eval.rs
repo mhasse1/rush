@@ -405,7 +405,14 @@ impl<'a> Evaluator<'a> {
                                 output: out.captured,
                                 value,
                             });
-                            completed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let done = completed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                            // Live progress to stderr (only when interactive TTY)
+                            if total > 1 {
+                                use std::io::IsTerminal;
+                                if std::io::stderr().is_terminal() {
+                                    eprintln!("[parallel] {done}/{total} done");
+                                }
+                            }
                             // Release semaphore permit
                             sem_tx.send(()).ok();
                         });
@@ -446,6 +453,41 @@ impl<'a> Evaluator<'a> {
 
                 if let Some(msg) = first_error {
                     return Err(Signal::Return(Value::String(msg)));
+                }
+
+                // Check for error results (e.g. Ssh.run returning status: "error")
+                let mut error_count = 0usize;
+                for v in &values {
+                    if let Value::Hash(h) = v {
+                        if let Some(Value::String(s)) = h.get("status") {
+                            if s == "error" {
+                                error_count += 1;
+                                // Emit warning with host/stderr if available
+                                let host = h.get("host")
+                                    .map(|v| v.to_rush_string())
+                                    .unwrap_or_else(|| "?".to_string());
+                                let detail = h.get("stderr")
+                                    .map(|v| v.to_rush_string())
+                                    .unwrap_or_default();
+                                let msg = if detail.is_empty() {
+                                    format!("[parallel] {host}: failed")
+                                } else {
+                                    let short = detail.lines().next().unwrap_or(&detail);
+                                    format!("[parallel] {host}: {short}")
+                                };
+                                self.output.warn(&msg);
+                            }
+                        }
+                    }
+                }
+                if error_count > 0 {
+                    self.output.warn(&format!(
+                        "[parallel] {}/{} failed",
+                        error_count, values.len()
+                    ));
+                    if *fail_fast {
+                        self.exit_code = 1;
+                    }
                 }
 
                 Ok(Value::Array(values))
