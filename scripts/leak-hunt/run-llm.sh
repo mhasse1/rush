@@ -30,24 +30,16 @@ echo "leak-hunt: host=$HOST duration=${DURATION}s interval=${INTERVAL}s out=$OUT
 echo "rush binary: $(command -v "$RUSH_BIN" || echo 'NOT FOUND')"
 echo
 
-# Make a fifo so rush stays alive reading from it indefinitely.
-FIFO="$OUT/cmd.fifo"
-mkfifo "$FIFO"
-
-# Start rush --llm reading from the fifo. Open write side too so the
-# fifo doesn't EOF when the driver pauses or gets restarted.
-exec 9>"$FIFO"
-"$RUSH_BIN" --llm < "$FIFO" > "$OUT/rush.stdout.log" 2> "$OUT/rush.stderr.log" &
+# Pipe the driver directly into rush --llm. The driver is infinite, so
+# rush stays alive until we kill the pipeline. $! after a pipeline gives
+# the rightmost command's PID, which is rush.
+"$SCRIPT_DIR/driver.sh" | "$RUSH_BIN" --llm > "$OUT/rush.stdout.log" 2> "$OUT/rush.stderr.log" &
 RUSH_PID=$!
+DRIVER_PID=""  # not directly tracked; pgkill via process group on cleanup
 echo "rush --llm pid: $RUSH_PID"
 
 # Give rush a beat to start.
 sleep 1
-
-# Driver: stream commands forever into the fifo.
-"$SCRIPT_DIR/driver.sh" > "$FIFO" &
-DRIVER_PID=$!
-echo "driver pid: $DRIVER_PID"
 
 # Monitor: sample RSS to CSV.
 "$SCRIPT_DIR/monitor.sh" "$RUSH_PID" "$INTERVAL" "$OUT/rss.csv" &
@@ -57,21 +49,17 @@ echo "monitor pid: $MON_PID"
 cleanup() {
     echo
     echo "stopping..."
-    kill "$DRIVER_PID" 2>/dev/null || true
     kill "$MON_PID" 2>/dev/null || true
-    # Close our fifo write fd so rush sees EOF and exits cleanly.
-    exec 9>&-
-    # Give it a moment for clean exit; SIGTERM if still alive.
-    sleep 1
+    # Kill the whole pipeline (driver + rush) by killing rush, which
+    # makes driver exit on broken pipe.
     if kill -0 "$RUSH_PID" 2>/dev/null; then
         kill -TERM "$RUSH_PID" 2>/dev/null || true
         sleep 1
         kill -KILL "$RUSH_PID" 2>/dev/null || true
     fi
-    rm -f "$FIFO"
+    pkill -f "$SCRIPT_DIR/driver.sh" 2>/dev/null || true
     echo "results in: $OUT"
-    head -1 "$OUT/rss.csv"
-    tail -3 "$OUT/rss.csv"
+    [[ -f "$OUT/rss.csv" ]] && head -1 "$OUT/rss.csv" && tail -3 "$OUT/rss.csv" || echo "no rss.csv produced"
 }
 trap cleanup EXIT INT TERM
 
