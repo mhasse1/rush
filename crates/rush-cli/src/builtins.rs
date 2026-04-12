@@ -1118,8 +1118,25 @@ fn handle_kill_job(args: &str) {
 fn handle_ai(args: &str) {
     if args.is_empty() {
         eprintln!("usage: ai \"question\" [-p provider] [-m model]");
+        eprintln!("       ai --agent \"task\" [-p provider] [-m model]");
         return;
     }
+
+    // Check for --agent flag
+    if args.starts_with("--agent") {
+        let rest = args.strip_prefix("--agent").unwrap_or("").trim();
+        let (prompt, provider, model) = rush_core::ai::parse_ai_args(rest);
+        if prompt.is_empty() {
+            eprintln!("usage: ai --agent \"task description\" [-p provider] [-m model]");
+            return;
+        }
+        match rush_core::ai::execute_agent(provider.as_deref(), model.as_deref(), &prompt) {
+            Ok(()) => {}
+            Err(e) => eprintln!("ai --agent: {e}"),
+        }
+        return;
+    }
+
     let (prompt, provider, model) = rush_core::ai::parse_ai_args(args);
     if prompt.is_empty() {
         eprintln!("usage: ai \"question\"");

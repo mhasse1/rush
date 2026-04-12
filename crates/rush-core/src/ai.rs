@@ -336,6 +336,356 @@ pub fn parse_ai_args(input: &str) -> (String, Option<String>, Option<String>) {
     (prompt, provider, model)
 }
 
+// ── Agent mode ──────────────────────────────────────────────────
+
+/// Rush subprocess for agent execution.
+struct RushSubprocess {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    reader: std::io::BufReader<std::process::ChildStdout>,
+}
+
+/// Context received from rush --llm.
+#[derive(Debug, serde::Deserialize)]
+struct AgentContext {
+    #[allow(dead_code)]
+    ready: bool,
+    host: String,
+    user: String,
+    cwd: String,
+    git_branch: Option<String>,
+    lang_spec: Option<String>,
+}
+
+/// Result received from rush --llm.
+#[derive(Debug, serde::Deserialize)]
+struct AgentResult {
+    status: String,
+    #[allow(dead_code)]
+    exit_code: i32,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    hint: Option<String>,
+    file: Option<String>,
+    content: Option<String>,
+    errors: Option<Vec<String>>,
+    error_type: Option<String>,
+}
+
+impl RushSubprocess {
+    fn spawn() -> Result<(Self, AgentContext), String> {
+        use std::io::BufRead;
+        use std::process::{Command, Stdio};
+
+        let rush = std::env::current_exe().unwrap_or_else(|_| "rush".into());
+        let mut child = Command::new(rush)
+            .arg("--llm")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn rush --llm: {e}"))?;
+
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut reader = std::io::BufReader::new(stdout);
+
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| format!("Read context: {e}"))?;
+        let ctx: AgentContext = serde_json::from_str(line.trim())
+            .map_err(|e| format!("Parse context: {e}"))?;
+
+        Ok((Self { child, stdin, reader }, ctx))
+    }
+
+    fn execute(&mut self, command: &str) -> Result<(AgentResult, AgentContext), String> {
+        use std::io::{BufRead, Write};
+
+        writeln!(self.stdin, "{command}").map_err(|e| format!("Write: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("Flush: {e}"))?;
+
+        let mut line = String::new();
+        self.reader.read_line(&mut line).map_err(|e| format!("Read result: {e}"))?;
+        let result: AgentResult = serde_json::from_str(line.trim())
+            .map_err(|e| format!("Parse result: {e}"))?;
+
+        line.clear();
+        self.reader.read_line(&mut line).map_err(|e| format!("Read context: {e}"))?;
+        let ctx: AgentContext = serde_json::from_str(line.trim())
+            .map_err(|e| format!("Parse context: {e}"))?;
+
+        Ok((result, ctx))
+    }
+}
+
+impl Drop for RushSubprocess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+fn build_agent_system_prompt(ctx: &AgentContext) -> String {
+    let mut prompt = format!(
+        "You are a command-line agent running inside Rush shell on {host} as {user}.\n\
+         Your working directory is {cwd}.{branch}\n\n\
+         You complete tasks by executing Rush commands one at a time.\n\
+         After each command, you'll see the result and can decide what to do next.\n\n\
+         Rules:\n\
+         - Respond with a SINGLE command in a ```rush code block.\n\
+         - Use Rush syntax when it's clearer (File.read, Dir.glob, string interpolation).\n\
+         - Standard Unix commands also work (ls, grep, find, curl, etc.).\n\
+         - Use `lcat <file>` to read files, `spool` to paginate large output.\n\
+         - When the task is complete, respond with [DONE] and a brief summary.\n\
+         - If you need clarification, ask — don't guess.\n\
+         - Be concise. Execute, observe, adapt.\n",
+        host = ctx.host,
+        user = ctx.user,
+        cwd = ctx.cwd,
+        branch = ctx.git_branch.as_ref()
+            .map(|b| format!("\nGit branch: {b}"))
+            .unwrap_or_default(),
+    );
+
+    if let Some(ref spec) = ctx.lang_spec {
+        prompt.push_str("\n## Rush Language Spec\n\n");
+        prompt.push_str(spec);
+    }
+
+    prompt
+}
+
+fn format_agent_result(result: &AgentResult) -> String {
+    let mut parts = vec![format!("[{}]", result.status)];
+    if let Some(ref s) = result.stdout { if !s.is_empty() { parts.push(s.clone()); } }
+    if let Some(ref s) = result.stderr { if !s.is_empty() { parts.push(format!("STDERR: {s}")); } }
+    if let Some(ref s) = result.hint { parts.push(format!("HINT: {s}")); }
+    if let Some(ref f) = result.file {
+        if let Some(ref c) = result.content { parts.push(format!("FILE {f}:\n{c}")); }
+    }
+    if let Some(ref e) = result.errors { if !e.is_empty() { parts.push(format!("ERRORS: {}", e.join("; "))); } }
+    if let Some(ref t) = result.error_type { parts.push(format!("ERROR_TYPE: {t}")); }
+    parts.join("\n")
+}
+
+fn extract_command(response: &str) -> Option<String> {
+    let trimmed = response.trim();
+
+    // Try fenced code block first
+    for fence in ["```rush", "```shell", "```bash", "```"] {
+        if let Some(start) = trimmed.find(fence) {
+            let after = &trimmed[start + fence.len()..];
+            if let Some(end) = after.find("```") {
+                let cmd = after[..end].trim();
+                if !cmd.is_empty() {
+                    return Some(cmd.to_string());
+                }
+            }
+        }
+    }
+
+    // Check for DONE signal
+    let lower = trimmed.to_lowercase();
+    if lower.contains("[done]") || lower.contains("task complete") {
+        return None;
+    }
+
+    // Single-line command (no paragraphs)
+    if !trimmed.contains("\n\n") && trimmed.lines().count() <= 3 {
+        let line = trimmed.lines()
+            .find(|l| !l.starts_with('#') && !l.is_empty())
+            .unwrap_or("");
+        if !line.is_empty() && !line.starts_with("I ") && !line.starts_with("The ") {
+            return Some(line.to_string());
+        }
+    }
+
+    None
+}
+
+/// Multi-turn streaming chat with the provider. Returns full response.
+fn stream_chat(
+    client: &reqwest::blocking::Client,
+    provider: &AiProvider,
+    model: &str,
+    api_key: &str,
+    messages: &[serde_json::Value],
+    system: &str,
+) -> Result<String, String> {
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let (url, body) = match provider.format {
+        ProviderFormat::Anthropic => {
+            headers.push(("x-api-key".into(), api_key.to_string()));
+            headers.push(("anthropic-version".into(), "2023-06-01".into()));
+            let body = json!({
+                "model": model,
+                "max_tokens": 4096,
+                "stream": true,
+                "system": system,
+                "messages": messages,
+            });
+            (provider.endpoint.clone(), body.to_string())
+        }
+        ProviderFormat::OpenAi => {
+            headers.push(("Authorization".into(), format!("Bearer {api_key}")));
+            let mut msgs = vec![json!({"role": "system", "content": system})];
+            msgs.extend_from_slice(messages);
+            let body = json!({
+                "model": model,
+                "stream": true,
+                "messages": msgs,
+            });
+            (provider.endpoint.clone(), body.to_string())
+        }
+        ProviderFormat::Gemini => {
+            let url = format!(
+                "{}/{}:streamGenerateContent?alt=sse&key={}",
+                provider.endpoint, model, api_key
+            );
+            let contents: Vec<serde_json::Value> = messages.iter().map(|m| {
+                let role = m["role"].as_str().unwrap_or("user");
+                let gemini_role = if role == "assistant" { "model" } else { "user" };
+                json!({"role": gemini_role, "parts": [{"text": m["content"]}]})
+            }).collect();
+            let body = json!({
+                "system_instruction": {"parts": [{"text": system}]},
+                "contents": contents,
+            });
+            (url, body.to_string())
+        }
+        ProviderFormat::Ollama => {
+            let mut msgs = vec![json!({"role": "system", "content": system})];
+            msgs.extend_from_slice(messages);
+            let body = json!({
+                "model": model,
+                "stream": true,
+                "messages": msgs,
+            });
+            (provider.endpoint.clone(), body.to_string())
+        }
+    };
+
+    let mut req = client.post(&url).header("Content-Type", "application/json");
+    for (key, val) in &headers {
+        req = req.header(key.as_str(), val.as_str());
+    }
+
+    let resp = req.body(body).send().map_err(|e| format!("HTTP error: {e}"))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().unwrap_or_default();
+        return Err(format!("API error {status}: {body}"));
+    }
+
+    let text = resp.text().map_err(|e| format!("Read error: {e}"))?;
+    let mut full = String::new();
+
+    // Dim gray for thinking text
+    print!("\x1b[2m");
+    for line in text.lines() {
+        if let Some(token) = extract_token(line, &provider.format) {
+            print!("{token}");
+            std::io::stdout().flush().ok();
+            full.push_str(&token);
+        }
+    }
+    print!("\x1b[0m");
+    println!();
+
+    Ok(full)
+}
+
+const MAX_AGENT_TURNS: usize = 25;
+
+/// Execute AI agent mode: iterative command execution with LLM.
+pub fn execute_agent(
+    provider_name: Option<&str>,
+    model_override: Option<&str>,
+    task: &str,
+) -> Result<(), String> {
+    let provider_name = provider_name.unwrap_or("anthropic");
+    let provider = get_provider(provider_name)
+        .ok_or_else(|| format!("Unknown AI provider: {provider_name}"))?;
+
+    let model = model_override
+        .map(String::from)
+        .unwrap_or_else(|| provider.default_model.clone());
+
+    let api_key = if !provider.api_key_env.is_empty() {
+        std::env::var(&provider.api_key_env).map_err(|_| {
+            format!("No API key. Set {} environment variable.", provider.api_key_env)
+        })?
+    } else {
+        String::new()
+    };
+
+    // Spawn Rush subprocess
+    let (mut rush, ctx) = RushSubprocess::spawn()?;
+    let system = build_agent_system_prompt(&ctx);
+
+    eprintln!("\x1b[2mai --agent | model: {model} | provider: {provider_name}\x1b[0m");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("HTTP client: {e}"))?;
+
+    let mut messages = vec![json!({"role": "user", "content": task})];
+    let mut commands_run = 0u32;
+    let start = std::time::Instant::now();
+
+    for turn in 1..=MAX_AGENT_TURNS {
+        // Ask LLM
+        let response = stream_chat(&client, &provider, &model, &api_key, &messages, &system)?;
+
+        // Extract command
+        let command = match extract_command(&response) {
+            Some(cmd) => cmd,
+            None => {
+                messages.push(json!({"role": "assistant", "content": response}));
+                break;
+            }
+        };
+
+        messages.push(json!({"role": "assistant", "content": response}));
+
+        // Show command
+        eprintln!("\x1b[36m  \u{25b8} {command}\x1b[0m");
+
+        // Execute in Rush
+        let (result, _ctx) = match rush.execute(&command) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("\x1b[31m  \u{2717} Rush error: {e}\x1b[0m");
+                break;
+            }
+        };
+
+        commands_run += 1;
+        let status_icon = if result.status == "success" { "\x1b[32m\u{2713}\x1b[0m" } else { "\x1b[31m\u{2717}\x1b[0m" };
+        let summary = result.stdout.as_deref()
+            .or(result.stderr.as_deref())
+            .unwrap_or("")
+            .lines().next().unwrap_or("");
+        eprintln!("  {status_icon} {summary}");
+
+        let formatted = format_agent_result(&result);
+        messages.push(json!({"role": "user", "content": format!("Command result:\n{formatted}")}));
+
+        if turn == MAX_AGENT_TURNS {
+            eprintln!("\x1b[33m  max turns ({MAX_AGENT_TURNS}) reached\x1b[0m");
+        }
+    }
+
+    let elapsed = start.elapsed();
+    eprintln!(
+        "\x1b[2m  {} commands | {:.1}s elapsed\x1b[0m",
+        commands_run, elapsed.as_secs_f64()
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
