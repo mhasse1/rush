@@ -2,7 +2,7 @@
 
 A Unix-style shell built in Rust, designed for both humans and LLM agents.
 
-Rush gives you clean scripting syntax, structured data pipelines, and a JSON wire protocol for AI agents — in one shell, on every platform.
+Rush gives you clean scripting syntax, structured data pipelines, native concurrency, and a JSON wire protocol for AI agents -- in one shell, on every platform.
 
 ```rush
 # Shell commands just work
@@ -11,7 +11,7 @@ ls -la /var/log | grep ".log"
 # Structured pipelines
 ps aux | where CPU > 50 | select Name, CPU | sort --desc
 
-# Clean scripting — no $ prefix, #{} interpolation, end blocks
+# Clean scripting -- no $ prefix, #{} interpolation, end blocks
 files = Dir.list("src", :recurse)
 large = files.select { |f| File.size(f) > 1mb }
 large.each { |f| puts "#{f}: #{File.size(f).to_filesize}" }
@@ -41,7 +41,7 @@ done                                      end
 
 **For LLM agents.** `rush --llm` provides structured JSON I/O, typed errors, output spooling, and a TTY blocklist. `rush --mcp` exposes tools for Claude Code. No terminal escape parsing needed.
 
-**For scripts.** Functions, classes, enums, error handling, and a File/Dir/Time stdlib — without leaving the shell.
+**For scripts.** Functions, classes, enums, error handling, native concurrency (`parallel`, `orchestrate`), and a File/Dir/Time stdlib -- without leaving the shell.
 
 ## Install
 
@@ -112,7 +112,7 @@ Control flow: `if/elsif/else/end`, `unless`, `while`, `until`, `loop`, `for..in`
 ### Standard Library
 
 ```rush
-# File I/O — cross-platform, no external deps
+# File I/O -- cross-platform, no external deps
 File.read("data.txt")
 File.write("/tmp/out.txt", "hello")
 File.read_json("config.json")
@@ -150,6 +150,33 @@ recent = Time.now - 24.hours
 - PATH management: `path add`, `path rm`, `path check`, `path dedupe`
 - Platform blocks: `macos`, `linux`, `win64` with property conditions
 
+### Concurrency and Orchestration
+
+```rush
+# Concurrent iteration with worker pool
+parallel(4) host in ["web1", "web2", "web3", "web4"]
+  result = Ssh.run(host, "cd /app && git pull && cargo build --release")
+  puts "#{host}: #{result["status"]}"
+end
+
+# Dependency-ordered task graph
+orchestrate
+  task "build-linux" do
+    Ssh.run("linux-host", "cargo build --release")
+  end
+  task "build-mac" do
+    Ssh.run("mac-host", "cargo build --release")
+  end
+  task "deploy", after: ["build-linux", "build-mac"] do
+    Ssh.run("prod", "sudo systemctl restart app")
+  end
+end
+```
+
+`parallel` runs iterations concurrently with optional worker limits, timeouts, and fail-fast mode. `orchestrate` runs a dependency graph where independent tasks execute in parallel and dependent tasks wait. Both return structured results. `Ssh.run` gives agents and scripts structured access to remote hosts without parsing text.
+
+
+
 ### Built-in AI Assistant
 
 ```rush
@@ -173,6 +200,8 @@ $ rush --llm
 
 Built-in commands: `lcat` (file reader with MIME detection), `spool` (paginated output), `help` (on-demand reference), `timeout` (runaway prevention). Output capped at 4KB with spool for overflow. TTY blocklist prevents interactive commands with suggested alternatives.
 
+**Local LLM agent.** `rush --agent "task"` runs a Claude Code-style agent loop against a local Ollama instance. The agent receives the Rush language spec automatically, generates Rush commands, gets structured JSON results, and iterates.
+
 ## MCP Server
 
 Rush provides MCP servers for Claude Code and Claude Desktop:
@@ -184,7 +213,7 @@ rush install mcp --claude    # registers both servers
 - **rush-local** -- persistent local session (variables, cwd survive between calls)
 - **rush-ssh** -- SSH gateway for remote hosts (auto-detects Rush on remote)
 
-Tools: `rush_execute`, `rush_read_file`, `rush_context`. Includes `rush://lang-spec` resource so the LLM understands Rush syntax.
+Tools: `rush_execute`, `rush_read_file`, `rush_write_file`, `rush_context`. Includes `rush://lang-spec` resource so the LLM understands Rush syntax.
 
 ## Plugin System
 
@@ -211,6 +240,7 @@ rush                  Interactive shell
 rush -c 'command'     Execute and exit
 rush script.rush      Run a script
 rush --llm            LLM agent mode (JSON wire protocol)
+rush --agent "task"   Local LLM agent (Ollama)
 rush --mcp            MCP server (local persistent session)
 rush --mcp-ssh        MCP server (SSH gateway)
 rush --version        Show version
@@ -230,7 +260,7 @@ Config sync across machines via git, ssh, or shared path.
 
 ## Architecture
 
-Rush is built in Rust as a workspace of three crates:
+Rush is built in Rust as a workspace of four crates:
 
 ```
 Rush source -> Lexer -> Parser -> AST -> Evaluator (native Rust)
@@ -239,9 +269,10 @@ Rush source -> Lexer -> Parser -> AST -> Evaluator (native Rust)
 
 - **rush-core** -- lexer, parser, AST, evaluator, stdlib, pipeline operators
 - **rush-cli** -- REPL, line editor, prompt, themes, AI, MCP, LLM mode
+- **rush-agent** -- local LLM agent loop (Ollama integration)
 - **rush-ps-bridge** -- PowerShell interop for `ps`/`ps5`/`win32` blocks on Windows
 
-~5MB binary. ~10ms startup. ~98% POSIX compliant on Unix.
+678 tests. ~5MB binary. ~10ms startup. CI on macOS, Linux, and Windows.
 
 ## Documentation
 
