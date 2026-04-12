@@ -1014,7 +1014,10 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                 }
             }
             ' ' | '\t' if !in_single && !in_double => {
-                if !current.is_empty() {
+                // Empty string tokens are only emitted when they were
+                // explicitly quoted (e.g. `bash -c ""`) — otherwise
+                // consecutive spaces would produce empty arguments.
+                if !current.is_empty() || was_quoted {
                     parts.push((std::mem::take(&mut current), was_quoted));
                     was_quoted = false;
                 }
@@ -1022,7 +1025,7 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
             _ => current.push(c),
         }
     }
-    if !current.is_empty() {
+    if !current.is_empty() || was_quoted {
         parts.push((current, was_quoted));
     }
     parts
@@ -1707,6 +1710,32 @@ mod tests {
     #[test]
     fn parse_empty() {
         assert!(parse_command_line("").is_empty());
+    }
+
+    #[test]
+    fn parse_empty_quoted_string_preserved() {
+        // #210: bash -c "" used to lose the empty argument, so bash
+        // received only "bash -c" and complained about the missing -c arg.
+        assert_eq!(
+            parse_command_line(r#"bash -c """#),
+            vec!["bash", "-c", ""]
+        );
+    }
+
+    #[test]
+    fn parse_empty_single_quoted_preserved() {
+        assert_eq!(
+            parse_command_line(r#"bash -c ''"#),
+            vec!["bash", "-c", ""]
+        );
+    }
+
+    #[test]
+    fn parse_empty_quoted_in_middle() {
+        assert_eq!(
+            parse_command_line(r#"a "" b"#),
+            vec!["a", "", "b"]
+        );
     }
 
     #[test]
