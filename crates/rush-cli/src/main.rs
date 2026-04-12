@@ -215,6 +215,23 @@ fn main() {
         }
     }
 
+    // Non-interactive stdin (pipe, heredoc): read and execute as a script.
+    // Avoids leaking the REPL banner and the "Device not configured" error
+    // when rush is invoked programmatically without -c.
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        let mut buf = String::new();
+        if io::Read::read_to_string(&mut io::stdin().lock(), &mut buf).is_ok() && !buf.trim().is_empty() {
+            let mut output = StdOutput;
+            let mut evaluator = Evaluator::new(&mut output);
+            builtins::inject_env_vars(is_login);
+            builtins::inject_builtin_vars(&mut evaluator);
+            builtins::run_script(&mut evaluator, &buf, "<stdin>");
+            std::process::exit(evaluator.exit_code);
+        }
+        std::process::exit(0);
+    }
+
     // Interactive REPL with reedline
     repl::run(is_login);
 }

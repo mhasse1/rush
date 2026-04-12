@@ -763,7 +763,8 @@ impl<'a> Evaluator<'a> {
                         .iter()
                         .map(|a| self.eval_node(a))
                         .collect::<Result<_, _>>()?;
-                    return Ok(match name {
+                    stdlib::reset_last_error();
+                    let value = match name {
                         "file" => stdlib::file_method(method, &arg_vals),
                         "dir" => stdlib::dir_method(method, &arg_vals),
                         "time" => stdlib::time_method(method, &arg_vals),
@@ -774,7 +775,11 @@ impl<'a> Evaluator<'a> {
                             stdlib::env_get(&key)
                         }
                         _ => Value::Nil,
-                    });
+                    };
+                    if stdlib::take_last_error() {
+                        self.exit_code = 1;
+                    }
+                    return Ok(value);
                 }
                 let recv = self.eval_node(receiver)?;
                 let arg_vals: Vec<Value> = args

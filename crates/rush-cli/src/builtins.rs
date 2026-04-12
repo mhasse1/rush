@@ -33,7 +33,10 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "unset" => { handle_unset(args); true }
         "source" | "." => { handle_source(evaluator, args); true }
         "clear" => { print!("\x1b[2J\x1b[H"); true }
-        "exit" | "quit" => std::process::exit(evaluator.exit_code),
+        "exit" | "quit" => {
+            let code = args.trim().parse::<i32>().unwrap_or(evaluator.exit_code);
+            std::process::exit(code);
+        }
         "pwd" => {
             let cwd = std::env::current_dir().unwrap_or_default()
                 .to_string_lossy().replace('\\', "/");

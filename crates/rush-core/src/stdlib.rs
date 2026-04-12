@@ -1,11 +1,35 @@
 //! Rush stdlib: File, Dir, Time — native implementations (no PowerShell).
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
 use crate::value::Value;
+
+thread_local! {
+    /// Set by stdlib methods when a recoverable error occurs.
+    /// The evaluator clears this before a stdlib call and checks it after,
+    /// so script-level exit codes reflect stdlib failures.
+    static LAST_ERROR: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Record a stdlib error — prints to stderr and flags for the evaluator.
+pub(crate) fn stdlib_err(msg: impl std::fmt::Display) {
+    eprintln!("{msg}");
+    LAST_ERROR.with(|e| e.set(true));
+}
+
+/// True if any stdlib method has signaled an error since the last reset.
+pub fn take_last_error() -> bool {
+    LAST_ERROR.with(|e| e.replace(false))
+}
+
+/// Reset the stdlib error flag without consuming it.
+pub fn reset_last_error() {
+    LAST_ERROR.with(|e| e.set(false));
+}
 
 // ── File ────────────────────────────────────────────────────────────
 
@@ -16,7 +40,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::read_to_string(&path) {
                 Ok(content) => Value::String(content),
                 Err(e) => {
-                    eprintln!("File.read: {path}: {e}");
+                    stdlib_err(format!("File.read: {path}: {e}"));
                     Value::Nil
                 }
             }
@@ -28,7 +52,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
                     Value::Array(content.lines().map(|l| Value::String(l.to_string())).collect())
                 }
                 Err(e) => {
-                    eprintln!("File.read_lines: {path}: {e}");
+                    stdlib_err(format!("File.read_lines: {path}: {e}"));
                     Value::Array(Vec::new())
                 }
             }
@@ -38,7 +62,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::read_to_string(&path) {
                 Ok(content) => parse_json_to_value(&content),
                 Err(e) => {
-                    eprintln!("File.read_json: {path}: {e}");
+                    stdlib_err(format!("File.read_json: {path}: {e}"));
                     Value::Nil
                 }
             }
@@ -49,7 +73,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::write(&path, &content) {
                 Ok(()) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("File.write: {path}: {e}");
+                    stdlib_err(format!("File.write: {path}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -67,13 +91,13 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
                     match file.write_all(content.as_bytes()) {
                         Ok(()) => Value::Bool(true),
                         Err(e) => {
-                            eprintln!("File.append: {path}: {e}");
+                            stdlib_err(format!("File.append: {path}: {e}"));
                             Value::Bool(false)
                         }
                     }
                 }
                 Err(e) => {
-                    eprintln!("File.append: {path}: {e}");
+                    stdlib_err(format!("File.append: {path}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -87,7 +111,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::remove_file(&path) {
                 Ok(()) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("File.delete: {path}: {e}");
+                    stdlib_err(format!("File.delete: {path}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -98,7 +122,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::copy(&src, &dst) {
                 Ok(_) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("File.copy: {src} → {dst}: {e}");
+                    stdlib_err(format!("File.copy: {src} → {dst}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -109,7 +133,7 @@ pub fn file_method(method: &str, args: &[Value]) -> Value {
             match fs::rename(&src, &dst) {
                 Ok(()) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("File.move: {src} → {dst}: {e}");
+                    stdlib_err(format!("File.move: {src} → {dst}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -183,7 +207,7 @@ pub fn dir_method(method: &str, args: &[Value]) -> Value {
             match fs::create_dir_all(&path) {
                 Ok(()) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("Dir.mkdir: {path}: {e}");
+                    stdlib_err(format!("Dir.mkdir: {path}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -193,7 +217,7 @@ pub fn dir_method(method: &str, args: &[Value]) -> Value {
             match fs::remove_dir_all(&path) {
                 Ok(()) => Value::Bool(true),
                 Err(e) => {
-                    eprintln!("Dir.rmdir: {path}: {e}");
+                    stdlib_err(format!("Dir.rmdir: {path}: {e}"));
                     Value::Bool(false)
                 }
             }
@@ -211,7 +235,7 @@ pub fn dir_method(method: &str, args: &[Value]) -> Value {
             match glob_pattern(&pattern) {
                 Ok(files) => Value::Array(files.into_iter().map(Value::String).collect()),
                 Err(e) => {
-                    eprintln!("Dir.glob: {e}");
+                    stdlib_err(format!("Dir.glob: {e}"));
                     Value::Array(Vec::new())
                 }
             }
@@ -591,7 +615,7 @@ pub fn ssh_method(method: &str, args: &[Value]) -> Value {
             let host = arg_str(args, 0);
             let command = arg_str(args, 1);
             if host.is_empty() || command.is_empty() {
-                eprintln!("Ssh.run: requires host and command");
+                stdlib_err(format!("Ssh.run: requires host and command"));
                 return Value::Nil;
             }
             ssh_execute(&host, &command)
@@ -610,7 +634,7 @@ pub fn ssh_method(method: &str, args: &[Value]) -> Value {
         }
 
         _ => {
-            eprintln!("Ssh.{method}: unknown method");
+            stdlib_err(format!("Ssh.{method}: unknown method"));
             Value::Nil
         }
     }

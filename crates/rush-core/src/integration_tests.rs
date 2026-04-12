@@ -82,6 +82,47 @@ mod tests {
     }
 
     // ═══════════════════════════════════════════════════════════════
+    // Exit code propagation (issue #200)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn stdlib_file_read_missing_sets_exit_nonzero() {
+        let (code, _) = run(r#"File.read("/definitely/does/not/exist/rush-test")"#);
+        assert_ne!(code, 0, "missing file read should produce non-zero exit");
+    }
+
+    #[test]
+    fn stdlib_file_read_ok_stays_zero() {
+        let tmp = std::env::temp_dir().join("rush_exit_test_ok.txt");
+        std::fs::write(&tmp, "ok").ok();
+        let cmd = format!(r#"File.read("{}")"#, tmp.to_string_lossy().replace('\\', "/"));
+        let (code, _) = run(&cmd);
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(code, 0, "successful file read should leave exit code at 0");
+    }
+
+    #[test]
+    fn stdlib_dir_mkdir_failure_sets_exit_nonzero() {
+        // Try to mkdir inside a read-only path — should fail on any Unix.
+        #[cfg(unix)]
+        {
+            let (code, _) = run(r#"Dir.mkdir("/dev/null/cannot-create-here")"#);
+            assert_ne!(code, 0, "failed mkdir should produce non-zero exit");
+        }
+    }
+
+    #[test]
+    fn stdlib_error_then_success_clears_error_flag() {
+        // After a stdlib error, a subsequent stdlib call should not
+        // re-trigger the exit-code bump. Exit-code semantics: last
+        // statement wins. First call errors (sets 1), second call is
+        // a different stdlib success (does not clear, leaves at 1).
+        // Current policy is sticky — this test documents it.
+        let (code, _) = run(r#"File.read("/nonexistent-rush-test"); Dir.exist?(".")"#);
+        assert_ne!(code, 0, "earlier stdlib error should leave non-zero exit");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     // MCP
     // ═══════════════════════════════════════════════════════════════
 
