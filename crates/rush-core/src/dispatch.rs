@@ -524,6 +524,14 @@ struct ChainSegment {
 
 /// Split a command line on &&, ||, ; respecting quotes.
 fn split_chains(input: &str) -> Vec<ChainSegment> {
+    // Rush block openers that are closed by `end`. Needed so that
+    // `def foo; body; end` is treated as one chunk, not three.
+    const BLOCK_OPENERS: &[&str] = &[
+        "def", "class", "enum", "if", "unless", "while", "until",
+        "loop", "for", "case", "match", "try", "begin",
+        "orchestrate", "parallel", "do",
+    ];
+
     let mut segments = Vec::new();
     let mut current = String::new();
     let mut current_op = ChainOp::None;
@@ -531,8 +539,29 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
     let mut in_double = false;
     let mut brace_depth: i32 = 0; // track { } for brace groups
     let mut paren_depth: i32 = 0; // track ( ) for subshells
+    let mut block_depth: i32 = 0; // track def/class/...end
     let chars: Vec<char> = input.chars().collect();
     let mut i = 0;
+
+    // Helper: extract the identifier starting at position `start` (if any).
+    fn word_at(chars: &[char], start: usize) -> Option<&[char]> {
+        if start >= chars.len() { return None; }
+        let c = chars[start];
+        if !(c.is_ascii_alphabetic() || c == '_') { return None; }
+        let mut end = start;
+        while end < chars.len() && (chars[end].is_ascii_alphanumeric() || chars[end] == '_') {
+            end += 1;
+        }
+        Some(&chars[start..end])
+    }
+
+    // True if position `start` is at a word boundary (start of input
+    // or preceded by a non-identifier char).
+    fn at_word_boundary(chars: &[char], start: usize) -> bool {
+        if start == 0 { return true; }
+        let prev = chars[start - 1];
+        !(prev.is_ascii_alphanumeric() || prev == '_')
+    }
 
     while i < chars.len() {
         let ch = chars[i];
@@ -565,8 +594,21 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
         if ch == '(' { paren_depth += 1; }
         if ch == ')' { paren_depth -= 1; }
 
-        // Don't split on operators inside braces or parens
-        if brace_depth > 0 || paren_depth > 0 {
+        // Track block-keyword depth (def/class/...end) at word boundaries.
+        if at_word_boundary(&chars, i) {
+            if let Some(w) = word_at(&chars, i) {
+                let word: String = w.iter().collect();
+                if word == "end" { block_depth -= 1; }
+                else if BLOCK_OPENERS.iter().any(|&op| op == word) { block_depth += 1; }
+                // Consume the whole word so the first char isn't re-processed.
+                for c in w { current.push(*c); }
+                i += w.len();
+                continue;
+            }
+        }
+
+        // Don't split on operators inside braces, parens, or blocks.
+        if brace_depth > 0 || paren_depth > 0 || block_depth > 0 {
             current.push(ch);
             i += 1;
             continue;

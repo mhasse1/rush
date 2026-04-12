@@ -609,8 +609,17 @@ fn value_to_json(val: &Value) -> serde_json::Value {
             serde_json::Value::Array(arr.iter().map(value_to_json).collect())
         }
         Value::Hash(map) => {
-            let obj: serde_json::Map<String, serde_json::Value> =
-                map.iter().map(|(k, v)| (k.clone(), value_to_json(v))).collect();
+            // Hash literal keys parse as symbols (":name") by design.
+            // For JSON interop strip the leading colon so agents and
+            // downstream tools see standard JSON keys. Consistent with
+            // the `h["name"]` access normalization.
+            let obj: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| {
+                    let key = k.strip_prefix(':').unwrap_or(k.as_str()).to_string();
+                    (key, value_to_json(v))
+                })
+                .collect();
             serde_json::Value::Object(obj)
         }
         Value::Range(start, end, exclusive) => {

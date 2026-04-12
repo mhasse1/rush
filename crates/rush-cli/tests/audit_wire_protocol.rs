@@ -445,14 +445,29 @@ fn llm__as_json_array_of_hashes() {
     assert_eq!(parsed.as_array().unwrap().len(), 2);
 }
 
-/// `as json` produces valid JSON for nested hashes.
-///
-/// Currently fails: F7 — `as json` emits hash keys with a leading `:`
-/// (e.g. `":name"` instead of `"name"`), which is Rush's symbol syntax
-/// leaking through the JSON serializer. Test stays in the suite so the
-/// regression is visible; will be un-ignored when F7 is fixed.
+/// F7: one-liner `def ... ; body ; end` must not be split by the
+/// chain splitter. Multi-statement block keywords (def/class/if/while/...)
+/// group their bodies even when the user uses `;` for brevity.
 #[test]
-#[ignore = "F7: as json emits :-prefixed keys for hash literals"]
+fn llm__oneline_def_end_not_chain_split() {
+    let stdin = "def dbl(n); return n * 2; end\nputs dbl(21)\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    let result = objs.iter().find(|v| v["stdout"] == "42").expect("expected 42");
+    assert_eq!(result["status"], "success");
+}
+
+/// F8: one-liner if/end in a chain.
+#[test]
+fn llm__oneline_if_end_not_chain_split() {
+    let stdin = "if 1 == 1; puts \"yes\"; end\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    let result = objs.iter().find(|v| v["stdout"] == "yes").expect("expected yes");
+    assert_eq!(result["status"], "success");
+}
+
+/// `as json` produces valid JSON for nested hashes.
+/// Regression guard for F7 (was emitting `:name` instead of `name`).
+#[test]
 fn llm__as_json_nested_hash() {
     let stdin = r#"{name: "x", meta: {count: 3}} | as json"#.to_string() + "\n";
     let (objs, _stderr, _code) = drive(&["--llm"], &stdin);
