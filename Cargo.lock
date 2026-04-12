@@ -1104,6 +1104,7 @@ name = "rush-core"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "getrandom 0.2.17",
  "glob",
  "libc",
  "regex",

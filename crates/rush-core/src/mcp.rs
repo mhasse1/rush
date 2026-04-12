@@ -8,7 +8,7 @@
 use serde_json::{json, Value as JsonValue};
 use std::io::{BufRead, Write};
 
-use crate::llm;
+use crate::llm::{self, LlmSession};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -35,6 +35,10 @@ pub fn run() {
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
+    // One session per MCP server lifetime. Variables, function
+    // definitions, and class definitions persist across tool calls.
+    let mut session = LlmSession::new();
+    eprintln!("[rush-mcp] session_id={}", session.session_id);
 
     for line in stdin.lock().lines() {
         let line = match line {
@@ -66,7 +70,7 @@ pub fn run() {
         let result = match method {
             "initialize" => handle_initialize(),
             "tools/list" => handle_tools_list(),
-            "tools/call" => handle_tools_call(msg.get("params")),
+            "tools/call" => handle_tools_call(msg.get("params"), &mut session),
             "resources/list" => handle_resources_list(),
             "resources/read" => handle_resources_read(msg.get("params")),
             _ => Err((-32601, format!("Method not found: {method}"))),
@@ -168,7 +172,10 @@ fn handle_tools_list() -> Result<JsonValue, (i32, String)> {
 
 // ── tools/call ──────────────────────────────────────────────────────
 
-fn handle_tools_call(params: Option<&JsonValue>) -> Result<JsonValue, (i32, String)> {
+fn handle_tools_call(
+    params: Option<&JsonValue>,
+    session: &mut LlmSession,
+) -> Result<JsonValue, (i32, String)> {
     let params = params.ok_or((-32602, "Missing params".to_string()))?;
     let tool_name = params
         .get("name")
@@ -182,7 +189,7 @@ fn handle_tools_call(params: Option<&JsonValue>) -> Result<JsonValue, (i32, Stri
                 .and_then(|a| a.get("command"))
                 .and_then(|c| c.as_str())
                 .ok_or((-32602, "Missing required parameter: command".to_string()))?;
-            let result = llm::execute_one(command);
+            let result = llm::execute_one_in(command, session);
             let is_err = result.status != "success";
             (serde_json::to_value(&result).unwrap_or(json!(null)), is_err)
         }
@@ -216,8 +223,9 @@ fn handle_tools_call(params: Option<&JsonValue>) -> Result<JsonValue, (i32, Stri
             let (branch, dirty) = llm::get_git_info(&cwd);
             let ctx = llm::LlmContext {
                 ready: true,
-                host: llm::get_hostname(),
-                user: llm::get_username(),
+                host: session.host.clone(),
+                user: session.user.clone(),
+                session_id: session.session_id.clone(),
                 cwd,
                 git_branch: branch,
                 git_dirty: dirty,
@@ -330,7 +338,7 @@ mod tests {
     #[test]
     fn tools_call_execute() {
         let params = json!({"name": "rush_execute", "arguments": {"command": "echo hello"}});
-        let result = handle_tools_call(Some(&params)).unwrap();
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["status"], "success");
@@ -340,7 +348,7 @@ mod tests {
     #[test]
     fn tools_call_rush_expr() {
         let params = json!({"name": "rush_execute", "arguments": {"command": "puts 1 + 2"}});
-        let result = handle_tools_call(Some(&params)).unwrap();
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["status"], "success");
@@ -352,7 +360,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("rush_mcp_test.txt");
         std::fs::write(&tmp, "mcp test content").unwrap();
         let params = json!({"name": "rush_read_file", "arguments": {"path": tmp.to_string_lossy()}});
-        let result = handle_tools_call(Some(&params)).unwrap();
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["status"], "success");
@@ -366,7 +374,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("rush_mcp_write_test.txt");
         let _ = std::fs::remove_file(&tmp);
         let params = json!({"name": "rush_write_file", "arguments": {"path": tmp.to_string_lossy(), "content": "mcp write test"}});
-        let result = handle_tools_call(Some(&params)).unwrap();
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["status"], "success");
@@ -377,7 +385,7 @@ mod tests {
     #[test]
     fn tools_call_context() {
         let params = json!({"name": "rush_context", "arguments": {}});
-        let result = handle_tools_call(Some(&params)).unwrap();
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new()).unwrap();
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["shell"], "rush");
@@ -387,7 +395,7 @@ mod tests {
     #[test]
     fn tools_call_unknown_tool() {
         let params = json!({"name": "nonexistent", "arguments": {}});
-        let result = handle_tools_call(Some(&params));
+        let result = handle_tools_call(Some(&params), &mut LlmSession::new());
         assert!(result.is_err());
     }
 

@@ -77,6 +77,18 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// Construct with a pre-existing environment. Used by LLM/MCP modes
+    /// to persist variables, functions, and classes across tool calls.
+    pub fn with_env(env: Environment, output: &'a mut dyn Output) -> Self {
+        Self { env, output, exit_code: 0 }
+    }
+
+    /// Consume the evaluator and return its environment so the caller
+    /// can preserve it for the next invocation.
+    pub fn into_env(self) -> Environment {
+        self.env
+    }
+
     /// Execute a list of statements, returning the last value.
     pub fn exec(&mut self, nodes: &[Node]) -> Result<Value, Signal> {
         let mut result = Value::Nil;
