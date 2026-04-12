@@ -522,6 +522,18 @@ pub fn run() {
         std::env::set_var("GIT_TERMINAL_PROMPT", "0");
     }
 
+    // The interactive signal handler installed at startup catches
+    // SIGTERM/SIGHUP and sets a flag the REPL checks. In --llm mode
+    // the loop blocks in read_line and never checks the flag, so the
+    // process would appear to swallow SIGTERM. Restore default
+    // disposition so a harness-initiated SIGTERM terminates the
+    // session cleanly.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        libc::signal(libc::SIGHUP, libc::SIG_DFL);
+    }
+
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut session = LlmSession::new();

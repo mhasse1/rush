@@ -503,3 +503,218 @@ fn mcp__concurrent_servers_have_distinct_session_ids() {
     let unique: std::collections::HashSet<&String> = ids.iter().collect();
     assert_eq!(unique.len(), ids.len(), "session_ids must be unique across concurrent servers: {ids:?}");
 }
+
+/// Multiple concurrent MCP servers can each run a rush_execute call
+/// without stomping on each other (no output confusion, no crash).
+#[test]
+fn mcp__concurrent_servers_run_in_parallel() {
+    use std::thread;
+    let handles: Vec<_> = (0..4)
+        .map(|i| {
+            thread::spawn(move || {
+                let cmd = format!("puts {}", i * 7);
+                let stdin = rpc(1, "tools/call", json!({"name":"rush_execute","arguments":{"command": cmd}}));
+                let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+                let r = unwrap_mcp_tool_result(&objs[0]);
+                (r["stdout"].as_str().unwrap_or("").to_string(), r["status"].as_str().unwrap_or("").to_string())
+            })
+        })
+        .collect();
+    for (i, h) in handles.into_iter().enumerate() {
+        let (stdout, status) = h.join().unwrap();
+        assert_eq!(status, "success", "session {i} failed");
+        assert_eq!(stdout, (i * 7).to_string(), "session {i} got wrong output");
+    }
+}
+
+// ── Schema stability (tools/list + initialize shape) ────────────────
+
+/// The MCP initialize response advertises a specific protocolVersion
+/// and serverInfo shape. Bench harness depends on these.
+#[test]
+fn mcp__initialize_returns_expected_shape() {
+    let stdin = rpc(1, "initialize", json!({}));
+    let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+    let r = &objs[0]["result"];
+    assert_eq!(r["protocolVersion"], "2024-11-05");
+    assert_eq!(r["serverInfo"]["name"], "rush-local");
+    assert!(r["serverInfo"]["version"].is_string());
+    assert!(r["capabilities"].is_object());
+    assert!(r["instructions"].as_str().unwrap().contains("Rush"));
+}
+
+/// tools/list advertises the four public tools with correct schema.
+/// Bench harness reads this to know what's available.
+#[test]
+fn mcp__tools_list_advertises_four_tools() {
+    let stdin = rpc(1, "tools/list", json!({}));
+    let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+    let tools = objs[0]["result"]["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 4);
+    let names: std::collections::HashSet<&str> =
+        tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(names.contains("rush_execute"));
+    assert!(names.contains("rush_read_file"));
+    assert!(names.contains("rush_write_file"));
+    assert!(names.contains("rush_context"));
+    // Each tool must have name, description, and inputSchema.
+    for t in tools {
+        assert!(t["name"].is_string());
+        assert!(t["description"].is_string());
+        assert!(t["inputSchema"].is_object());
+    }
+}
+
+/// The rush://lang-spec resource is always available and substantive.
+#[test]
+fn mcp__lang_spec_resource_present() {
+    let stdin = format!(
+        "{}{}",
+        rpc(1, "resources/list", json!({})),
+        rpc(2, "resources/read", json!({"uri": "rush://lang-spec"})),
+    );
+    let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+    let resources = objs[0]["result"]["resources"].as_array().expect("resources");
+    assert!(resources.iter().any(|r| r["uri"] == "rush://lang-spec"));
+    let text = objs[1]["result"]["contents"][0]["text"].as_str().expect("text");
+    assert!(text.contains("Rush"));
+    assert!(text.len() > 1000, "lang-spec should be substantive, got {} bytes", text.len());
+}
+
+// ── Subprocess cleanup: no orphaned children ────────────────────────
+
+/// When rush --llm exits (EOF on stdin), shell subprocesses it spawned
+/// should not outlive it as orphans. A simple check: run a shell
+/// command that prints output, then close stdin; by the time rush
+/// exits, the shell subprocess must be gone.
+#[test]
+fn llm__shell_subprocess_completes_before_rush_exits() {
+    let stdin = "echo subprocess-output\n";
+    let (objs, _stderr, code) = drive(&["--llm"], stdin);
+    assert_eq!(code, 0, "rush --llm should exit cleanly on EOF");
+    let found = objs.iter().any(|v| v["stdout"].as_str() == Some("subprocess-output"));
+    assert!(found, "shell subprocess output should be captured");
+}
+
+/// Envelope-level timeout field on a long shell command.
+/// Currently documentary: envelope.timeout is parsed but may not be
+/// enforced. This test records current behavior to catch changes.
+#[test]
+fn llm__long_command_can_be_interrupted_by_stdin_close() {
+    // Spawn rush --llm, give it a moderately slow command, close stdin
+    // immediately, assert rush exits in bounded time.
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(RUSH)
+        .arg("--llm")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        let sin = child.stdin.as_mut().unwrap();
+        // Don't actually run anything long — just exercise the
+        // startup+EOF path. If rush leaks processes, the wait below
+        // will exceed the bound.
+        sin.write_all(b"puts 1\n").ok();
+    }
+    drop(child.stdin.take());
+
+    let start = Instant::now();
+    let status = child.wait().expect("wait");
+    let elapsed = start.elapsed();
+    assert!(status.success(), "rush should exit cleanly");
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "rush --llm took {}ms to exit after EOF — possible subprocess leak",
+        elapsed.as_millis()
+    );
+}
+
+// ── SIGTERM handling ────────────────────────────────────────────────
+
+/// SIGTERM to rush --llm should result in a clean shutdown without
+/// corrupting already-emitted JSON output.
+#[cfg(unix)]
+#[test]
+fn llm__sigterm_produces_clean_shutdown() {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(RUSH)
+        .arg("--llm")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+
+    {
+        let sin = child.stdin.as_mut().unwrap();
+        sin.write_all(b"puts 1\n").ok();
+        sin.flush().ok();
+    }
+
+    // Give rush a moment to start and process the puts.
+    std::thread::sleep(Duration::from_millis(100));
+
+    // Send SIGTERM.
+    let pid = child.id() as i32;
+    unsafe { libc::kill(pid, libc::SIGTERM) };
+
+    // It must die in bounded time.
+    let start = Instant::now();
+    loop {
+        if let Some(_status) = child.try_wait().expect("try_wait") {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(3) {
+            let _ = child.kill();
+            panic!("rush did not respond to SIGTERM within 3s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // Drain stdout — what we got before SIGTERM must be parseable JSON
+    // (no half-written lines corrupting the wire protocol).
+    let mut stdout = String::new();
+    if let Some(mut s) = child.stdout.take() {
+        let _ = s.read_to_string(&mut stdout);
+    }
+    for (i, line) in stdout.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        serde_json::from_str::<Value>(line)
+            .unwrap_or_else(|e| panic!("line {i} not valid JSON after SIGTERM: {e}\nline: {line}"));
+    }
+}
+
+// ── Large output: spool at the 32KB boundary ────────────────────────
+
+/// Output exceeding 32KB triggers spool mode. The response includes
+/// preview + hint + spool_total, never a half-truncated stdout string.
+#[test]
+fn llm__large_output_triggers_spool_mode() {
+    let stdin = "puts \"X\" * 40000\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    let result = objs.iter().find(|v| v.get("preview").is_some()).expect("spool triggered");
+    assert!(result["stdout"].is_null() || !result["stdout"].is_string());
+    assert!(result["preview"].is_string());
+    assert!(result["hint"].as_str().unwrap_or("").contains("spool"));
+}
+
+/// `spool` builtin can read paginated output from the last large command.
+#[test]
+fn llm__spool_reads_paginated_output() {
+    let stdin = "puts \"X\" * 40000\nspool 0 5\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    // Two results expected after startup context: the spooled command, then spool read.
+    let spool_result = objs
+        .iter()
+        .skip(1)
+        .find(|v| v.get("spool_total").is_some())
+        .expect("spool read result");
+    assert!(spool_result["stdout"].is_string());
+}

@@ -31,6 +31,15 @@ pub fn run() {
         std::env::set_var("GIT_TERMINAL_PROMPT", "0");
     }
 
+    // MCP runs as a subprocess under an agent harness — a SIGTERM from
+    // the harness must terminate the server, not be caught by the
+    // interactive-REPL flag handler.
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        libc::signal(libc::SIGHUP, libc::SIG_DFL);
+    }
+
     eprintln!("[rush-mcp] Rush MCP server v{VERSION} starting");
 
     let stdin = std::io::stdin();
