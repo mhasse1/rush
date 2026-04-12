@@ -124,9 +124,9 @@ pub fn run(is_login: bool) {
         .with_highlighter(Box::new(RushHighlighter))
         .with_validator(Box::new(RushValidator))
         .with_buffer_editor(buffer_editor_cmd, temp_file)
-        .with_quick_completions(true)
+        .with_quick_completions(false)
         .with_partial_completions(true)
-        .with_immediate_completions(true)
+        .with_immediate_completions(false)
         .with_ansi_colors(true);
 
     let show_timing = config.show_timing;
