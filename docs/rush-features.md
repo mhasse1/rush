@@ -24,7 +24,7 @@ Complete feature list for Rush v0.9.x-beta.
 ### Numbers
 - `.abs`, `.round(n)`, `.to_i`, `.to_f`, `.to_s`, `.to_currency`, `.to_filesize`, `.to_percent`
 - `.times { |i| }` — iteration
-- Size literals: `1kb`, `5mb`, `2gb` (PowerShell native)
+- Size literals: `1kb`, `5mb`, `2gb`
 
 ### Arrays
 - `[1, 2, 3]` — literal
@@ -55,6 +55,14 @@ Complete feature list for Rush v0.9.x-beta.
 - `loop ... break if cond ... end`
 - `5.times { |i| }`
 - `next` (continue), `break`
+
+### Parallel & Orchestration
+- `parallel item in collection ... end` — concurrent iteration
+- `parallel(N) item in collection ... end` — limit to N threads
+- `parallel(N, timeout) item in collection ... end` — with timeout
+- `parallel! item in collection ... end` — fail-fast on error
+- `orchestrate ... task "name" do ... end ... end` — task dependency graph
+- `task "name", after: ["dep1", "dep2"] do ... end` — declare dependencies
 
 ### Functions
 - `def name(param, default = value) ... end`
@@ -89,11 +97,12 @@ Complete feature list for Rush v0.9.x-beta.
 - Comparison: `==`, `!=`, `>`, `<`, `>=`, `<=`
 - Logical: `&&`, `||`, `!`, `not`
 - Regex: `=~`, `!~`
-- Static access: `[Math]::PI`, `[IO.Path]::GetExtension(f)`
+- Ternary: `condition ? then_expr : else_expr`
+- Safe navigation: `obj&.method`
 
 ### Platform Blocks
 - `macos ... end`, `linux ... end`, `win64 ... end` — OS-conditional
-- `win32 ... end` — raw PowerShell 5.1 body
+- `win32 ... end` — 32-bit Windows conditional
 - `.arch` (x64, arm64), `.version` (OS version comparison)
 
 ---
@@ -127,6 +136,16 @@ Complete feature list for Rush v0.9.x-beta.
 - `Time.today` — midnight today
 - `24.hours`, `30.minutes`, `5.seconds`, `7.days` — durations
 - `Time.now - 24.hours` — datetime arithmetic
+
+### Ssh
+- `Ssh.run("host", "command")` — execute on remote host, returns hash `{status, exit_code, stdout, stderr, host}`
+- `Ssh.test("host")` — test connectivity, returns bool
+
+### Path
+- `Path.join("a", "b")` — cross-platform join
+- `Path.normalize(p)` — convert `\` to `/`
+- `Path.expand("~/src")` — expand tilde
+- `Path.exist?(p)`, `Path.absolute?(p)`, `Path.basename(p)`, `Path.dirname(p)`, `Path.ext(p)`
 
 ---
 
@@ -282,7 +301,7 @@ Complete feature list for Rush v0.9.x-beta.
 ### Safety
 - 4KB output limit with spooling for overflow
 - TTY blocklist: vim, nano, less, more, top, htop (with alternatives)
-- Object mode: .NET objects projected to JSON (FileInfo, Process, etc.)
+- Output spooling with `spool search` for targeted retrieval
 
 ---
 
@@ -295,11 +314,11 @@ Complete feature list for Rush v0.9.x-beta.
 
 | Category | Topics |
 |----------|--------|
-| Stdlib | `file`, `dir`, `time` |
+| Stdlib | `file`, `dir`, `time`, `ssh`, `path` |
 | Types | `strings`, `arrays`, `hashes`, `classes`, `enums` |
-| Flow | `functions`, `loops`, `control-flow`, `errors` |
+| Flow | `functions`, `loops`, `parallel`, `orchestrate`, `control-flow`, `errors` |
 | Data | `pipelines`, `pipeline-ops`, `regex`, `objectify`, `sql` |
-| Other | `platforms`, `llm-mode` |
+| Other | `platforms`, `llm-mode`, `mcp` |
 
 Topics are embedded in the binary — no external files needed. Designed for both human and LLM consumption.
 
@@ -339,6 +358,9 @@ rush                  Interactive shell (REPL)
 rush -c 'command'     Execute command and exit
 rush script.rush      Run a Rush script
 rush --llm            LLM agent mode (JSON wire protocol)
+rush --agent 'task'   Local LLM agent (Ollama + Rush)
+rush --mcp            MCP server mode (JSON-RPC over stdio)
+rush --mcp-ssh        MCP SSH gateway (multi-host)
 rush --version        Show version
 rush --help           Show help
 ```

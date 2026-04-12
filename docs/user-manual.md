@@ -12,9 +12,9 @@
 4. [The REPL](#the-repl)
 5. [Shell Features](#shell-features)
 6. [Objectify & Auto-Objectify](#objectify--auto-objectify)
-7. [Scripting Language](#scripting-language)
+7. [Scripting Language](#scripting-language) — includes [Parallel Execution](#parallel-execution), [Orchestrate](#orchestrate-task-dependencies)
 8. [Platform Blocks](#platform-blocks)
-9. [Standard Library](#standard-library)
+9. [Standard Library](#standard-library) — includes [Ssh](#ssh)
 10. [Built-in Commands](#built-in-commands)
 11. [The `sql` Command](#the-sql-command)
 12. [Built-in Variables](#built-in-variables)
@@ -916,6 +916,76 @@ break if count > 100        # Exit the loop
 }
 ```
 
+### Parallel Execution
+
+`parallel` runs loop iterations concurrently using threads:
+
+```rush
+# Basic parallel — each iteration runs in its own thread
+parallel file in Dir.list(".", :files)
+  puts File.size(file)
+end
+
+# Limit to 4 concurrent threads
+parallel(4) url in urls
+  result = $(curl -s "#{url}")
+  puts "#{url}: #{result.length} bytes"
+end
+
+# 4 workers, 30 second timeout per task
+parallel(4, 30) host in hosts
+  result = Ssh.run(host, "uptime")
+  puts "#{host}: #{result["stdout"]}"
+end
+
+# Fail-fast — stop remaining tasks on first error
+parallel! item in critical_items
+  process(item)
+end
+```
+
+Each thread gets its own copy of the environment. Output is captured per-thread and replayed after all threads complete. The block returns an array of results.
+
+### Orchestrate (Task Dependencies)
+
+`orchestrate` runs named tasks with dependency ordering. Independent tasks run concurrently; dependent tasks wait for their prerequisites:
+
+```rush
+orchestrate
+  task "build-linux" do
+    Ssh.run("trinity", "cd ~/src/app && cargo build --release")
+  end
+
+  task "build-mac" do
+    Ssh.run("rocinante", "cd ~/src/app && cargo build --release")
+  end
+
+  task "deploy", after: ["build-linux", "build-mac"] do
+    puts "both builds done, deploying..."
+    Ssh.run("trinity", "sudo cp /tmp/app /usr/local/bin/")
+  end
+
+  task "test", after: "deploy" do
+    Ssh.run("trinity", "app --self-test")
+  end
+end
+```
+
+Progress output shows which wave is running, which tasks completed, and a final summary:
+
+```
+[orchestrate] wave 1: running build-linux, build-mac (0/4)
+[orchestrate] build-mac: done
+[orchestrate] build-linux: done
+[orchestrate] wave 2: running deploy (2/4)
+[orchestrate] deploy: done
+[orchestrate] wave 3: running test (3/4)
+[orchestrate] test: done
+[orchestrate] complete: 4/4 tasks in 3 wave(s)
+```
+
+Circular dependencies are detected and reported. The block returns a hash mapping task names to their results.
+
 ### Functions
 
 ```rush
@@ -1489,6 +1559,43 @@ next_week = Time.now + 7.days
 timeout = 30.minutes + 45.seconds
 ```
 
+### Ssh
+
+```rush
+Ssh.run("host", "command")    # Execute command on remote host → hash
+Ssh.test("host")              # Test connectivity → true/false
+```
+
+`Ssh.run` returns a hash with structured results:
+
+```rush
+result = Ssh.run("web-prod", "df -h /")
+puts result["status"]         # "success" or "error"
+puts result["exit_code"]      # 0 on success
+puts result["stdout"]         # command output
+puts result["stderr"]         # error output
+puts result["host"]           # "web-prod"
+```
+
+**Examples:**
+
+```rush
+# Check uptime across multiple hosts
+parallel host in ["web1", "web2", "web3"]
+  r = Ssh.run(host, "uptime")
+  puts "#{host}: #{r["stdout"]}"
+end
+
+# Conditional execution
+if Ssh.test("deploy-target")
+  Ssh.run("deploy-target", "cd /app && git pull && systemctl restart app")
+else
+  warn "deploy-target unreachable"
+end
+```
+
+Requires SSH key-based authentication (BatchMode=yes). ConnectTimeout is 10 seconds for `run`, 5 seconds for `test`.
+
 ---
 
 ## Built-in Commands
@@ -1724,6 +1831,25 @@ The agent:
 
 **Current limitations:**
 - No approval mode yet — the agent executes commands directly.
+
+#### Local LLM Agent (`rush --agent`)
+
+`rush --agent` runs a Claude Code-style agent using a local LLM (via Ollama) instead of a cloud API. It spawns `rush --llm` as the execution layer and connects to a local Ollama instance:
+
+```rush
+rush --agent "find all log files over 100MB and compress them"
+rush --agent "check disk usage on all hosts and report"
+```
+
+**Configuration via environment variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama API endpoint |
+| `RUSH_AGENT_MODEL` | `qwen3:32b` | Model name |
+| `RUSH_BIN` | `rush` | Path to Rush binary |
+
+The agent receives the Rush language spec on first connection, generates Rush commands, and iterates on structured JSON results. This is the same wire protocol used by MCP and `rush --llm`.
 
 ### Hot Reload
 

@@ -1009,4 +1009,152 @@ mod tests {
             }
         }
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Parallel execution (#151)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn parallel_basic() {
+        let (exit, lines) = run("parallel x in [1,2,3]\n  puts x\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines.len(), 3);
+        // All values present (order may vary)
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["1", "2", "3"]);
+    }
+
+    #[test]
+    fn parallel_string_interpolation() {
+        let (exit, lines) = run("parallel name in [\"a\",\"b\"]\n  puts \"hi #{name}\"\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines.len(), 2);
+        let mut sorted = lines.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["hi a", "hi b"]);
+    }
+
+    #[test]
+    fn parallel_empty_collection() {
+        let (exit, lines) = run("parallel x in []\n  puts x\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines.len(), 0);
+    }
+
+    #[test]
+    fn parallel_single_item() {
+        let (exit, lines) = run("parallel x in [42]\n  puts x * 2\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines, vec!["84"]);
+    }
+
+    #[test]
+    fn parallel_with_range() {
+        let (exit, lines) = run("parallel x in (1..5)\n  puts x\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines.len(), 5);
+        let mut sorted: Vec<i64> = lines.iter().map(|l| l.parse().unwrap()).collect();
+        sorted.sort();
+        assert_eq!(sorted, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn parallel_body_computation() {
+        let (exit, lines) = run("parallel x in [2,3,5]\n  puts x * x\nend");
+        assert_eq!(exit, 0);
+        let mut sorted: Vec<i64> = lines.iter().map(|l| l.parse().unwrap()).collect();
+        sorted.sort();
+        assert_eq!(sorted, vec![4, 9, 25]);
+    }
+
+    #[test]
+    fn parallel_with_max_workers() {
+        let (exit, lines) = run("parallel(2) x in [10,20,30,40]\n  puts x\nend");
+        assert_eq!(exit, 0);
+        let mut sorted: Vec<i64> = lines.iter().map(|l| l.parse().unwrap()).collect();
+        sorted.sort();
+        assert_eq!(sorted, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn parallel_fail_fast() {
+        // parallel! with no errors should work normally
+        let (exit, lines) = run("parallel! x in [1,2,3]\n  puts x\nend");
+        assert_eq!(exit, 0);
+        assert_eq!(lines.len(), 3);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Orchestrate (#151)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn orchestrate_basic() {
+        let (exit, lines) = run(
+            "orchestrate\n  task \"a\" do\n    puts \"A\"\n  end\n  task \"b\" do\n    puts \"B\"\n  end\nend"
+        );
+        assert_eq!(exit, 0);
+        // Filter out progress lines
+        let user_lines: Vec<&str> = lines.iter()
+            .filter(|l| !l.starts_with("[orchestrate]"))
+            .map(|s| s.as_str()).collect();
+        assert_eq!(user_lines.len(), 2);
+        let mut sorted = user_lines.to_vec();
+        sorted.sort();
+        assert_eq!(sorted, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn orchestrate_dependencies() {
+        let (exit, lines) = run(
+            "orchestrate\n  task \"first\" do\n    puts \"1\"\n  end\n  task \"second\", after: \"first\" do\n    puts \"2\"\n  end\nend"
+        );
+        assert_eq!(exit, 0);
+        let user_lines: Vec<&str> = lines.iter()
+            .filter(|l| !l.starts_with("[orchestrate]"))
+            .map(|s| s.as_str()).collect();
+        // "1" must come before "2" due to dependency
+        assert_eq!(user_lines, vec!["1", "2"]);
+    }
+
+    #[test]
+    fn orchestrate_multi_deps() {
+        let (exit, lines) = run(
+            "orchestrate\n  task \"a\" do\n    puts \"A\"\n  end\n  task \"b\" do\n    puts \"B\"\n  end\n  task \"c\", after: [\"a\", \"b\"] do\n    puts \"C\"\n  end\nend"
+        );
+        assert_eq!(exit, 0);
+        let user_lines: Vec<&str> = lines.iter()
+            .filter(|l| !l.starts_with("[orchestrate]"))
+            .map(|s| s.as_str()).collect();
+        assert_eq!(user_lines.len(), 3);
+        // C must be last
+        assert_eq!(user_lines[2], "C");
+    }
+
+    #[test]
+    fn orchestrate_progress_output() {
+        let (exit, lines) = run(
+            "orchestrate\n  task \"x\" do\n    puts \"done\"\n  end\nend"
+        );
+        assert_eq!(exit, 0);
+        let progress: Vec<&str> = lines.iter()
+            .filter(|l| l.starts_with("[orchestrate]"))
+            .map(|s| s.as_str()).collect();
+        // Should have: wave 1 start, task done, complete
+        assert!(progress.len() >= 3, "expected progress lines: {progress:?}");
+        assert!(progress[0].contains("wave 1"));
+        assert!(progress.last().unwrap().contains("complete"));
+    }
+
+    #[test]
+    fn orchestrate_empty() {
+        let (exit, lines) = run("orchestrate\nend");
+        assert_eq!(exit, 0);
+        // No tasks = no progress output
+        let user_lines: Vec<&str> = lines.iter()
+            .filter(|l| !l.starts_with("[orchestrate]"))
+            .map(|s| s.as_str()).collect();
+        assert_eq!(user_lines.len(), 0);
+    }
 }

@@ -54,6 +54,9 @@ pub enum TokenType {
     Ps,
     Ps5,
     Plugin,
+    Parallel,
+    Orchestrate,
+    Task,
 
     // Operators
     Assign,       // =

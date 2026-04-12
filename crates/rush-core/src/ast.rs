@@ -54,6 +54,24 @@ pub enum Node {
         body: Vec<Node>,
     },
 
+    /// `parallel variable in collection ... end` — concurrent iteration
+    /// Optional max_workers: `parallel(4) x in items ... end`
+    /// Optional timeout: `parallel(4, 10) x in items` — 4 workers, 10s timeout
+    /// fail_fast: `parallel! x in items` — stop on first error
+    Parallel {
+        variable: String,
+        collection: Box<Node>,
+        body: Vec<Node>,
+        max_workers: Option<usize>,
+        timeout_secs: Option<u64>,
+        fail_fast: bool,
+    },
+
+    /// `orchestrate ... end` — task dependency graph with concurrent execution
+    Orchestrate {
+        tasks: Vec<OrchestrateTask>,
+    },
+
     /// `while condition ... end` (also `until`, `loop`)
     While {
         condition: Box<Node>,
@@ -249,6 +267,14 @@ pub enum Node {
     ShellPassthrough {
         raw_command: String,
     },
+}
+
+/// A task within an orchestrate block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrchestrateTask {
+    pub name: String,
+    pub after: Vec<String>,
+    pub body: Vec<Node>,
 }
 
 /// Case statement terminator type.

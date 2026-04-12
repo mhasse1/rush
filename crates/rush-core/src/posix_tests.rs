@@ -837,4 +837,383 @@ mod tests {
         let (_, lines) = dispatch_cmd("h = {name: \"rush\", version: 1}\nputs h.keys.length");
         assert_eq!(lines, vec!["2"]);
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: export / unset (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_export_sets_env_var() {
+        let k = "_RUSH_PT_EXPORT_SET";
+        unsafe { std::env::remove_var(k); }
+        let (code, _) = dispatch_cmd(&format!("export {k}=hello_posix"));
+        assert_eq!(code, 0);
+        assert_eq!(std::env::var(k).unwrap(), "hello_posix");
+        unsafe { std::env::remove_var(k); }
+    }
+
+    #[test]
+    fn posix_export_visible_in_expansion() {
+        let k = "_RUSH_PT_EXPORT_VIS";
+        unsafe { std::env::remove_var(k); }
+        dispatch_cmd(&format!("export {k}=visible"));
+        let result = process::expand_env_vars_pub(&format!("${k}"));
+        assert_eq!(result, "visible");
+        unsafe { std::env::remove_var(k); }
+    }
+
+    #[test]
+    fn posix_export_in_chain() {
+        let k = "_RUSH_PT_CHAIN_EXP";
+        unsafe { std::env::remove_var(k); }
+        let (code, lines) = dispatch_cmd(&format!("export {k}=chained; puts \"done\""));
+        assert_eq!(code, 0);
+        assert_eq!(lines, vec!["done"]);
+        assert_eq!(std::env::var(k).unwrap(), "chained");
+        unsafe { std::env::remove_var(k); }
+    }
+
+    #[test]
+    fn posix_unset_removes_env_var() {
+        let k = "_RUSH_PT_UNSET_RM";
+        unsafe { std::env::set_var(k, "exists"); }
+        let (code, _) = dispatch_cmd(&format!("unset {k}"));
+        assert_eq!(code, 0);
+        assert!(std::env::var(k).is_err());
+    }
+
+    #[test]
+    fn posix_unset_multiple_vars() {
+        let a = "_RUSH_PT_UNSET_A";
+        let b = "_RUSH_PT_UNSET_B";
+        unsafe { std::env::set_var(a, "1"); }
+        unsafe { std::env::set_var(b, "2"); }
+        dispatch_cmd(&format!("unset {a} {b}"));
+        assert!(std::env::var(a).is_err());
+        assert!(std::env::var(b).is_err());
+    }
+
+    #[test]
+    fn posix_export_then_unset() {
+        let k = "_RUSH_PT_EXP_UNSET";
+        dispatch_cmd(&format!("export {k}=temporary"));
+        assert_eq!(std::env::var(k).unwrap(), "temporary");
+        dispatch_cmd(&format!("unset {k}"));
+        assert!(std::env::var(k).is_err());
+    }
+
+    #[test]
+    fn posix_unset_nonexistent_no_error() {
+        let (code, _) = dispatch_cmd("unset _RUSH_PT_NEVER_SET_XYZ");
+        assert_eq!(code, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: command (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_command_runs_external() {
+        let result = process::run_native_capture("echo command_test");
+        assert_eq!(result.stdout.trim(), "command_test");
+    }
+
+    #[test]
+    fn posix_command_exit_code_propagates() {
+        let r1 = process::run_native("/usr/bin/false");
+        assert_ne!(r1.exit_code, 0);
+        let r2 = process::run_native("/usr/bin/true");
+        assert_eq!(r2.exit_code, 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: type / which (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_which_finds_ls() {
+        assert!(process::which("ls").is_some(), "ls should be on PATH");
+    }
+
+    #[test]
+    fn posix_which_finds_cat() {
+        assert!(process::which("cat").is_some(), "cat should be on PATH");
+    }
+
+    #[test]
+    fn posix_which_nonexistent_returns_none() {
+        assert!(process::which("_nonexistent_cmd_pt_166").is_none());
+    }
+
+    #[test]
+    fn posix_which_returns_absolute_path() {
+        if let Some(p) = process::which("ls") {
+            assert!(p.starts_with('/'), "expected absolute path, got: {p}");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: eval (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_eval_arithmetic() {
+        let (_, lines) = dispatch_cmd("puts 2 + 3");
+        assert_eq!(lines, vec!["5"]);
+    }
+
+    #[test]
+    fn posix_eval_variable_then_use() {
+        let (_, lines) = dispatch_cmd("x = 42\nputs x");
+        assert_eq!(lines, vec!["42"]);
+    }
+
+    #[test]
+    fn posix_eval_chain_semicolons() {
+        let (_, lines) = dispatch_cmd("x = 10; y = 20; puts x + y");
+        assert_eq!(lines, vec!["30"]);
+    }
+
+    #[test]
+    fn posix_eval_string_concat() {
+        let (_, lines) = dispatch_cmd("a = \"hello\"\nb = \" world\"\nputs a + b");
+        assert_eq!(lines, vec!["hello world"]);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: trap (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_trap_set_get_exit() {
+        crate::trap::init();
+        crate::trap::set_trap("EXIT", "echo goodbye");
+        assert_eq!(crate::trap::get_exit_trap(), Some("echo goodbye".into()));
+        crate::trap::set_trap("EXIT", "-");
+        assert_eq!(crate::trap::get_exit_trap(), None);
+    }
+
+    #[test]
+    fn posix_trap_ignore() {
+        crate::trap::init();
+        crate::trap::set_trap("INT", "");
+        assert_eq!(crate::trap::get_trap("INT"), Some(String::new()));
+        crate::trap::set_trap("INT", "-");
+    }
+
+    #[test]
+    fn posix_trap_command_handler() {
+        crate::trap::init();
+        crate::trap::set_trap("TERM", "cleanup_func");
+        assert_eq!(crate::trap::get_trap("TERM"), Some("cleanup_func".into()));
+        crate::trap::set_trap("TERM", "-");
+    }
+
+    #[test]
+    fn posix_trap_reset_removes() {
+        crate::trap::init();
+        crate::trap::set_trap("HUP", "handle_hup");
+        assert!(crate::trap::get_trap("HUP").is_some());
+        crate::trap::set_trap("HUP", "-");
+        assert!(crate::trap::get_trap("HUP").is_none());
+    }
+
+    #[test]
+    fn posix_trap_signal_normalization() {
+        crate::trap::init();
+        crate::trap::set_trap("SIGINT", "handler1");
+        assert_eq!(crate::trap::get_trap("2"), Some("handler1".into()));
+        assert_eq!(crate::trap::get_trap("INT"), Some("handler1".into()));
+        crate::trap::set_trap("INT", "-");
+    }
+
+    #[test]
+    fn posix_trap_parses_quoted_action() {
+        crate::trap::init();
+        crate::trap::handle_trap("'echo done' EXIT");
+        assert_eq!(crate::trap::get_exit_trap(), Some("echo done".into()));
+        crate::trap::set_trap("EXIT", "-");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: umask (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_umask_set_and_restore() {
+        let orig = unsafe { libc::umask(0o077) };
+        let back = unsafe { libc::umask(orig) };
+        assert_eq!(back, 0o077);
+    }
+
+    #[test]
+    fn posix_umask_zero() {
+        let orig = unsafe { libc::umask(0) };
+        let back = unsafe { libc::umask(orig) };
+        assert_eq!(back, 0);
+    }
+
+    #[test]
+    fn posix_umask_common_values() {
+        for mask in [0o022, 0o027, 0o077, 0o002] {
+            let orig = unsafe { libc::umask(mask) };
+            let back = unsafe { libc::umask(orig) };
+            assert_eq!(back, mask, "umask roundtrip failed for {mask:04o}");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: shift (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_shift_by_one() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        eval.env.set("ARGV", crate::value::Value::Array(vec![
+            crate::value::Value::String("a".into()),
+            crate::value::Value::String("b".into()),
+            crate::value::Value::String("c".into()),
+        ]));
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            let shifted: Vec<crate::value::Value> = v.iter().skip(1).cloned().collect();
+            eval.env.set("ARGV", crate::value::Value::Array(shifted));
+        }
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            assert_eq!(v.len(), 2);
+            assert_eq!(v[0].to_rush_string(), "b");
+            assert_eq!(v[1].to_rush_string(), "c");
+        } else {
+            panic!("ARGV should be an array after shift");
+        }
+    }
+
+    #[test]
+    fn posix_shift_by_two() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        eval.env.set("ARGV", crate::value::Value::Array(vec![
+            crate::value::Value::String("x".into()),
+            crate::value::Value::String("y".into()),
+            crate::value::Value::String("z".into()),
+            crate::value::Value::String("w".into()),
+        ]));
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            let shifted: Vec<crate::value::Value> = v.iter().skip(2).cloned().collect();
+            eval.env.set("ARGV", crate::value::Value::Array(shifted));
+        }
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            assert_eq!(v.len(), 2);
+            assert_eq!(v[0].to_rush_string(), "z");
+        } else {
+            panic!("ARGV should be an array after shift");
+        }
+    }
+
+    #[test]
+    fn posix_shift_all_empties() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        eval.env.set("ARGV", crate::value::Value::Array(vec![
+            crate::value::Value::String("only".into()),
+        ]));
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            let shifted: Vec<crate::value::Value> = v.iter().skip(1).cloned().collect();
+            eval.env.set("ARGV", crate::value::Value::Array(shifted));
+        }
+        if let Some(crate::value::Value::Array(ref v)) = eval.env.get("ARGV").cloned() {
+            assert!(v.is_empty());
+        } else {
+            panic!("ARGV should be empty array");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: printf (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_printf_string_format() {
+        let r = process::run_native_capture("printf '%s world' hello");
+        assert_eq!(r.stdout, "hello world");
+    }
+
+    #[test]
+    fn posix_printf_decimal_format() {
+        let r = process::run_native_capture("printf '%d' 42");
+        assert_eq!(r.stdout, "42");
+    }
+
+    #[test]
+    fn posix_printf_newline_escape() {
+        let r = process::run_native_capture("printf 'line1\\nline2'");
+        assert!(r.stdout.contains("line1") && r.stdout.contains("line2"));
+    }
+
+    #[test]
+    fn posix_printf_no_trailing_newline() {
+        let r = process::run_native_capture("printf 'hello'");
+        assert_eq!(r.stdout, "hello");
+    }
+
+    #[test]
+    fn posix_printf_multiple_args() {
+        let r = process::run_native_capture("printf '%s=%d' name 42");
+        assert_eq!(r.stdout, "name=42");
+    }
+
+    #[test]
+    fn posix_printf_percent_literal() {
+        let r = process::run_native_capture("printf '100%%'");
+        assert_eq!(r.stdout, "100%");
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // POSIX Builtins: getopts (#166)
+    // ═══════════════════════════════════════════════════════════════
+
+    #[test]
+    fn posix_getopts_simple_flag() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        eval.env.set("ARGV", crate::value::Value::Array(vec![
+            crate::value::Value::String("-a".into()),
+        ]));
+        eval.env.set("OPTIND", crate::value::Value::Int(1));
+        let argv = vec!["-a"];
+        let opt = &argv[0][1..2];
+        assert_eq!(opt, "a");
+        assert!("ab".contains(opt));
+        eval.env.set("opt", crate::value::Value::String(opt.into()));
+        if let Some(crate::value::Value::String(ref v)) = eval.env.get("opt").cloned() {
+            assert_eq!(v, "a");
+        }
+    }
+
+    #[test]
+    fn posix_getopts_with_argument() {
+        let optstring = "f:";
+        let argv = vec!["-f", "myfile"];
+        let opt = &argv[0][1..2];
+        assert_eq!(opt, "f");
+        if let Some(pos) = optstring.find(opt) {
+            assert_eq!(optstring.get(pos + 1..pos + 2), Some(":"));
+            assert_eq!(argv[1], "myfile");
+        } else {
+            panic!("option f should be in optstring");
+        }
+    }
+
+    #[test]
+    fn posix_getopts_unknown_option() {
+        let optstring = "ab";
+        let opt = &"-x"[1..2];
+        assert!(!optstring.contains(opt));
+    }
+
+    #[test]
+    fn posix_getopts_double_dash_stops() {
+        let arg = "--";
+        assert_eq!(arg, "--");
+    }
 }

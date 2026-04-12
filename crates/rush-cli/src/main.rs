@@ -73,6 +73,7 @@ fn main() {
         println!("  rush script.rush [args]        Execute Rush script file");
         println!("  rush -c 'command'              Execute command and exit");
         println!("  rush --llm                     LLM wire protocol mode (JSON I/O)");
+        println!("  rush --agent 'task'            AI agent mode (local LLM + Rush)");
         println!("  rush --mcp                     MCP server mode (JSON-RPC over stdio)");
         println!("  rush --mcp-ssh                 MCP SSH gateway (dynamic multi-host)");
         println!("  rush install mcp --claude      Install MCP servers into Claude");
@@ -115,6 +116,27 @@ fn main() {
         return;
     }
 
+    // rush --agent: AI agent mode
+    if args.get(1).is_some_and(|a| a == "--agent") {
+        let task_args: Vec<&str> = args[2..].iter().map(|s| s.as_str()).collect();
+        if task_args.is_empty() {
+            eprintln!("Usage: rush --agent 'task description'");
+            std::process::exit(1);
+        }
+        let rush_bin = std::env::current_exe().unwrap_or_else(|_| "rush".into());
+        let status = std::process::Command::new("rush-agent")
+            .args(&task_args)
+            .env("RUSH_BIN", rush_bin)
+            .status();
+        match status {
+            Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+            Err(_) => {
+                eprintln!("Error: rush-agent binary not found. Build it with: cargo build -p rush-agent");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // rush --mcp: MCP server mode (JSON-RPC 2.0 over stdio)
     if args.get(1).is_some_and(|a| a == "--mcp") {
         rush_core::mcp::run();
@@ -143,7 +165,11 @@ fn main() {
             let mut evaluator = Evaluator::new(&mut output);
             builtins::inject_env_vars(is_login);
             builtins::inject_builtin_vars(&mut evaluator);
-            run_line(&mut evaluator, cmd);
+            if cmd.contains('\n') {
+                builtins::run_script(&mut evaluator, cmd, "-c");
+            } else {
+                run_line(&mut evaluator, cmd);
+            }
             std::process::exit(evaluator.exit_code);
         }
         return;

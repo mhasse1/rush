@@ -1,9 +1,10 @@
-# Rush (Rust) — Feature Reference
+# Rush — Feature Reference
 
-**Version:** 0.1.0 (Rust port)
-**Tests:** 457
-**Binary:** 5.4MB (vs 257MB .NET)
-**Startup:** ~10ms (vs ~800ms .NET)
+**Version:** 0.1.0
+**Engine:** Native Rust interpreter (Lexer → Parser → AST → Evaluator)
+**Tests:** 678
+**Binary:** ~8MB (single static binary, no runtime dependencies)
+**Startup:** ~10ms
 
 ---
 
@@ -93,6 +94,11 @@
 - `if/elsif/else/end`, `unless/end`
 - `while/end`, `until/end`, `loop/end`
 - `for x in collection...end` (also `for x...end` iterates ARGV)
+- `parallel x in collection...end` — concurrent iteration
+- `parallel(N) x in items...end` — worker pool limit
+- `parallel(N, timeout) x in items...end` — with timeout
+- `parallel! x in items...end` — fail-fast on error
+- `orchestrate...task...end` — dependency graph with concurrent waves
 - `case/when/else/end` with `;&` fallthrough, `;;&` continue
 - Postfix: `puts "x" if condition`, `break if done`
 - `break`, `next`/`continue`, `return`
@@ -141,6 +147,14 @@
 - `Time.now`, `Time.utc_now`, `Time.today`, `Time.epoch`
 - Duration literals: `2.hours`, `30.minutes`, `1.day`
 
+### Ssh
+- `Ssh.run("host", "command")` — execute on remote, returns hash `{status, exit_code, stdout, stderr, host}`
+- `Ssh.test("host")` — connectivity test, returns bool
+
+### Path
+- `Path.join`, `Path.normalize`, `Path.expand`, `Path.exist?`
+- `Path.basename`, `Path.dirname`, `Path.ext`, `Path.absolute?`, `Path.sep`
+
 ---
 
 ## Builtins
@@ -169,7 +183,7 @@
 - `reload`, `reload --hard`
 
 ### Information
-- `help [topic]` — 12 help topics
+- `help [topic]` — 19 help topics
 - `which/type cmd`
 - `command [-v] cmd`
 
@@ -224,8 +238,16 @@ JSON-RPC 2.0 over stdio:
 ## AI Integration
 
 - `ai "question"` — streaming responses
+- `ai --agent "task"` — autonomous agent mode
 - Providers: Anthropic, OpenAI, Gemini, Ollama
 - `--provider`/`-p`, `--model`/`-m` overrides
+
+## Agent Mode (`rush --agent`)
+
+- Local LLM agent (Ollama) with Rush execution layer
+- Spawns `rush --llm`, talks to Ollama `/api/chat`
+- Auto-injects Rush language spec on first connection
+- Configurable: `OLLAMA_HOST`, `RUSH_AGENT_MODEL`, `RUSH_BIN`
 
 ---
 

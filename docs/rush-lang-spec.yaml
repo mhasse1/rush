@@ -59,6 +59,24 @@ loops:
   times: "5.times { |i| puts i }"
   control: { next: "continue (preferred)", break: "break" }
 
+# ── PARALLEL & ORCHESTRATION ─────────────────────────────────────
+parallel:
+  basic: "parallel x in collection ... end  (concurrent iteration)"
+  workers: "parallel(4) x in items ... end  (limit to 4 threads)"
+  timeout: "parallel(4, 30) x in items ... end  (4 workers, 30s timeout)"
+  fail_fast: "parallel! x in items ... end  (stop on first error)"
+orchestrate:
+  syntax: |
+    orchestrate
+      task "name" do ... end
+      task "name", after: "dep" do ... end
+      task "name", after: ["dep1", "dep2"] do ... end
+    end
+  behavior: "runs independent tasks concurrently, respects dependency order"
+ssh:
+  run: 'Ssh.run("host", "command")  → {status:, exit_code:, stdout:, stderr:, host:}'
+  test: 'Ssh.test("host")  → true/false'
+
 # ── RANGES ───────────────────────────────────────────────────────
 ranges:
   inclusive: "1..5  (yields 1,2,3,4,5)"
@@ -287,14 +305,19 @@ posix:
             "trap 'cleanup' EXIT — run on exit"]
   redirects: ["cmd > file", "cmd >> file", "cmd 2>&1", "cmd < file"]
 
+# ── STDLIB: Ssh ──────────────────────────────────────────────────
+ssh_stdlib:
+  - 'Ssh.run("host", "command") — execute command on remote host → hash {status, exit_code, stdout, stderr, host}'
+  - 'Ssh.test("host") — test connectivity → bool'
+
 # ── HELP SYSTEM ────────────────────────────────────────────────
 help:
   command: "help [topic]"
   no_args: "Lists available topics"
-  topics: [file, dir, time, strings, arrays, hashes, classes, enums,
-           functions, loops, control-flow, pipelines, regex, errors,
-           platforms, sql, pipeline-ops, llm-mode, mcp, objectify,
-           alias, path, export, set, cd, init,
+  topics: [file, dir, time, ssh, strings, arrays, hashes, classes, enums,
+           functions, loops, parallel, orchestrate, control-flow, pipelines,
+           regex, errors, platforms, sql, pipeline-ops, llm-mode, mcp,
+           objectify, alias, path, export, set, cd, init,
            config, xref, known-issues]
   key_topic: "xref — bash/Unix → Rush cross-reference. Use BEFORE writing shell commands."
   note: "Use help <topic> for detailed syntax, methods, examples, and rules."
@@ -310,13 +333,25 @@ example: |
   end
 
   puts "deploying #{branch} to #{target}..."
-  git pull origin main
-  npm run build
 
-  if target == "production"
-    rsync -avz --delete dist/ prod.example.com:/var/www/
-  else
-    rsync -avz --delete dist/ staging.example.com:/var/www/
+  # Build on all hosts in parallel (2 at a time, 5 min timeout)
+  hosts = ["web1", "web2", "web3"]
+  parallel(2, 300) host in hosts
+    result = Ssh.run(host, "cd /app && git pull && cargo build --release")
+    puts "#{host}: #{result["status"]}"
+  end
+
+  # Or use orchestrate for dependency-ordered tasks
+  orchestrate
+    task "build" do
+      npm run build
+    end
+    task "test", after: "build" do
+      npm test
+    end
+    task "deploy", after: "test" do
+      rsync -avz --delete dist/ prod.example.com:/var/www/
+    end
   end
 
   puts "done.".green

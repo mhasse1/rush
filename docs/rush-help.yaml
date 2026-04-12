@@ -344,6 +344,98 @@ loops:
   compound: ["+=", "-=", "*=", "/="]
   note: "No ++ or -- operators"
 
+parallel:
+  summary: "Concurrent iteration — execute loop body in parallel threads"
+  syntax:
+    basic: |
+      parallel item in collection
+        puts item
+      end
+    workers: |
+      # Limit to 4 concurrent threads
+      parallel(4) item in items
+        process(item)
+      end
+    timeout: |
+      # 4 workers, 30 second timeout per task
+      parallel(4, 30) item in items
+        slow_operation(item)
+      end
+    fail_fast: |
+      # Stop all tasks on first error
+      parallel! item in items
+        must_succeed(item)
+      end
+  notes:
+    - "Each iteration runs in its own thread with a cloned environment"
+    - "Output is captured per-thread and replayed in order after completion"
+    - "Returns an array of results (last expression from each iteration)"
+    - "break/next affect only the current iteration's thread"
+  examples:
+    - description: "Parallel SSH across hosts"
+      code: |
+        parallel host in ["web1", "web2", "web3"]
+          result = Ssh.run(host, "uptime")
+          puts "#{host}: #{result["stdout"]}"
+        end
+
+orchestrate:
+  summary: "Task dependency graph with concurrent execution"
+  syntax:
+    basic: |
+      orchestrate
+        task "build" do
+          npm run build
+        end
+        task "test", after: "build" do
+          npm test
+        end
+      end
+    multi_deps: |
+      orchestrate
+        task "build-linux" do
+          Ssh.run("linux-host", "cargo build")
+        end
+        task "build-mac" do
+          Ssh.run("mac-host", "cargo build")
+        end
+        task "deploy", after: ["build-linux", "build-mac"] do
+          puts "deploying..."
+        end
+      end
+  notes:
+    - "Tasks with no dependencies run concurrently"
+    - "Tasks with after: wait for all listed dependencies to complete"
+    - "Execution proceeds in waves — each wave runs all ready tasks"
+    - "Progress output shows wave number, running tasks, and completion count"
+    - "Returns a hash mapping task names to their results"
+    - "Circular dependencies are detected and reported"
+
+ssh:
+  summary: "Remote command execution via SSH"
+  methods:
+    - name: 'Ssh.run(host, command)'
+      returns: "hash {status, exit_code, stdout, stderr, host}"
+      example: |
+        result = Ssh.run("web-prod", "uptime")
+        puts result["stdout"]
+        if result["status"] == "success"
+          puts "OK"
+        end
+
+    - name: 'Ssh.test(host)'
+      returns: "bool"
+      example: |
+        if Ssh.test("web-prod")
+          puts "host is reachable"
+        end
+
+  notes:
+    - "Uses BatchMode=yes (no password prompts — requires key-based auth)"
+    - "ConnectTimeout is 10s for run, 5s for test"
+    - "Works inside parallel blocks for multi-host operations"
+    - "Returns structured hash, not raw text — no parsing needed"
+
 control-flow:
   summary: "Conditionals and branching"
   if: |
@@ -505,25 +597,18 @@ platforms:
         puts "Windows 11+"
       end
 
-  win32:
-    note: "win32 body targets 32-bit Windows APIs"
-    purpose: "32-bit OLEDB/ODBC drivers (ACE, Business Central)"
-
   rules:
     - "Non-matching platform blocks are silently skipped"
-    - "macos/linux/win64 contain normal Rush code"
-    - "win32 targets 32-bit Windows"
+    - "macos/linux/win64/win32 contain normal Rush code"
     - "isssh runs Rush code only when connected via SSH"
-    - "//server/share paths translate to native UNC on Windows (forward slashes always)"
+    - "Use platform blocks for OS-specific paths, commands, or behavior"
 
   unc_paths:
     ssh: "//ssh:host/path — remote file operations via SSH (all platforms)"
-    smb: "//server/share/path — Windows SMB network shares (Windows only)"
-    note: "Rush always uses forward slashes. //server/share → \\\\server\\share on Windows."
+    smb: "//server/share/path — SMB network shares"
     examples:
       - "cd //fileserver/shared/docs"
       - "ls //nas/backups/2026/"
-      - "cp //server/share/file.txt ./"
 
 alias:
   summary: "Command aliases — session-only by default, --save to persist"
@@ -545,14 +630,13 @@ alias:
     - "alias g='git'"
     - "alias dc='docker compose'"
     - "alias --save k='kubectl'"
-    - "alias --save vi='\"C:/Program Files/Neovim/bin/nvim.exe\"'  # Windows: spaces in path"
+    - "alias --save vi='/opt/neovim/bin/nvim'"
 
   rules:
     - "Session-only aliases register in the command translator immediately"
     - "Saved aliases persist in config.json and survive restarts"
     - "Aliases expand before command execution — they work with pipes and flags"
     - "Don't put alias commands in init.rush — they belong in config.json via --save"
-    - "Windows paths with spaces: wrap the path in inner double quotes inside outer single quotes"
 
 path:
   summary: "PATH management — add, remove, check, dedupe, edit"
@@ -659,11 +743,6 @@ cd:
     - "cd ~mark                    — another user's home"
     - 'cd "My Folder"             — quoted path with spaces'
     - "cd My\\ Folder              — backslash-escaped spaces"
-
-  windows: |
-    cd //server/share             — Windows SMB (Rush translates to \\server\share)
-    cd C:/Users                   — forward slashes work on Windows
-    cd z:                         — drive letter
 
   features:
     - "Updates working directory for all child processes"
@@ -1045,9 +1124,6 @@ known-issues:
       reason: "Builtins write directly to console, bypassing the pipeline"
       workaround: "history | distinct works (special-cased). Other builtins not yet pipeable."
 
-    - problem: "wc not available on Windows without coreutils"
-      workaround: "Install uutils (winget install uutils.coreutils) or use | count"
-
     - problem: "Variables matching builtin names (dirs, jobs, fg) can't be assigned"
       reason: "IsShellBuiltin() rejects them during triage before assignment is detected"
       workaround: "Use a different variable name (my_dirs, dir_list, etc.)"
@@ -1061,22 +1137,7 @@ known-issues:
       reason: "Block bodies are parsed as Rush — raw shell commands need quoting or variables"
       workaround: "Assign shell output to variables: result = $(shell command)"
 
-    - problem: "Single-file binary on Linux self-extracts on first run (~2-3s delay)"
-      reason: "Bundled libraries extracted to ~/.local/share/rush/ on first execution"
-      workaround: "Normal — subsequent launches are instant. Pre-warm by running rush --version after install"
-
-  windows_specific:
-    - problem: "ls output looks different from Unix on Windows"
-      reason: "Without coreutils, Windows has no native ls"
-      workaround: "Install uutils: winget install uutils.coreutils (or deploy zip to PATH)"
-      note: "Rush auto-shims coreutils if detected, or add individual binaries to PATH"
-
-    - problem: "Some Unix commands missing on Windows (grep, find, head, tail)"
-      reason: "Windows has no native GNU tools"
-      workaround: "Install uutils or Git for Windows. Rush auto-detects and configures on startup."
-
   rules:
     - "When hitting a known issue, use the workaround — don't try to debug the underlying cause"
     - "File issues at https://github.com/mhasse1/rush/issues for new bugs"
-    - "Use | count, | where, | first instead of wc, grep, head for reliable cross-platform behavior"
-    - "Prefer Rush stdlib (File/Dir/Time) over shell commands when structured output matters"
+    - "Prefer Rush stdlib (File/Dir/Time) and pipeline operators over shell commands for portability"

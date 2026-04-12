@@ -15,7 +15,8 @@ pub fn is_rush_syntax(input: &str) -> bool {
 
     // Block-start keywords
     let block_keywords = [
-        "if", "elsif", "else", "unless", "while", "until", "for", "loop",
+        "if", "elsif", "else", "unless", "while", "until", "for",
+        "parallel", "parallel!", "orchestrate", "loop",
         "def", "class", "enum", "case", "match", "try", "begin",
         "macos", "linux", "win64", "win32", "isssh",
         "do",

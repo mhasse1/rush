@@ -26,7 +26,7 @@ pub struct ClassDef {
 }
 
 /// Scoped variable environment with lexical parent chain.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Environment {
     scopes: Vec<HashMap<String, Value>>,
     pub functions: HashMap<String, Function>,

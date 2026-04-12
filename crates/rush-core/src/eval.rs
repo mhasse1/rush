@@ -285,6 +285,344 @@ impl<'a> Evaluator<'a> {
                 Ok(Value::Nil)
             }
 
+            Node::Parallel {
+                variable,
+                collection,
+                body,
+                max_workers,
+                timeout_secs,
+                fail_fast,
+            } => {
+                let coll = self.eval_node(collection)?;
+                let items = self.value_to_iterable(&coll);
+                if items.is_empty() {
+                    return Ok(Value::Nil);
+                }
+
+                // Snapshot parent environment for threads
+                let env_snapshot = self.env.clone();
+                let body = body.clone();
+                let variable = variable.clone();
+
+                // Each thread captures output + result
+                struct ThreadResult {
+                    output: Vec<(OutputKind, String)>,
+                    value: Result<Value, Option<String>>,
+                }
+
+                #[derive(Clone)]
+                enum OutputKind { Puts, Print, Warn }
+
+                struct CaptureOutput {
+                    captured: Vec<(OutputKind, String)>,
+                }
+                impl CaptureOutput {
+                    fn new() -> Self { Self { captured: Vec::new() } }
+                }
+                impl Output for CaptureOutput {
+                    fn puts(&mut self, s: &str) { self.captured.push((OutputKind::Puts, s.to_string())); }
+                    fn print(&mut self, s: &str) { self.captured.push((OutputKind::Print, s.to_string())); }
+                    fn warn(&mut self, s: &str) { self.captured.push((OutputKind::Warn, s.to_string())); }
+                }
+
+                let thread_results: std::sync::Mutex<Vec<ThreadResult>> =
+                    std::sync::Mutex::new(Vec::new());
+
+                // Channel-based semaphore for worker pool limiting
+                let workers = max_workers.unwrap_or(items.len());
+                let (sem_tx, sem_rx) = std::sync::mpsc::sync_channel::<()>(workers);
+                // Pre-fill with permits
+                for _ in 0..workers { sem_tx.send(()).ok(); }
+                let sem_rx = std::sync::Mutex::new(sem_rx);
+
+                // Cancellation flag (set by fail-fast or timeout)
+                let cancelled = std::sync::atomic::AtomicBool::new(false);
+                let timed_out = std::sync::atomic::AtomicBool::new(false);
+                let completed_count = std::sync::atomic::AtomicUsize::new(0);
+                let total = items.len();
+
+                std::thread::scope(|s| {
+                    // Watchdog thread for timeout
+                    if let Some(secs) = timeout_secs {
+                        let cancelled = &cancelled;
+                        let timed_out = &timed_out;
+                        let completed_count = &completed_count;
+                        s.spawn(move || {
+                            let deadline = std::time::Instant::now()
+                                + std::time::Duration::from_secs(*secs);
+                            while std::time::Instant::now() < deadline {
+                                if completed_count.load(std::sync::atomic::Ordering::Relaxed) >= total {
+                                    return; // All tasks done, no timeout
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(50));
+                            }
+                            timed_out.store(true, std::sync::atomic::Ordering::Relaxed);
+                            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        });
+                    }
+
+                    for item in &items {
+                        let env_snapshot = &env_snapshot;
+                        let body = &body;
+                        let variable = &variable;
+                        let item = item.clone();
+                        let thread_results = &thread_results;
+                        let sem_rx = &sem_rx;
+                        let sem_tx = &sem_tx;
+                        let cancelled = &cancelled;
+                        let completed_count = &completed_count;
+                        let fail_fast = *fail_fast;
+
+                        s.spawn(move || {
+                            // Acquire semaphore slot (blocks if pool is full)
+                            let _ = sem_rx.lock().unwrap().recv();
+
+                            // Skip if cancelled by a sibling
+                            if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                sem_tx.send(()).ok();
+                                return;
+                            }
+
+                            let mut out = CaptureOutput::new();
+                            let value = {
+                                let mut eval = Evaluator::new(&mut out);
+                                eval.env = env_snapshot.clone();
+                                eval.env.push_scope();
+                                eval.env.set_local(variable, item);
+
+                                match eval.exec(body) {
+                                    Ok(v) => Ok(v),
+                                    Err(Signal::Break | Signal::Next) => Ok(Value::Nil),
+                                    Err(Signal::Return(_)) => {
+                                        if fail_fast {
+                                            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        Err(Some("return inside parallel block".to_string()))
+                                    }
+                                }
+                            };
+                            thread_results.lock().unwrap().push(ThreadResult {
+                                output: out.captured,
+                                value,
+                            });
+                            completed_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            // Release semaphore permit
+                            sem_tx.send(()).ok();
+                        });
+                    }
+                });
+
+                // Replay captured output and collect results
+                let thread_results = thread_results.into_inner().unwrap();
+                let mut values = Vec::new();
+                let mut first_error = None;
+
+                for tr in thread_results {
+                    for (kind, text) in &tr.output {
+                        match kind {
+                            OutputKind::Puts => self.output.puts(text),
+                            OutputKind::Print => self.output.print(text),
+                            OutputKind::Warn => self.output.warn(text),
+                        }
+                    }
+                    match tr.value {
+                        Ok(v) => values.push(v),
+                        Err(msg) => {
+                            if first_error.is_none() {
+                                first_error = msg;
+                            }
+                        }
+                    }
+                }
+
+                if timed_out.load(std::sync::atomic::Ordering::Relaxed) {
+                    self.output.warn(&format!(
+                        "parallel: timed out after {}s ({} of {} tasks completed)",
+                        timeout_secs.unwrap_or(0),
+                        values.len(),
+                        items.len()
+                    ));
+                }
+
+                if let Some(msg) = first_error {
+                    return Err(Signal::Return(Value::String(msg)));
+                }
+
+                Ok(Value::Array(values))
+            }
+
+            Node::Orchestrate { tasks } => {
+                use std::collections::{HashMap as Map, HashSet as Set};
+
+                if tasks.is_empty() {
+                    return Ok(Value::Nil);
+                }
+
+                // Build dependency info
+                let task_names: Set<String> = tasks.iter().map(|t| t.name.clone()).collect();
+                for t in tasks {
+                    for dep in &t.after {
+                        if !task_names.contains(dep) {
+                            self.output.warn(&format!(
+                                "orchestrate: task '{}' depends on unknown task '{dep}'",
+                                t.name
+                            ));
+                            return Ok(Value::Nil);
+                        }
+                    }
+                }
+
+                // Detect cycles via topological sort (Kahn's algorithm)
+                let mut in_degree: Map<&str, usize> = Map::new();
+                let mut dependents: Map<&str, Vec<&str>> = Map::new();
+                for t in tasks {
+                    in_degree.entry(&t.name).or_insert(0);
+                    for dep in &t.after {
+                        *in_degree.entry(&t.name).or_insert(0) += 1;
+                        dependents.entry(dep.as_str()).or_default().push(&t.name);
+                    }
+                }
+
+                // Find initial ready set (no dependencies)
+                let mut ready: Vec<&str> = in_degree.iter()
+                    .filter(|&(_, &deg)| deg == 0)
+                    .map(|(&name, _)| name)
+                    .collect();
+
+                if ready.is_empty() {
+                    self.output.warn("orchestrate: circular dependency detected");
+                    return Ok(Value::Nil);
+                }
+
+                // Task lookup by name
+                let task_map: Map<&str, &crate::ast::OrchestrateTask> =
+                    tasks.iter().map(|t| (t.name.as_str(), t)).collect();
+
+                // Execute in waves: each wave runs all ready tasks concurrently
+                let env_snapshot = self.env.clone();
+                let mut completed: Set<&str> = Set::new();
+                let mut results: Map<String, Value> = Map::new();
+                let mut wave_num = 0usize;
+                let total_tasks = tasks.len();
+
+                while !ready.is_empty() {
+                    wave_num += 1;
+                    let task_list: Vec<&str> = ready.clone();
+                    self.output.puts(&format!(
+                        "[orchestrate] wave {wave_num}: running {} ({}/{})",
+                        task_list.join(", "),
+                        completed.len(),
+                        total_tasks
+                    ));
+                    // Thread-safe result collection for this wave
+                    struct WaveResult {
+                        name: String,
+                        output: Vec<(WaveOutputKind, String)>,
+                        value: Result<Value, String>,
+                    }
+                    #[derive(Clone)]
+                    enum WaveOutputKind { Puts, Print, Warn }
+                    struct WaveCaptureOutput {
+                        captured: Vec<(WaveOutputKind, String)>,
+                    }
+                    impl WaveCaptureOutput {
+                        fn new() -> Self { Self { captured: Vec::new() } }
+                    }
+                    impl Output for WaveCaptureOutput {
+                        fn puts(&mut self, s: &str) { self.captured.push((WaveOutputKind::Puts, s.to_string())); }
+                        fn print(&mut self, s: &str) { self.captured.push((WaveOutputKind::Print, s.to_string())); }
+                        fn warn(&mut self, s: &str) { self.captured.push((WaveOutputKind::Warn, s.to_string())); }
+                    }
+
+                    let wave_results: std::sync::Mutex<Vec<WaveResult>> =
+                        std::sync::Mutex::new(Vec::new());
+
+                    std::thread::scope(|s| {
+                        for &task_name in &ready {
+                            let task = task_map[task_name];
+                            let env_snapshot = &env_snapshot;
+                            let wave_results = &wave_results;
+                            let body = task.body.clone();
+                            let name = task.name.clone();
+
+                            s.spawn(move || {
+                                let mut out = WaveCaptureOutput::new();
+                                let value = {
+                                    let mut eval = Evaluator::new(&mut out);
+                                    eval.env = env_snapshot.clone();
+                                    match eval.exec(&body) {
+                                        Ok(v) => Ok(v),
+                                        Err(Signal::Return(v)) => Ok(v),
+                                        Err(Signal::Break | Signal::Next) => Ok(Value::Nil),
+                                    }
+                                };
+                                wave_results.lock().unwrap().push(WaveResult {
+                                    name,
+                                    output: out.captured,
+                                    value,
+                                });
+                            });
+                        }
+                    });
+
+                    // Replay output and collect results
+                    let wave_results = wave_results.into_inner().unwrap();
+                    for wr in wave_results {
+                        let status = match &wr.value {
+                            Ok(_) => "done",
+                            Err(_) => "FAILED",
+                        };
+                        self.output.puts(&format!(
+                            "[orchestrate] {}: {status}", wr.name
+                        ));
+                        for (kind, text) in &wr.output {
+                            match kind {
+                                WaveOutputKind::Puts => self.output.puts(text),
+                                WaveOutputKind::Print => self.output.print(text),
+                                WaveOutputKind::Warn => self.output.warn(text),
+                            }
+                        }
+                        match wr.value {
+                            Ok(v) => { results.insert(wr.name.clone(), v); }
+                            Err(msg) => {
+                                self.output.warn(&format!(
+                                    "orchestrate: task '{}' failed: {msg}", wr.name
+                                ));
+                            }
+                        }
+                        completed.insert(
+                            task_names.iter().find(|n| **n == wr.name).unwrap().as_str()
+                        );
+                    }
+
+                    // Find newly ready tasks
+                    ready.clear();
+                    for (&name, deps) in &dependents {
+                        if completed.contains(name) {
+                            for &dep in deps {
+                                if !completed.contains(dep) {
+                                    // Check if all deps are now satisfied
+                                    let task = task_map[dep];
+                                    if task.after.iter().all(|d| completed.contains(d.as_str())) {
+                                        ready.push(dep);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ready.sort(); // deterministic order
+                    ready.dedup();
+                }
+
+                self.output.puts(&format!(
+                    "[orchestrate] complete: {}/{} tasks in {} wave(s)",
+                    completed.len(), total_tasks, wave_num
+                ));
+
+                // Return results as a hash
+                Ok(Value::Hash(results))
+            }
+
             Node::FunctionDef {
                 name,
                 params,
@@ -388,6 +726,7 @@ impl<'a> Evaluator<'a> {
                         "dir" => stdlib::dir_method(method, &arg_vals),
                         "time" => stdlib::time_method(method, &arg_vals),
                         "path" => stdlib::path_method(method, &arg_vals),
+                        "ssh" => stdlib::ssh_method(method, &arg_vals),
                         "env" if method == "[]" => {
                             let key = arg_vals.first().map(|v| v.to_rush_string()).unwrap_or_default();
                             stdlib::env_get(&key)
@@ -411,6 +750,7 @@ impl<'a> Evaluator<'a> {
                         "dir" => stdlib::dir_method(property, &[]),
                         "file" => stdlib::file_method(property, &[]),
                         "path" => stdlib::path_method(property, &[]),
+                        "ssh" => stdlib::ssh_method(property, &[]),
                         "env" => stdlib::env_get(property),
                         _ => Value::Nil,
                     });
@@ -648,6 +988,7 @@ impl<'a> Evaluator<'a> {
                 "time" => Some("time"),
                 "env" => Some("env"),
                 "path" => Some("path"),
+                "ssh" => Some("ssh"),
                 _ => None,
             }
         } else {

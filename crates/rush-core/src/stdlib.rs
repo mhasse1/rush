@@ -582,6 +582,72 @@ fn arg_str(args: &[Value], index: usize) -> String {
         .unwrap_or_default()
 }
 
+// ── Ssh ────────────────────────────────────────────────────────────
+
+pub fn ssh_method(method: &str, args: &[Value]) -> Value {
+    match method {
+        // Ssh.run(host, command) — execute command on remote host
+        "run" => {
+            let host = arg_str(args, 0);
+            let command = arg_str(args, 1);
+            if host.is_empty() || command.is_empty() {
+                eprintln!("Ssh.run: requires host and command");
+                return Value::Nil;
+            }
+            ssh_execute(&host, &command)
+        }
+
+        // Ssh.test(host) — test connectivity (returns bool)
+        "test" => {
+            let host = arg_str(args, 0);
+            if host.is_empty() {
+                return Value::Bool(false);
+            }
+            let result = std::process::Command::new("ssh")
+                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", &host, "echo ok"])
+                .output();
+            Value::Bool(result.is_ok_and(|o| o.status.success()))
+        }
+
+        _ => {
+            eprintln!("Ssh.{method}: unknown method");
+            Value::Nil
+        }
+    }
+}
+
+fn ssh_execute(host: &str, command: &str) -> Value {
+    let result = std::process::Command::new("ssh")
+        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command])
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim_end().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim_end().to_string();
+            let code = output.status.code().unwrap_or(-1);
+
+            let mut hash = HashMap::new();
+            hash.insert("status".to_string(),
+                Value::String(if code == 0 { "success" } else { "error" }.to_string()));
+            hash.insert("exit_code".to_string(), Value::Int(code as i64));
+            hash.insert("stdout".to_string(), Value::String(stdout));
+            hash.insert("stderr".to_string(), Value::String(stderr));
+            hash.insert("host".to_string(), Value::String(host.to_string()));
+            Value::Hash(hash)
+        }
+        Err(e) => {
+            let mut hash = HashMap::new();
+            hash.insert("status".to_string(), Value::String("error".to_string()));
+            hash.insert("exit_code".to_string(), Value::Int(1));
+            hash.insert("stdout".to_string(), Value::String(String::new()));
+            hash.insert("stderr".to_string(), Value::String(format!("SSH error: {e}")));
+            hash.insert("host".to_string(), Value::String(host.to_string()));
+            Value::Hash(hash)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,5 +810,39 @@ mod tests {
     fn env_get_path() {
         let path = env_get("PATH");
         assert!(matches!(path, Value::String(s) if !s.is_empty()));
+    }
+
+    // ── Ssh ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn ssh_run_returns_hash() {
+        // This test uses a nonexistent host to verify the return structure
+        let result = ssh_method("run", &[
+            Value::String("nonexistent.host.test".to_string()),
+            Value::String("echo hello".to_string()),
+        ]);
+        if let Value::Hash(map) = result {
+            assert!(map.contains_key("status"));
+            assert!(map.contains_key("exit_code"));
+            assert!(map.contains_key("stdout"));
+            assert!(map.contains_key("stderr"));
+            assert!(map.contains_key("host"));
+            assert_eq!(map["status"], Value::String("error".to_string()));
+        } else {
+            panic!("Ssh.run should return a hash");
+        }
+    }
+
+    #[test]
+    fn ssh_run_missing_args() {
+        let result = ssh_method("run", &[]);
+        assert_eq!(result, Value::Nil);
+    }
+
+    #[test]
+    fn ssh_test_unreachable() {
+        // ConnectTimeout=5, so this won't hang
+        let result = ssh_method("test", &[Value::String("nonexistent.host.test".to_string())]);
+        assert_eq!(result, Value::Bool(false));
     }
 }

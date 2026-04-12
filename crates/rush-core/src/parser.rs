@@ -134,6 +134,8 @@ impl Parser {
             TokenType::If => self.parse_if()?,
             TokenType::Unless => self.parse_unless()?,
             TokenType::For => self.parse_for()?,
+            TokenType::Parallel => self.parse_parallel()?,
+            TokenType::Orchestrate => self.parse_orchestrate()?,
             TokenType::While => self.parse_while()?,
             TokenType::Until => self.parse_until()?,
             TokenType::Loop => self.parse_loop()?,
@@ -241,6 +243,135 @@ impl Parser {
             collection: Box::new(collection),
             body,
         })
+    }
+
+    fn parse_parallel(&mut self) -> ParseResult<Node> {
+        self.pos += 1; // skip 'parallel'
+
+        // Optional fail_fast: parallel! x in items (stop on first error)
+        let fail_fast = if self.check(TokenType::Identifier) && self.current().value == "!" {
+            self.pos += 1;
+            true
+        } else {
+            false
+        };
+
+        // Optional (workers) or (workers, timeout_secs): parallel(4, 10) x in items
+        let (max_workers, timeout_secs) = if self.check(TokenType::LParen) {
+            self.pos += 1; // skip '('
+            let tok = self.expect(TokenType::Integer)?;
+            let n: usize = tok.value.parse().map_err(|_| self.err("invalid worker count"))?;
+            let timeout = if self.check(TokenType::Comma) {
+                self.pos += 1; // skip ','
+                let tok = self.expect(TokenType::Integer)?;
+                let t: u64 = tok.value.parse().map_err(|_| self.err("invalid timeout"))?;
+                Some(t)
+            } else {
+                None
+            };
+            self.expect(TokenType::RParen)?;
+            (Some(n), timeout)
+        } else {
+            (None, None)
+        };
+
+        let variable = self.expect(TokenType::Identifier)?.value;
+
+        let collection = if self.check(TokenType::In) {
+            self.pos += 1; // skip 'in'
+            self.parse_expression()?
+        } else {
+            return Err(self.err("parallel requires 'in' and a collection"));
+        };
+
+        self.skip_newlines();
+        let body = self.parse_body(&[TokenType::End])?;
+        self.expect(TokenType::End)?;
+        Ok(Node::Parallel {
+            variable,
+            collection: Box::new(collection),
+            body,
+            max_workers,
+            timeout_secs,
+            fail_fast,
+        })
+    }
+
+    fn parse_orchestrate(&mut self) -> ParseResult<Node> {
+        use crate::ast::OrchestrateTask;
+        self.pos += 1; // skip 'orchestrate'
+        self.skip_newlines();
+
+        let mut tasks = Vec::new();
+
+        while !self.check(TokenType::End) && !self.check(TokenType::Eof) {
+            self.skip_newlines();
+            if self.check(TokenType::End) {
+                break;
+            }
+
+            // Expect 'task'
+            if !self.check(TokenType::Task) {
+                return Err(self.err("expected 'task' inside orchestrate block"));
+            }
+            self.pos += 1; // skip 'task'
+
+            // Task name (string literal)
+            let name = self.expect(TokenType::StringLiteral)?.value;
+
+            // Optional: after: "dep" or after: ["dep1", "dep2"]
+            let mut after = Vec::new();
+            if self.check(TokenType::Comma) {
+                self.pos += 1; // skip ','
+                // Expect identifier 'after'
+                let kw = self.expect(TokenType::Identifier)?;
+                if kw.value != "after" {
+                    return Err(self.err("expected 'after:' in task declaration"));
+                }
+                self.expect(TokenType::Colon)?;
+
+                if self.check(TokenType::LBracket) {
+                    // Array of dependencies: ["dep1", "dep2"]
+                    self.pos += 1; // skip '['
+                    while !self.check(TokenType::RBracket) && !self.check(TokenType::Eof) {
+                        let dep = self.expect(TokenType::StringLiteral)?.value;
+                        after.push(dep);
+                        if self.check(TokenType::Comma) {
+                            self.pos += 1;
+                        }
+                    }
+                    self.expect(TokenType::RBracket)?;
+                } else {
+                    // Single dependency: "dep"
+                    let dep = self.expect(TokenType::StringLiteral)?.value;
+                    after.push(dep);
+                }
+            }
+
+            // Task body: do...end or { ... }
+            self.skip_newlines();
+            let body = if self.check(TokenType::Do) {
+                self.pos += 1; // skip 'do'
+                self.skip_newlines();
+                let b = self.parse_body(&[TokenType::End])?;
+                self.expect(TokenType::End)?;
+                b
+            } else if self.check(TokenType::LBrace) {
+                self.pos += 1; // skip '{'
+                self.skip_newlines();
+                let b = self.parse_body(&[TokenType::RBrace])?;
+                self.expect(TokenType::RBrace)?;
+                b
+            } else {
+                return Err(self.err("expected 'do' or '{' after task declaration"));
+            };
+
+            tasks.push(OrchestrateTask { name, after, body });
+            self.skip_newlines();
+        }
+
+        self.expect(TokenType::End)?;
+        Ok(Node::Orchestrate { tasks })
     }
 
     fn parse_while(&mut self) -> ParseResult<Node> {

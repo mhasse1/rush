@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rush-core", "crates/rush-cli", "crates/rush-ps-bridge"]
+members = ["crates/rush-core", "crates/rush-cli", "crates/rush-ps-bridge", "crates/rush-agent"]
 resolver = "2"
 
 [workspace.package]

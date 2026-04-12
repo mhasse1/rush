@@ -529,8 +529,8 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
         println!("  exit             Exit shell");
         println!();
         println!("Help topics: variables, strings, arrays, hashes, control-flow,");
-        println!("             functions, classes, file, dir, time, path,");
-        println!("             pipes, objectify, ai");
+        println!("             functions, classes, file, dir, time, path, ssh,");
+        println!("             parallel, orchestrate, pipes, objectify, ai");
         return;
     }
 
@@ -654,6 +654,46 @@ fn handle_help(_evaluator: &mut Evaluator, topic: &str) {
             println!("  \"path\".unix_path              \\ → /");
             println!();
             println!("Variable: $sep — platform path separator");
+        }
+        "ssh" => {
+            println!("Ssh stdlib — remote command execution:");
+            println!("  Ssh.run(host, cmd)           Execute on remote host → hash");
+            println!("  Ssh.test(host)               Test connectivity → bool");
+            println!();
+            println!("Ssh.run returns:");
+            println!("  result[\"status\"]              \"success\" or \"error\"");
+            println!("  result[\"exit_code\"]           Exit code (0 = success)");
+            println!("  result[\"stdout\"]              Command output");
+            println!("  result[\"stderr\"]              Error output");
+            println!("  result[\"host\"]                Host name");
+            println!();
+            println!("Example:");
+            println!("  r = Ssh.run(\"web1\", \"uptime\")");
+            println!("  puts r[\"stdout\"]");
+        }
+        "parallel" => {
+            println!("Parallel execution — concurrent iteration:");
+            println!("  parallel x in items ... end           All at once");
+            println!("  parallel(4) x in items ... end        4 workers max");
+            println!("  parallel(4, 30) x in items ... end    4 workers, 30s timeout");
+            println!("  parallel! x in items ... end          Fail-fast on error");
+            println!();
+            println!("Example:");
+            println!("  parallel host in [\"a\", \"b\", \"c\"]");
+            println!("    puts Ssh.run(host, \"uptime\")[\"stdout\"]");
+            println!("  end");
+        }
+        "orchestrate" => {
+            println!("Orchestrate — task dependency graph:");
+            println!("  orchestrate");
+            println!("    task \"name\" do ... end");
+            println!("    task \"name\", after: \"dep\" do ... end");
+            println!("    task \"name\", after: [\"a\", \"b\"] do ... end");
+            println!("  end");
+            println!();
+            println!("Independent tasks run concurrently.");
+            println!("Tasks with after: wait for dependencies.");
+            println!("Returns hash mapping task names to results.");
         }
         "pipes" | "pipeline" => {
             println!("Pipeline operators (after |):");
@@ -1517,7 +1557,8 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
     let mut path_block: Option<Vec<String>> = None; // path add...end accumulator
 
     let block_openers = [
-        "if", "unless", "while", "until", "for", "loop",
+        "if", "unless", "while", "until", "for", "parallel", "parallel!",
+        "orchestrate", "task", "loop",
         "def", "class", "enum", "case", "match", "try", "begin",
         "macos", "linux", "win64", "win32", "ps", "ps5", "plugin",
     ];
@@ -1576,7 +1617,28 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
 
         // Track block depth from keywords
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
-        if block_openers.iter().any(|k| k.eq_ignore_ascii_case(first_word)) {
+        // Strip parenthesized options: parallel(4, 10) → parallel
+        let base_word = first_word.split('(').next().unwrap_or(first_word);
+        // Check first word, or after `=` for assignment-wrapped blocks (e.g. `x = for ...`)
+        let effective_opener = if block_openers.iter().any(|k| k.eq_ignore_ascii_case(first_word))
+            || block_openers.iter().any(|k| k.eq_ignore_ascii_case(base_word)) {
+            true
+        } else if let Some(after_eq) = trimmed.split_once('=').and_then(|(lhs, rhs)| {
+            // Only simple assignments (no ==, !=, <=, >=, +=, etc.)
+            if lhs.ends_with('!') || lhs.ends_with('<') || lhs.ends_with('>')
+                || lhs.ends_with('+') || lhs.ends_with('-') || lhs.ends_with('*')
+                || lhs.ends_with('/') || rhs.starts_with('=') || rhs.starts_with('~') {
+                None
+            } else {
+                Some(rhs.trim())
+            }
+        }) {
+            let rhs_first = after_eq.split_whitespace().next().unwrap_or("");
+            block_openers.iter().any(|k| k.eq_ignore_ascii_case(rhs_first))
+        } else {
+            false
+        };
+        if effective_opener {
             block_depth += 1;
         }
         if first_word.eq_ignore_ascii_case("end") && block_depth > 0 {
