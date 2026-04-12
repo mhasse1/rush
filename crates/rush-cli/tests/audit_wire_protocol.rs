@@ -14,6 +14,12 @@
 
 // Intentional double-underscore separator: mode__invariant.
 #![allow(non_snake_case)]
+// These tests exercise end-to-end --llm / --mcp behavior. The llm-mode
+// dispatch on Windows currently uses a reduced fallback path (no fd
+// redirection available; no `sh -lc` by default), so subprocess-level
+// tests don't apply. Unit tests in rush-core cover what's testable
+// cross-platform. Windows LLM-mode parity is tracked separately.
+#![cfg(unix)]
 
 use serde_json::{json, Value};
 use std::io::Write;
