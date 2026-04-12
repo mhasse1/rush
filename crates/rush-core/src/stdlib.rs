@@ -610,27 +610,41 @@ fn arg_str(args: &[Value], index: usize) -> String {
 
 pub fn ssh_method(method: &str, args: &[Value]) -> Value {
     match method {
-        // Ssh.run(host, command) — execute command on remote host
+        // Ssh.run(host_or_chain, command) — execute command on remote host.
+        // host_or_chain accepts:
+        //   "target"                    — single host (legacy)
+        //   "bastion,target"            — ProxyJump chain (comma-separated)
+        //   ["bastion", "target"]       — explicit hop list
+        //   ["bastion", "mid", "target"] — multi-hop chain
         "run" => {
-            let host = arg_str(args, 0);
+            let chain = match parse_chain(args.first()) {
+                Ok(c) => c,
+                Err(e) => {
+                    stdlib_err(format!("Ssh.run: {e}"));
+                    return Value::Nil;
+                }
+            };
             let command = arg_str(args, 1);
-            if host.is_empty() || command.is_empty() {
-                stdlib_err(format!("Ssh.run: requires host and command"));
+            if command.is_empty() {
+                stdlib_err(format!("Ssh.run: requires host(s) and command"));
                 return Value::Nil;
             }
-            ssh_execute(&host, &command)
+            ssh_execute(&chain, &command)
         }
 
-        // Ssh.test(host) — test connectivity (returns bool)
+        // Ssh.test(host_or_chain) — test connectivity (returns bool).
+        // Accepts the same chain forms as Ssh.run.
         "test" => {
-            let host = arg_str(args, 0);
-            if host.is_empty() {
-                return Value::Bool(false);
+            let chain = match parse_chain(args.first()) {
+                Ok(c) => c,
+                Err(_) => return Value::Bool(false),
+            };
+            let mut cmd = std::process::Command::new("ssh");
+            for arg in build_ssh_args(&chain, &["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]) {
+                cmd.arg(arg);
             }
-            let result = std::process::Command::new("ssh")
-                .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", &host, "echo ok"])
-                .output();
-            Value::Bool(result.is_ok_and(|o| o.status.success()))
+            cmd.arg("echo ok");
+            Value::Bool(cmd.output().is_ok_and(|o| o.status.success()))
         }
 
         _ => {
@@ -640,12 +654,64 @@ pub fn ssh_method(method: &str, args: &[Value]) -> Value {
     }
 }
 
-fn ssh_execute(host: &str, command: &str) -> Value {
-    let result = std::process::Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command])
-        .output();
+/// Parse a host argument into a normalized hop chain.
+/// Accepts a single host string, a comma-separated chain string,
+/// or an array of host strings. Empty hops are stripped; leading
+/// and trailing whitespace trimmed.
+pub(crate) fn parse_chain(arg: Option<&Value>) -> Result<Vec<String>, String> {
+    let value = arg.ok_or_else(|| "missing host".to_string())?;
+    let hops: Vec<String> = match value {
+        Value::String(s) => s
+            .split(',')
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .collect(),
+        Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| match v {
+                Value::String(s) => {
+                    let t = s.trim();
+                    if t.is_empty() { None } else { Some(t.to_string()) }
+                }
+                _ => None,
+            })
+            .collect(),
+        Value::Nil => return Err("missing host".into()),
+        _ => return Err("host must be a string or array of strings".into()),
+    };
+    if hops.is_empty() {
+        return Err("empty host chain".into());
+    }
+    Ok(hops)
+}
 
-    match result {
+/// Build the ssh argv prefix for the given hop chain.
+/// For single-host chains, just emits the standard options + host.
+/// For multi-hop chains, inserts `-J <bastion[,intermediate]...>`
+/// before the final destination.
+pub(crate) fn build_ssh_args(hops: &[String], options: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = options.iter().map(|s| s.to_string()).collect();
+    if hops.len() > 1 {
+        args.push("-J".to_string());
+        args.push(hops[..hops.len() - 1].join(","));
+    }
+    args.push(hops[hops.len() - 1].clone());
+    args
+}
+
+fn ssh_execute(chain: &[String], command: &str) -> Value {
+    let final_host = chain[chain.len() - 1].clone();
+    let chain_str = chain.join(",");
+    let chain_value = Value::Array(chain.iter().map(|h| Value::String(h.clone())).collect());
+
+    let args = build_ssh_args(chain, &["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
+    let mut cmd = std::process::Command::new("ssh");
+    for a in &args {
+        cmd.arg(a);
+    }
+    cmd.arg(command);
+
+    match cmd.output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim_end().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim_end().to_string();
@@ -657,7 +723,9 @@ fn ssh_execute(host: &str, command: &str) -> Value {
             hash.insert("exit_code".to_string(), Value::Int(code as i64));
             hash.insert("stdout".to_string(), Value::String(stdout));
             hash.insert("stderr".to_string(), Value::String(stderr));
-            hash.insert("host".to_string(), Value::String(host.to_string()));
+            hash.insert("host".to_string(), Value::String(final_host));
+            hash.insert("chain".to_string(), chain_value);
+            hash.insert("chain_str".to_string(), Value::String(chain_str));
             Value::Hash(hash)
         }
         Err(e) => {
@@ -666,7 +734,9 @@ fn ssh_execute(host: &str, command: &str) -> Value {
             hash.insert("exit_code".to_string(), Value::Int(1));
             hash.insert("stdout".to_string(), Value::String(String::new()));
             hash.insert("stderr".to_string(), Value::String(format!("SSH error: {e}")));
-            hash.insert("host".to_string(), Value::String(host.to_string()));
+            hash.insert("host".to_string(), Value::String(final_host));
+            hash.insert("chain".to_string(), chain_value);
+            hash.insert("chain_str".to_string(), Value::String(chain_str));
             Value::Hash(hash)
         }
     }
@@ -867,6 +937,141 @@ mod tests {
     fn ssh_test_unreachable() {
         // ConnectTimeout=5, so this won't hang
         let result = ssh_method("test", &[Value::String("nonexistent.host.test".to_string())]);
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    // ── Bastion / hop chain support (#208) ─────────────────────────────
+
+    #[test]
+    fn parse_chain_single_host() {
+        let v = Value::String("host1".to_string());
+        assert_eq!(parse_chain(Some(&v)).unwrap(), vec!["host1"]);
+    }
+
+    #[test]
+    fn parse_chain_comma_string() {
+        let v = Value::String("bastion,target".to_string());
+        assert_eq!(parse_chain(Some(&v)).unwrap(), vec!["bastion", "target"]);
+    }
+
+    #[test]
+    fn parse_chain_multi_hop_string() {
+        let v = Value::String("a,b,c,d".to_string());
+        assert_eq!(parse_chain(Some(&v)).unwrap(), vec!["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn parse_chain_array() {
+        let v = Value::Array(vec![
+            Value::String("bastion".to_string()),
+            Value::String("target".to_string()),
+        ]);
+        assert_eq!(parse_chain(Some(&v)).unwrap(), vec!["bastion", "target"]);
+    }
+
+    #[test]
+    fn parse_chain_strips_whitespace_and_empties() {
+        let v = Value::String("  a , , b ,c ".to_string());
+        assert_eq!(parse_chain(Some(&v)).unwrap(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn parse_chain_rejects_empty() {
+        let v = Value::String(",,,".to_string());
+        assert!(parse_chain(Some(&v)).is_err());
+    }
+
+    #[test]
+    fn parse_chain_rejects_missing() {
+        assert!(parse_chain(None).is_err());
+    }
+
+    #[test]
+    fn parse_chain_rejects_bad_type() {
+        assert!(parse_chain(Some(&Value::Int(42))).is_err());
+    }
+
+    #[test]
+    fn build_ssh_args_single_host() {
+        let hops = vec!["target".to_string()];
+        let opts = ["-o", "BatchMode=yes"];
+        let args = build_ssh_args(&hops, &opts);
+        assert_eq!(args, vec!["-o", "BatchMode=yes", "target"]);
+    }
+
+    #[test]
+    fn build_ssh_args_single_bastion() {
+        let hops = vec!["bastion".to_string(), "target".to_string()];
+        let opts = ["-o", "BatchMode=yes"];
+        let args = build_ssh_args(&hops, &opts);
+        assert_eq!(args, vec!["-o", "BatchMode=yes", "-J", "bastion", "target"]);
+    }
+
+    #[test]
+    fn build_ssh_args_multi_hop() {
+        let hops = vec![
+            "bastion".to_string(),
+            "intermediate".to_string(),
+            "target".to_string(),
+        ];
+        let opts: [&str; 0] = [];
+        let args = build_ssh_args(&hops, &opts);
+        assert_eq!(args, vec!["-J", "bastion,intermediate", "target"]);
+    }
+
+    #[test]
+    fn ssh_run_chain_returns_chain_in_hash() {
+        // Use unreachable hosts so we exercise the structure without
+        // network dependencies.
+        let result = ssh_method("run", &[
+            Value::String("bastion.test,target.test".to_string()),
+            Value::String("echo x".to_string()),
+        ]);
+        if let Value::Hash(map) = result {
+            assert!(map.contains_key("chain"));
+            assert!(map.contains_key("chain_str"));
+            assert_eq!(map["chain_str"], Value::String("bastion.test,target.test".to_string()));
+            // host should be the final destination, not the bastion
+            assert_eq!(map["host"], Value::String("target.test".to_string()));
+            if let Value::Array(c) = &map["chain"] {
+                assert_eq!(c.len(), 2);
+            } else {
+                panic!("chain should be an array");
+            }
+        } else {
+            panic!("Ssh.run should return a hash");
+        }
+    }
+
+    #[test]
+    fn ssh_run_array_chain_form_works() {
+        let result = ssh_method("run", &[
+            Value::Array(vec![
+                Value::String("a.test".to_string()),
+                Value::String("b.test".to_string()),
+                Value::String("c.test".to_string()),
+            ]),
+            Value::String("echo x".to_string()),
+        ]);
+        if let Value::Hash(map) = result {
+            assert_eq!(map["host"], Value::String("c.test".to_string()));
+            if let Value::Array(c) = &map["chain"] {
+                assert_eq!(c.len(), 3);
+            } else {
+                panic!("chain should be an array");
+            }
+        } else {
+            panic!("Ssh.run should return a hash");
+        }
+    }
+
+    #[test]
+    fn ssh_test_chain_form_does_not_panic() {
+        // Sanity: chain form passes through Ssh.test without crashing.
+        // Returns false because the hosts don't exist.
+        let result = ssh_method("test", &[
+            Value::String("bastion.test,target.test".to_string()),
+        ]);
         assert_eq!(result, Value::Bool(false));
     }
 }

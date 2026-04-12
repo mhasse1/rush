@@ -34,10 +34,16 @@ impl SshSession {
     }
 
     fn try_connect(host: &str, rush_cmd: &str) -> Option<Self> {
-        let mut child = Command::new("ssh")
-            .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-                   "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
-                   host, rush_cmd])
+        let hops = parse_host_chain(host);
+        if hops.is_empty() { return None; }
+        let args = crate::stdlib::build_ssh_args(&hops, &[
+            "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3",
+        ]);
+        let mut ssh_cmd = Command::new("ssh");
+        for a in &args { ssh_cmd.arg(a); }
+        ssh_cmd.arg(rush_cmd);
+        let mut child = ssh_cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -113,13 +119,28 @@ impl Drop for SshSession {
     }
 }
 
-/// Execute a command on a remote host via raw SSH (no Rush).
-fn run_ssh_raw(host: &str, command: &str) -> JsonValue {
-    let result = Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command])
-        .output();
+/// Parse a ProxyJump-style host spec ("bastion,target") into a hop chain.
+/// A single host (no commas) returns a one-element vec.
+fn parse_host_chain(host: &str) -> Vec<String> {
+    host.split(',')
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty())
+        .collect()
+}
 
-    match result {
+/// Execute a command on a remote host (or chain) via raw SSH (no Rush).
+/// `host` may be a single hostname or a comma-separated bastion chain.
+fn run_ssh_raw(host: &str, command: &str) -> JsonValue {
+    let hops = parse_host_chain(host);
+    if hops.is_empty() {
+        return json!({"status":"error","exit_code":1,"stderr":"empty host","shell":"raw"});
+    }
+    let args = crate::stdlib::build_ssh_args(&hops, &["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]);
+    let mut cmd = Command::new("ssh");
+    for a in &args { cmd.arg(a); }
+    cmd.arg(command);
+
+    match cmd.output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -129,7 +150,9 @@ fn run_ssh_raw(host: &str, command: &str) -> JsonValue {
                 "exit_code": code,
                 "stdout": if stdout.is_empty() { serde_json::Value::Null } else { json!(stdout) },
                 "stderr": if stderr.is_empty() { serde_json::Value::Null } else { json!(stderr) },
-                "shell": "raw"
+                "shell": "raw",
+                "host": hops.last().cloned().unwrap_or_default(),
+                "chain": hops,
             })
         }
         Err(e) => json!({
@@ -150,10 +173,13 @@ fn read_file_ssh(host: &str, path: &str, session: Option<&mut SshSession>) -> Js
         }
     }
 
-    // Fallback: cat via raw SSH
-    let result = Command::new("ssh")
-        .args(["-o", "BatchMode=yes", host, &format!("cat '{path}'")])
-        .output();
+    // Fallback: cat via raw SSH (chain-aware)
+    let hops = parse_host_chain(host);
+    let args = crate::stdlib::build_ssh_args(&hops, &["-o", "BatchMode=yes"]);
+    let mut cmd = Command::new("ssh");
+    for a in &args { cmd.arg(a); }
+    cmd.arg(format!("cat '{path}'"));
+    let result = cmd.output();
 
     match result {
         Ok(output) if output.status.success() => {
@@ -200,8 +226,12 @@ fn write_file_ssh(host: &str, path: &str, content: &str, encoding: Option<&str>,
         format!("cat > '{path}'")
     };
 
-    let child = Command::new("ssh")
-        .args(["-o", "BatchMode=yes", host, &cmd])
+    let hops = parse_host_chain(host);
+    let args = crate::stdlib::build_ssh_args(&hops, &["-o", "BatchMode=yes"]);
+    let mut ssh_cmd = Command::new("ssh");
+    for a in &args { ssh_cmd.arg(a); }
+    ssh_cmd.arg(&cmd);
+    let child = ssh_cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -302,7 +332,7 @@ fn tools_list() -> JsonValue {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "host": { "type": "string", "description": "SSH host (hostname, IP, or SSH config alias)" },
+                        "host": { "type": "string", "description": "SSH host (hostname, IP, or SSH config alias). For bastion / jump hosts, use comma-separated ProxyJump syntax: 'bastion,target' or 'bastion,intermediate,target'." },
                         "command": { "type": "string", "description": "Command to execute" }
                     },
                     "required": ["host", "command"]
@@ -314,7 +344,7 @@ fn tools_list() -> JsonValue {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "host": { "type": "string", "description": "SSH host" },
+                        "host": { "type": "string", "description": "SSH host. Comma-separated chain for bastions: 'bastion,target'." },
                         "path": { "type": "string", "description": "File path on remote host" }
                     },
                     "required": ["host", "path"]
@@ -326,7 +356,7 @@ fn tools_list() -> JsonValue {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "host": { "type": "string", "description": "SSH host" },
+                        "host": { "type": "string", "description": "SSH host. Comma-separated chain for bastions: 'bastion,target'." },
                         "path": { "type": "string", "description": "File path on remote host" },
                         "content": { "type": "string", "description": "File content (text or base64-encoded binary)" },
                         "encoding": { "type": "string", "description": "Content encoding: 'utf8' (default) or 'base64'", "enum": ["utf8", "base64"] }
@@ -340,7 +370,7 @@ fn tools_list() -> JsonValue {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "host": { "type": "string", "description": "SSH host" }
+                        "host": { "type": "string", "description": "SSH host. Comma-separated chain for bastions: 'bastion,target'." }
                     },
                     "required": ["host"]
                 }
