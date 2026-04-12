@@ -430,11 +430,32 @@ ssh:
           puts "host is reachable"
         end
 
+  hop:
+    description: "Nested SSH through a bastion/jump host"
+    example: |
+      # Execute on target via intermediate host
+      result = Ssh.run("bastion", "ssh target hostname")
+      puts result["stdout"]
+
+      # Rush syntax through a hop
+      result = Ssh.run("bastion", "ssh target \"rush -c 'puts File.read(\\\"/etc/hostname\\\")'\"")
+
+      # Parallel across targets behind a bastion
+      parallel target in ["web1", "web2", "web3"]
+        result = Ssh.run("bastion", "ssh #{target} uptime")
+        puts "#{target}: #{result["stdout"]}"
+      end
+    notes:
+      - "~0.5s extra latency per hop"
+      - "Structured result wraps at the outer layer"
+      - "Inner hop returns raw text — no nested JSON"
+
   notes:
     - "Uses BatchMode=yes (no password prompts — requires key-based auth)"
     - "ConnectTimeout is 10s for run, 5s for test"
     - "Works inside parallel blocks for multi-host operations"
     - "Returns structured hash, not raw text — no parsing needed"
+    - "Supports bastion/jump host patterns via nested SSH commands"
 
 control-flow:
   summary: "Conditionals and branching"

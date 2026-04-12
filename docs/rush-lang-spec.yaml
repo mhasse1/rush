@@ -76,6 +76,7 @@ orchestrate:
 ssh:
   run: 'Ssh.run("host", "command")  → {status:, exit_code:, stdout:, stderr:, host:}'
   test: 'Ssh.test("host")  → true/false'
+  hop: 'Ssh.run("bastion", "ssh target command")  — nested SSH through jump host'
 
 # ── RANGES ───────────────────────────────────────────────────────
 ranges:
