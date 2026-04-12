@@ -1530,7 +1530,56 @@ fn expand_tilde_only(arg: &str) -> String {
         let oldpwd = std::env::var("OLDPWD").unwrap_or_default();
         return format!("{oldpwd}{}", &arg[2..]);
     }
+    // ~username or ~username/path — look up user's home directory
+    if let Some(rest) = arg.strip_prefix('~') {
+        // Username is everything up to first '/' (if any)
+        let (user, path) = match rest.find('/') {
+            Some(i) => (&rest[..i], &rest[i..]),
+            None => (rest, ""),
+        };
+        // Skip empty (~) and special chars (~+, ~-) — already handled above
+        if !user.is_empty()
+            && user.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+        {
+            if let Some(home) = lookup_user_home(user) {
+                return format!("{home}{path}");
+            }
+        }
+    }
     arg.to_string()
+}
+
+/// Look up a user's home directory. Returns None if the user doesn't exist
+/// or the lookup isn't supported on this platform.
+#[cfg(unix)]
+fn lookup_user_home(username: &str) -> Option<String> {
+    use std::ffi::{CStr, CString};
+    let c_name = CString::new(username).ok()?;
+    // SAFETY: getpwnam returns a pointer to a static struct, valid until next call.
+    // We copy the string immediately so subsequent calls don't invalidate our data.
+    unsafe {
+        let pw = libc::getpwnam(c_name.as_ptr());
+        if pw.is_null() {
+            return None;
+        }
+        let dir_ptr = (*pw).pw_dir;
+        if dir_ptr.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(dir_ptr).to_string_lossy().into_owned())
+    }
+}
+
+#[cfg(windows)]
+fn lookup_user_home(username: &str) -> Option<String> {
+    // Windows has no standard getpwnam equivalent. Best-effort: assume
+    // C:\Users\<username> if that directory exists.
+    let candidate = format!("C:/Users/{username}");
+    if std::path::Path::new(&candidate).is_dir() {
+        Some(candidate)
+    } else {
+        None
+    }
 }
 
 /// Split command line on unquoted `|` characters.
@@ -2164,6 +2213,58 @@ mod tests {
         unsafe { std::env::set_var("OLDPWD", "/tmp"); }
         assert_eq!(expand_tilde_only("~-"), "/tmp");
         unsafe { std::env::remove_var("OLDPWD"); }
+    }
+
+    // ── ~user tilde expansion ──────────────────────────────────────
+
+    #[test]
+    #[cfg(unix)]
+    fn tilde_user_current() {
+        // Current user should resolve via getpwnam to the same as $HOME
+        let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let expanded = expand_tilde_only(&format!("~{user}"));
+        // Should not be the literal string — must have been expanded
+        assert_ne!(expanded, format!("~{user}"));
+        // For most users, getpwnam result matches $HOME
+        if !home.is_empty() {
+            assert_eq!(expanded, home);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tilde_user_with_path() {
+        let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let expanded = expand_tilde_only(&format!("~{user}/Documents"));
+        if !home.is_empty() {
+            assert_eq!(expanded, format!("{home}/Documents"));
+        }
+    }
+
+    #[test]
+    fn tilde_nonexistent_user_passthrough() {
+        // Unknown user should pass through unchanged
+        let result = expand_tilde_only("~zznonexistentuserzz");
+        assert_eq!(result, "~zznonexistentuserzz");
+    }
+
+    #[test]
+    fn tilde_nonexistent_user_with_path_passthrough() {
+        let result = expand_tilde_only("~zznonexistentuserzz/foo");
+        assert_eq!(result, "~zznonexistentuserzz/foo");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn tilde_root_user() {
+        // root typically exists on Unix systems with a home dir
+        let expanded = expand_tilde_only("~root");
+        // Should not be literal — root exists on all Unix systems
+        assert_ne!(expanded, "~root");
+        // Typical values: /root on Linux, /var/root on macOS
+        assert!(expanded.starts_with('/'));
     }
 
     fn param_prefix_strip() {
