@@ -28,16 +28,20 @@ impl RushPrompt {
     }
 
     fn is_stale(&self) -> bool {
-        if let Some(start) = self.start_mtime {
-            if let Some(current) = std::env::current_exe()
-                .ok()
-                .and_then(|p| std::fs::metadata(p).ok())
-                .and_then(|m| m.modified().ok())
-            {
-                return current > start;
-            }
+        let Some(start) = self.start_mtime else { return false; };
+        let Ok(exe) = std::env::current_exe() else { return false; };
+        // On Linux, after the binary is replaced (install.sh rename),
+        // /proc/self/exe resolves to "<path> (deleted)". Strip that so
+        // we stat the real on-disk file — which is the NEW binary.
+        let exe_str = exe.to_string_lossy();
+        let real = exe_str
+            .strip_suffix(" (deleted)")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| exe.clone());
+        match std::fs::metadata(&real).and_then(|m| m.modified()) {
+            Ok(current) => current > start,
+            Err(_) => true, // path gone → definitely stale
         }
-        false
     }
 }
 

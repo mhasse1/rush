@@ -1393,14 +1393,22 @@ fn handle_open(args: &str) {
 
 fn handle_reload(evaluator: &mut Evaluator, args: &str) {
     if args == "--hard" {
-        // Hard reload: re-exec the rush binary
+        // Hard reload: re-exec the rush binary.
+        // On Linux, if the binary was replaced while running,
+        // current_exe() returns "<path> (deleted)". Strip that suffix
+        // so we exec the replacement at the same path.
         let exe = std::env::current_exe().unwrap_or_else(|_| "rush".into());
+        let exe_str = exe.to_string_lossy().to_string();
+        let target = match exe_str.strip_suffix(" (deleted)") {
+            Some(p) => std::path::PathBuf::from(p),
+            None => exe.clone(),
+        };
         eprintln!("Reloading rush...");
 
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            let err = std::process::Command::new(&exe).exec();
+            let err = std::process::Command::new(&target).exec();
             eprintln!("reload --hard: {err}");
         }
         #[cfg(not(unix))]
