@@ -240,6 +240,12 @@ fn main() {
 /// Checks builtins first (in-process), then delegates to dispatch for
 /// chain operators, triage, Rush eval, and shell execution.
 pub fn run_line(evaluator: &mut Evaluator, line: &str) {
+    // Refresh COLUMNS/LINES from the current terminal so child
+    // processes (ls, less, vim, etc.) see the actual width even after
+    // the user resizes the terminal mid-session. Cheap (a single
+    // ioctl/winsize call) — no need for SIGWINCH plumbing.
+    signals::update_terminal_size();
+
     let raw = line.trim();
     let expanded = builtins::expand_alias(raw);
     let trimmed = expanded.as_deref().unwrap_or(raw);
