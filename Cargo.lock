@@ -974,7 +974,7 @@ dependencies = [
 [[package]]
 name = "reedline"
 version = "0.46.0"
-source = "git+https://github.com/mhasse1/reedline.git?branch=main#732c0b9394233aa198fce2489186a332acc2f889"
+source = "git+https://github.com/mhasse1/reedline.git?branch=main#4aeaae3002a4469dfaba3306673633f3b703f3f6"
 dependencies = [
  "chrono",
  "crossterm",
