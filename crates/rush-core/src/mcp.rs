@@ -174,6 +174,14 @@ fn handle_tools_list() -> Result<JsonValue, (i32, String)> {
                     "type": "object",
                     "properties": {}
                 }
+            },
+            {
+                "name": "rush_reset_session",
+                "description": "Clear the persistent session: all Rush variables, function definitions, and class definitions are dropped. cwd, environment variables, and session identity (session_id, host) are preserved. Use this between logical tasks on a long-lived MCP connection to start a clean slate without reconnecting.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
             }
         ]
     }))
@@ -226,6 +234,15 @@ fn handle_tools_call(
             let result = llm::lwrite(path, content, encoding, &cwd);
             let is_err = result.status != "success";
             (serde_json::to_value(&result).unwrap_or(json!(null)), is_err)
+        }
+        "rush_reset_session" => {
+            session.env.reset();
+            (json!({
+                "status": "success",
+                "message": "session reset: variables, functions, and classes cleared",
+                "session_id": session.session_id,
+                "host": session.host,
+            }), false)
         }
         "rush_context" => {
             let cwd = llm::get_cwd();
@@ -333,15 +350,19 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_four_tools() {
+    fn tools_list_has_expected_tools() {
         let result = handle_tools_list().unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 4);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"rush_execute"));
-        assert!(names.contains(&"rush_read_file"));
-        assert!(names.contains(&"rush_write_file"));
-        assert!(names.contains(&"rush_context"));
+        for expected in [
+            "rush_execute",
+            "rush_read_file",
+            "rush_write_file",
+            "rush_context",
+            "rush_reset_session",
+        ] {
+            assert!(names.contains(&expected), "missing tool: {expected}; got {names:?}");
+        }
     }
 
     // rush_execute covered end-to-end in

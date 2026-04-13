@@ -44,6 +44,23 @@ impl Environment {
         }
     }
 
+    /// Clear all user-level state: variables, functions, classes,
+    /// readonly markers. The structure is preserved (single empty
+    /// scope restored) so the Environment remains usable for
+    /// subsequent commands.
+    ///
+    /// Used by `--llm` / MCP session reset so long-lived sessions
+    /// can start a new logical task without restarting the process.
+    /// cwd and process-level env vars are NOT touched here — those
+    /// are process-global, not session state.
+    pub fn reset(&mut self) {
+        self.scopes.clear();
+        self.scopes.push(HashMap::new());
+        self.functions.clear();
+        self.classes.clear();
+        self.readonly.clear();
+    }
+
     /// Push a new scope (entering a function, block, etc.)
     pub fn push_scope(&mut self) {
         self.scopes.push(HashMap::new());

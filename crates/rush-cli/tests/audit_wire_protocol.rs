@@ -462,6 +462,66 @@ fn llm__oneline_def_end_not_chain_split() {
     assert_eq!(result["status"], "success");
 }
 
+/// Session reset: `reset` builtin clears variables in --llm.
+#[test]
+fn llm__reset_clears_variables() {
+    let stdin = "x = 42\nputs x\nreset\nputs x\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    // Find the two `puts x` results. Before reset: stdout="42".
+    // After reset: empty stdout (x undefined, puts emits empty).
+    let results: Vec<&Value> = objs.iter().filter(|v| v.get("ready").is_none()).collect();
+    // Order: set-x, puts-x-before, reset, puts-x-after.
+    assert_eq!(results[1]["stdout"], "42", "x should be 42 before reset");
+    let after = results[3]["stdout"].as_str().unwrap_or("<missing>");
+    assert!(after.is_empty() || after == "" , "x should be cleared by reset, got {after:?}");
+}
+
+/// Session reset: `reset` preserves session_id (identity) and cwd.
+#[test]
+fn llm__reset_preserves_identity() {
+    let stdin = "x = 1\nreset\nputs 2\n";
+    let (objs, _stderr, _code) = drive(&["--llm"], stdin);
+    let results: Vec<&Value> = objs.iter().filter(|v| v.get("ready").is_none()).collect();
+    let first_sid = results[0]["session_id"].as_str().unwrap();
+    for r in &results[1..] {
+        assert_eq!(r["session_id"].as_str().unwrap(), first_sid,
+                   "session_id must not change across reset");
+    }
+}
+
+/// MCP reset: rush_reset_session clears variables.
+#[test]
+fn mcp__reset_session_clears_variables() {
+    let stdin = format!(
+        "{}{}{}{}",
+        rpc(1, "tools/call", json!({"name":"rush_execute","arguments":{"command":"x = 42"}})),
+        rpc(2, "tools/call", json!({"name":"rush_execute","arguments":{"command":"puts x"}})),
+        rpc(3, "tools/call", json!({"name":"rush_reset_session","arguments":{}})),
+        rpc(4, "tools/call", json!({"name":"rush_execute","arguments":{"command":"puts x"}})),
+    );
+    let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+    assert_eq!(objs.len(), 4);
+    let r2 = unwrap_mcp_tool_result(&objs[1]);
+    assert_eq!(r2["stdout"], "42", "x should be set before reset");
+    let r3 = unwrap_mcp_tool_result(&objs[2]);
+    assert_eq!(r3["status"], "success");
+    let r4 = unwrap_mcp_tool_result(&objs[3]);
+    let after = r4["stdout"].as_str().unwrap_or("<missing>");
+    assert!(after.is_empty(), "x should be cleared after reset, got {after:?}");
+}
+
+/// MCP reset: tools/list advertises rush_reset_session.
+#[test]
+fn mcp__reset_session_tool_is_advertised() {
+    let stdin = rpc(1, "tools/list", json!({}));
+    let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
+    let tools = objs[0]["result"]["tools"].as_array().expect("tools");
+    let names: std::collections::HashSet<&str> =
+        tools.iter().filter_map(|t| t["name"].as_str()).collect();
+    assert!(names.contains("rush_reset_session"),
+            "rush_reset_session not advertised; tools are {names:?}");
+}
+
 /// F8: one-liner if/end in a chain.
 #[test]
 fn llm__oneline_if_end_not_chain_split() {
@@ -564,20 +624,24 @@ fn mcp__initialize_returns_expected_shape() {
     assert!(r["instructions"].as_str().unwrap().contains("Rush"));
 }
 
-/// tools/list advertises the four public tools with correct schema.
+/// tools/list advertises the expected public tools with correct schema.
 /// Bench harness reads this to know what's available.
 #[test]
-fn mcp__tools_list_advertises_four_tools() {
+fn mcp__tools_list_advertises_expected_tools() {
     let stdin = rpc(1, "tools/list", json!({}));
     let (objs, _stderr, _code) = drive(&["--mcp"], &stdin);
     let tools = objs[0]["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 4);
     let names: std::collections::HashSet<&str> =
         tools.iter().filter_map(|t| t["name"].as_str()).collect();
-    assert!(names.contains("rush_execute"));
-    assert!(names.contains("rush_read_file"));
-    assert!(names.contains("rush_write_file"));
-    assert!(names.contains("rush_context"));
+    for expected in [
+        "rush_execute",
+        "rush_read_file",
+        "rush_write_file",
+        "rush_context",
+        "rush_reset_session",
+    ] {
+        assert!(names.contains(expected), "missing tool: {expected}; got {names:?}");
+    }
     // Each tool must have name, description, and inputSchema.
     for t in tools {
         assert!(t["name"].is_string());

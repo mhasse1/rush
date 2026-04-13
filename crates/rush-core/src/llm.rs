@@ -727,6 +727,20 @@ fn execute_command(input: &str, session: &mut LlmSession) -> LlmResult {
         }, session);
     }
 
+    if first_word == "reset" || first_word == "clear-session" {
+        // Clear Rush-level session state (variables, function defs,
+        // class defs). cwd, env vars, and session identity stay.
+        session.env.reset();
+        return decorate(LlmResult {
+            status: "success".into(),
+            exit_code: 0,
+            cwd,
+            stdout: Some("session reset: variables, functions, and classes cleared".into()),
+            duration_ms: start.elapsed().as_millis(),
+            ..Default::default()
+        }, session);
+    }
+
     if first_word == "exit" || first_word == "quit" {
         let code: i32 = input
             .split_whitespace()
