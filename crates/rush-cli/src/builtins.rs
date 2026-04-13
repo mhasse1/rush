@@ -453,11 +453,19 @@ fn handle_path(args: &str) {
                 return;
             }
 
-            let current = std::env::var("PATH").unwrap_or_default();
             let sep = if cfg!(windows) { ";" } else { ":" };
+            let sep_char = if cfg!(windows) { ';' } else { ':' };
             for dir in &dirs {
                 let expanded = expand_tilde(dir);
-                let new_path = format!("{current}{sep}{expanded}");
+                let current = std::env::var("PATH").unwrap_or_default();
+                if current.split(sep_char).any(|d| d == expanded) {
+                    continue;
+                }
+                let new_path = if current.is_empty() {
+                    expanded
+                } else {
+                    format!("{current}{sep}{expanded}")
+                };
                 unsafe { std::env::set_var("PATH", &new_path) };
             }
 
