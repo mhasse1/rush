@@ -140,6 +140,14 @@ impl ObjectifyConfig {
         ObjectifyConfig { commands }
     }
 
+    /// Construct a config containing only the built-in defaults.
+    /// For tests: avoids reading the developer's /etc/rush or
+    /// ~/.config/rush/objectify.yaml, which would pollute assertions.
+    #[cfg(test)]
+    fn builtins_only() -> Self {
+        Self { commands: built_in_defaults() }
+    }
+
     /// Look up hints for a command line.
     /// Tries 2-word match first ("docker ps"), then 1-word ("netstat").
     pub fn get_hint(&self, command_line: &str) -> Option<&ObjectifyHint> {
@@ -202,7 +210,7 @@ mod tests {
 
     #[test]
     fn built_in_has_ps() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         assert!(config.should_objectify("ps aux"));
         assert!(config.should_objectify("ps -ef"));
         assert!(config.should_objectify("ps"));
@@ -210,14 +218,14 @@ mod tests {
 
     #[test]
     fn built_in_has_df() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         assert!(config.should_objectify("df -h"));
         assert!(config.should_objectify("df"));
     }
 
     #[test]
     fn two_word_match() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         assert!(config.should_objectify("docker ps -a"));
         assert!(config.should_objectify("docker images"));
         assert!(config.should_objectify("kubectl get pods"));
@@ -225,7 +233,7 @@ mod tests {
 
     #[test]
     fn unknown_command() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         assert!(!config.should_objectify("echo hello"));
         assert!(!config.should_objectify("ls -la"));
         assert!(!config.should_objectify("git status"));
@@ -233,21 +241,21 @@ mod tests {
 
     #[test]
     fn docker_has_delim_hint() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         let hint = config.get_hint("docker ps -a").unwrap();
         assert_eq!(hint.delim.as_deref(), Some(r"\s{2,}"));
     }
 
     #[test]
     fn free_has_skip() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         let hint = config.get_hint("free -h").unwrap();
         assert_eq!(hint.skip, 1);
     }
 
     #[test]
     fn netstat_is_fixed() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         let hint = config.get_hint("netstat -an").unwrap();
         assert!(hint.fixed);
     }
@@ -361,7 +369,7 @@ mytool:
 
     #[test]
     fn command_names_sorted() {
-        let config = ObjectifyConfig::load();
+        let config = ObjectifyConfig::builtins_only();
         let names = config.command_names();
         assert!(!names.is_empty());
         // Verify sorted

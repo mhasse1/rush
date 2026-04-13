@@ -1919,6 +1919,15 @@ fn home_dir() -> String {
 }
 
 fn config_dir() -> std::path::PathBuf {
+    // RUSH_CONFIG_DIR overrides the default $HOME/.config/rush. This
+    // exists primarily so tests that exercise the --save persistence
+    // paths (save_alias_to_config, save_path_to_init, etc.) can point
+    // at a tempdir instead of clobbering the developer's real config.
+    if let Ok(dir) = std::env::var("RUSH_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return std::path::PathBuf::from(dir);
+        }
+    }
     std::path::PathBuf::from(home_dir()).join(".config").join("rush")
 }
 
@@ -2118,6 +2127,48 @@ fn expand_tilde(path: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Scoped override of RUSH_CONFIG_DIR for tests that exercise
+    /// --save persistence paths. Serialized via a process-wide mutex
+    /// because std::env::set_var is global and cargo runs tests in
+    /// parallel threads. Restores the prior value on drop so nested
+    /// or concurrent tests can't leak state.
+    struct ScopedConfigDir {
+        _guard: std::sync::MutexGuard<'static, ()>,
+        prior: Option<String>,
+        _tmp: std::path::PathBuf,
+    }
+
+    impl ScopedConfigDir {
+        fn new() -> Self {
+            static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let prior = std::env::var("RUSH_CONFIG_DIR").ok();
+            let tmp = std::env::temp_dir().join(format!(
+                "rush-test-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            std::fs::create_dir_all(&tmp).expect("create tmp config dir");
+            unsafe { std::env::set_var("RUSH_CONFIG_DIR", &tmp) };
+            Self { _guard: guard, prior, _tmp: tmp }
+        }
+    }
+
+    impl Drop for ScopedConfigDir {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.prior {
+                    Some(v) => std::env::set_var("RUSH_CONFIG_DIR", v),
+                    None => std::env::remove_var("RUSH_CONFIG_DIR"),
+                }
+            }
+            let _ = std::fs::remove_dir_all(&self._tmp);
+        }
+    }
+
     #[test]
     fn extract_save_leading() {
         let (save, rest) = extract_save_flag("--save ls=\"ls --color\"");
@@ -2166,6 +2217,7 @@ mod tests {
     fn alias_insert_with_leading_save_flag() {
         // End-to-end: handle_alias with "--save ls=..." must store under
         // key "ls", not "--save ls". This is the #215 bug 1 regression.
+        let _scope = ScopedConfigDir::new();
         ALIASES.with(|a| a.borrow_mut().clear());
         handle_alias("--save ls=\"ls --color\"");
         ALIASES.with(|a| {
@@ -2185,6 +2237,7 @@ mod tests {
 
     #[test]
     fn alias_insert_with_trailing_save_flag() {
+        let _scope = ScopedConfigDir::new();
         ALIASES.with(|a| a.borrow_mut().clear());
         handle_alias("ll=\"ls -la\" --save");
         ALIASES.with(|a| {
