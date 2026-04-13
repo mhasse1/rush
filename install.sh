@@ -16,8 +16,14 @@ if [[ ! -f "$BUILT" ]]; then
 fi
 
 echo "Installing to $BIN_LINK..."
-sudo cp "$BUILT" "$BIN_LINK"
-sudo chmod +x "$BIN_LINK"
+# Stage into a sibling path then rename, so we can replace a binary
+# that is currently executing (Linux "text file busy"). rename() just
+# swaps which inode the name points at; the running process keeps its
+# old inode alive until it exits.
+TMP_LINK="${BIN_LINK}.new.$$"
+sudo cp "$BUILT" "$TMP_LINK"
+sudo chmod +x "$TMP_LINK"
+sudo mv -f "$TMP_LINK" "$BIN_LINK"
 
 # macOS: strip quarantine + ad-hoc sign
 if [[ "$(uname)" == "Darwin" ]]; then

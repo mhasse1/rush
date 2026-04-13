@@ -35,8 +35,8 @@ impl UnixPlatform {
 impl Platform for UnixPlatform {
     fn install_signal_handlers(&self) {
         unsafe {
-            libc::signal(libc::SIGHUP, handle_exit_signal as libc::sighandler_t);
-            libc::signal(libc::SIGTERM, handle_exit_signal as libc::sighandler_t);
+            libc::signal(libc::SIGHUP, handle_exit_signal as *const () as libc::sighandler_t);
+            libc::signal(libc::SIGTERM, handle_exit_signal as *const () as libc::sighandler_t);
             libc::signal(libc::SIGTSTP, libc::SIG_IGN); // shell ignores Ctrl+Z
             libc::signal(libc::SIGPIPE, libc::SIG_IGN); // ignore broken pipe
             libc::signal(libc::SIGTTIN, libc::SIG_IGN); // shell ignores bg read
