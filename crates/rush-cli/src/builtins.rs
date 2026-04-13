@@ -27,6 +27,16 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
     let cmd = parts[0];
     let args = parts.get(1).map(|s| s.trim()).unwrap_or("");
 
+    // Save the prior exit code so `exit`/`quit` with no argument can
+    // still inherit it (POSIX `$?` semantics). Then reset to 0 as the
+    // default-success state for every other builtin. Without this reset,
+    // a successful builtin following a failed external (exit 127) would
+    // inherit 127, which triggered spurious "not found" hints in the
+    // REPL post-hook. Builtins that fail set exit_code explicitly
+    // (e.g. `false`, `cd` on a missing directory).
+    let prior_exit = evaluator.exit_code;
+    evaluator.exit_code = 0;
+
     match cmd {
         "cd" => { handle_cd(evaluator, args); true }
         "export" => { handle_export(args); true }
@@ -34,7 +44,8 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "source" | "." => { handle_source(evaluator, args); true }
         "clear" => { print!("\x1b[2J\x1b[H"); true }
         "exit" | "quit" => {
-            let code = args.trim().parse::<i32>().unwrap_or(evaluator.exit_code);
+            // POSIX: `exit` with no arg inherits the previous $?.
+            let code = args.trim().parse::<i32>().unwrap_or(prior_exit);
             std::process::exit(code);
         }
         "pwd" => {
@@ -194,14 +205,22 @@ fn handle_alias(args: &str) {
         return;
     }
 
+    // Extract --save (or -s) as a flag BEFORE the '=' split so it doesn't
+    // end up as part of the alias name. Accepts all of:
+    //   alias --save name=value
+    //   alias -s name=value
+    //   alias name=value --save
+    //   alias name=value -s
+    // A quoted "--save" inside the expansion stays (shouldn't happen in
+    // practice — aliases don't contain flags — but if they do, the
+    // whitespace-delimited check below rules out in-quote occurrences).
+    let (save, args) = extract_save_flag(args);
+    let args = args.trim();
+
     // alias name='expansion' or alias name=expansion
     if let Some((name, expansion)) = args.split_once('=') {
         let name = name.trim().to_string();
         let expansion = expansion.trim().trim_matches('\'').trim_matches('"').to_string();
-
-        // --save: persist to config
-        let save = expansion.contains("--save") || args.contains("--save");
-        let expansion = expansion.replace("--save", "").trim().to_string();
 
         ALIASES.with(|a| {
             a.borrow_mut().insert(name.clone(), expansion.clone());
@@ -221,6 +240,50 @@ fn handle_alias(args: &str) {
             }
         });
     }
+}
+
+/// Pull a `--save` (or `-s`) flag out of the arg string, returning whether
+/// it was present and the arg string with the flag removed. Flag tokens
+/// are matched only at whitespace-delimited positions outside quotes so
+/// they don't match substrings of an expansion value.
+fn extract_save_flag(args: &str) -> (bool, String) {
+    let mut found = false;
+    let mut out = String::with_capacity(args.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let chars: Vec<char> = args.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        // Flag-consumption path: only outside quotes, at word boundaries.
+        if !in_single && !in_double {
+            let at_boundary = i == 0 || chars[i - 1].is_whitespace();
+            if at_boundary {
+                let matched_flag = ["--save", "-s"].iter().find(|flag| {
+                    let end = i + flag.len();
+                    end <= chars.len()
+                        && &chars[i..end].iter().collect::<String>() == *flag
+                        && (end == chars.len() || chars[end].is_whitespace())
+                });
+                if let Some(flag) = matched_flag {
+                    found = true;
+                    i += flag.len();
+                    // Skip the separating whitespace so we don't leave a
+                    // gap that might turn a value into two tokens.
+                    while i < chars.len() && chars[i].is_whitespace() {
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        let c = chars[i];
+        if !in_double && c == '\'' { in_single = !in_single; }
+        else if !in_single && c == '"' { in_double = !in_double; }
+        out.push(c);
+        i += 1;
+    }
+    (found, out)
 }
 
 fn handle_unalias(args: &str) {
@@ -2036,5 +2099,86 @@ fn expand_tilde(path: &str) -> String {
         home_dir()
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_save_leading() {
+        let (save, rest) = extract_save_flag("--save ls=\"ls --color\"");
+        assert!(save);
+        assert_eq!(rest, "ls=\"ls --color\"");
+    }
+
+    #[test]
+    fn extract_save_trailing() {
+        let (save, rest) = extract_save_flag("ls=value --save");
+        assert!(save);
+        assert_eq!(rest.trim(), "ls=value");
+    }
+
+    #[test]
+    fn extract_save_short_flag() {
+        let (save, rest) = extract_save_flag("-s ls=value");
+        assert!(save);
+        assert_eq!(rest, "ls=value");
+    }
+
+    #[test]
+    fn extract_save_absent() {
+        let (save, rest) = extract_save_flag("ls=\"ls --color\"");
+        assert!(!save);
+        assert_eq!(rest, "ls=\"ls --color\"");
+    }
+
+    #[test]
+    fn extract_save_inside_quotes_not_consumed() {
+        // A literal "--save" inside a quoted expansion must stay put.
+        let (save, rest) = extract_save_flag("name=\"echo --save hello\"");
+        assert!(!save);
+        assert_eq!(rest, "name=\"echo --save hello\"");
+    }
+
+    #[test]
+    fn extract_save_substring_not_matched() {
+        // Don't match "--save" as a substring of a longer token.
+        let (save, rest) = extract_save_flag("--saved=1");
+        assert!(!save);
+        assert_eq!(rest, "--saved=1");
+    }
+
+    #[test]
+    fn alias_insert_with_leading_save_flag() {
+        // End-to-end: handle_alias with "--save ls=..." must store under
+        // key "ls", not "--save ls". This is the #215 bug 1 regression.
+        ALIASES.with(|a| a.borrow_mut().clear());
+        handle_alias("--save ls=\"ls --color\"");
+        ALIASES.with(|a| {
+            let aliases = a.borrow();
+            assert!(
+                aliases.contains_key("ls"),
+                "expected key \"ls\", got keys: {:?}",
+                aliases.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                !aliases.contains_key("--save ls"),
+                "must not store with \"--save\" in key"
+            );
+            assert_eq!(aliases.get("ls").map(String::as_str), Some("ls --color"));
+        });
+    }
+
+    #[test]
+    fn alias_insert_with_trailing_save_flag() {
+        ALIASES.with(|a| a.borrow_mut().clear());
+        handle_alias("ll=\"ls -la\" --save");
+        ALIASES.with(|a| {
+            let aliases = a.borrow();
+            assert!(aliases.contains_key("ll"));
+            assert_eq!(aliases.get("ll").map(String::as_str), Some("ls -la"));
+        });
     }
 }
