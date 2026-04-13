@@ -182,6 +182,13 @@ fn stream_request(
     // Parse SSE/NDJSON response and extract tokens
     for line in text.lines() {
         total_lines += 1;
+        if let Some(err) = extract_stream_error(line) {
+            // Provider streamed an error event (e.g. anthropic
+            // returns 200 OK with event: error / type=overloaded_error
+            // when load-shedding). Surface it — otherwise we'd drop
+            // it and print nothing.
+            return Err(err);
+        }
         if let Some(token) = extract_token(line, &provider.format) {
             matched_lines += 1;
             print!("{token}");
@@ -203,6 +210,47 @@ fn stream_request(
     }
 
     Ok(full_response)
+}
+
+/// Detect a provider-streamed error event and return a human-readable
+/// message. Anthropic SSE uses:
+///   data: {"type":"error","error":{"type":"...","message":"..."}}
+/// OpenAI uses:
+///   data: {"error":{"message":"...","type":"..."}}
+/// Ollama uses:
+///   {"error":"..."}
+fn extract_stream_error(line: &str) -> Option<String> {
+    let data = if let Some(d) = line.strip_prefix("data: ") {
+        d.trim()
+    } else if line.starts_with('{') {
+        line.trim()
+    } else {
+        return None;
+    };
+    if data == "[DONE]" || data.is_empty() {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
+
+    // Anthropic shape
+    if parsed.get("type").and_then(|t| t.as_str()) == Some("error") {
+        let err = parsed.get("error")?;
+        let kind = err.get("type").and_then(|t| t.as_str()).unwrap_or("error");
+        let msg = err.get("message").and_then(|t| t.as_str()).unwrap_or("");
+        return Some(format!("{kind}: {msg}"));
+    }
+    // OpenAI-shaped error
+    if let Some(err) = parsed.get("error").filter(|e| e.is_object()) {
+        let kind = err.get("type").and_then(|t| t.as_str()).unwrap_or("error");
+        let msg = err.get("message").and_then(|t| t.as_str()).unwrap_or("");
+        return Some(format!("{kind}: {msg}"));
+    }
+    // Ollama-shaped error: {"error":"string"}
+    if let Some(msg) = parsed.get("error").and_then(|e| e.as_str()) {
+        return Some(format!("error: {msg}"));
+    }
+
+    None
 }
 
 fn build_request(
