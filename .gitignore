@@ -23,3 +23,5 @@ internal/
 .claude/
 *.btskey
 shared/
+# Leak-hunt runtime artifacts (RSS CSVs, stdout captures, logs)
+scripts/leak-hunt/leak-results/
