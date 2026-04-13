@@ -33,7 +33,8 @@ echo
 # Pipe the driver directly into rush --llm. The driver is infinite, so
 # rush stays alive until we kill the pipeline. $! after a pipeline gives
 # the rightmost command's PID, which is rush.
-"$SCRIPT_DIR/driver.sh" | "$RUSH_BIN" --llm > "$OUT/rush.stdout.log" 2> "$OUT/rush.stderr.log" &
+DRIVER_SCRIPT="${DRIVER:-$SCRIPT_DIR/driver.sh}"
+"$DRIVER_SCRIPT" | "$RUSH_BIN" --llm > "$OUT/rush.stdout.log" 2> "$OUT/rush.stderr.log" &
 RUSH_PID=$!
 DRIVER_PID=""  # not directly tracked; pgkill via process group on cleanup
 echo "rush --llm pid: $RUSH_PID"
