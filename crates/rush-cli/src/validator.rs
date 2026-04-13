@@ -89,9 +89,19 @@ fn is_incomplete(source: &str) -> bool {
             line_words.push(word);
         }
 
-        // Count block depth changes from keywords
-        for w in &line_words {
-            match w.to_lowercase().as_str() {
+        // Count block depth changes from keywords.
+        // Only treat block-opener keywords when they appear as the FIRST word
+        // of the line (matching triage's classification). Otherwise a shell
+        // command like `mkdir foo-linux` — where the tokenizer splits on `-`
+        // and produces ["mkdir", "foo", "linux"] — would incorrectly treat
+        // `linux` as a platform block opener, flip the line to incomplete,
+        // and drop rush into multi-line mode. Which, combined with terminal
+        // cursor-position echoing, triggered an infinite repaint loop.
+        //
+        // `end` is allowed anywhere since it can legitimately close a prior
+        // block regardless of position on the current line.
+        if let Some(first_word) = line_words.first() {
+            match first_word.to_lowercase().as_str() {
                 "if" | "unless" | "while" | "until" | "for" | "loop"
                 | "def" | "class" | "enum" | "case" | "match"
                 | "try" | "begin" | "do"
@@ -99,10 +109,12 @@ fn is_incomplete(source: &str) -> bool {
                 | "plugin" => {
                     depth += 1;
                 }
-                "end" => {
-                    depth -= 1;
-                }
                 _ => {}
+            }
+        }
+        for w in &line_words {
+            if w.eq_ignore_ascii_case("end") {
+                depth -= 1;
             }
         }
     }
@@ -169,5 +181,35 @@ mod tests {
     fn string_content_ignored() {
         // "end" inside a string shouldn't close a block
         assert!(is_incomplete("if true\n  puts \"end\""));
+    }
+
+    #[test]
+    fn keyword_as_arg_does_not_trigger_block() {
+        // Regression: shell command with a hyphenated arg that contains a
+        // platform keyword (linux / macos / win64 / etc) must not be treated
+        // as opening a block. Previously `foo-linux` tokenized to ["foo",
+        // "linux"] and the `linux` match pushed depth=1, sending rush into
+        // multi-line mode, which combined with terminal cursor-position
+        // echoes triggered an unbounded repaint loop and OOM.
+        assert!(!is_incomplete("mkdir foo-linux"));
+        assert!(!is_incomplete("mkdir xremap-linux-aarch64-gnome"));
+        assert!(!is_incomplete("cd foo-macos"));
+        assert!(!is_incomplete("rm -rf test-win64"));
+        assert!(!is_incomplete("ls /opt/ps-bin"));
+        assert!(!is_incomplete("/usr/local/bin/xremap linux-gnome"));
+    }
+
+    #[test]
+    fn platform_keyword_as_first_word_still_opens_block() {
+        // Legitimate platform blocks must still be detected.
+        assert!(is_incomplete("linux"));
+        assert!(is_incomplete("macos\n  puts \"mac\""));
+        assert!(!is_incomplete("linux\n  puts \"unix\"\nend"));
+    }
+
+    #[test]
+    fn end_closes_block_anywhere_on_line() {
+        // `end` on the same line as its opener should still close the block.
+        assert!(!is_incomplete("if true; puts x; end"));
     }
 }

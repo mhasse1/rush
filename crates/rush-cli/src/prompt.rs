@@ -107,6 +107,11 @@ impl Prompt for RushPrompt {
             line.push_str(&format!("  {}[stale]{}", t.warning, t.reset));
         }
 
+        // PID — surfaced in muted style so it doesn't dominate but is
+        // one-glance visible for diagnostics (attaching strace / gdb /
+        // sample / profilers to the right process).
+        line.push_str(&format!("  {}[{}]{}", t.muted, std::process::id(), t.reset));
+
         // Input on next line
         line.push_str("\n  ");
 

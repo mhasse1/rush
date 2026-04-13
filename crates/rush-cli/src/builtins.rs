@@ -1821,6 +1821,13 @@ pub fn inject_builtin_vars(evaluator: &mut Evaluator) {
     evaluator.env.set("$user", Value::String(rush_core::llm::get_username()));
     evaluator.env.set("$rush_version", Value::String(crate::rush_version_short().to_string()));
     evaluator.env.set("$pid", Value::Int(std::process::id() as i64));
+    #[cfg(unix)]
+    {
+        let ppid = unsafe { libc::getppid() } as i64;
+        evaluator.env.set("$ppid", Value::Int(ppid));
+    }
+    #[cfg(not(unix))]
+    evaluator.env.set("$ppid", Value::Int(0));
     evaluator.env.set("$sep", Value::String(std::path::MAIN_SEPARATOR.to_string()));
     evaluator.env.set("__rush_arch", Value::String(std::env::consts::ARCH.to_string()));
     evaluator.env.set("__rush_os_version", Value::String(
