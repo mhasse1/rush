@@ -155,8 +155,9 @@ jobs:
           assert 'rush_read_file' in names, f'missing rush_read_file: {names}'
           assert 'rush_write_file' in names, f'missing rush_write_file: {names}'
           assert 'rush_context' in names, f'missing rush_context: {names}'
-          assert len(tools) == 4, f'expected 4 tools, got {len(tools)}'
-          print('✓ MCP tools/list OK (4 tools)')
+          assert 'rush_reset_session' in names, f'missing rush_reset_session: {names}'
+          assert len(tools) == 5, f'expected 5 tools, got {len(tools)}'
+          print('✓ MCP tools/list OK (5 tools)')
           "
 
           # Test MCP rush_execute
