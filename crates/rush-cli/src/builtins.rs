@@ -19,10 +19,6 @@ thread_local! {
 
 /// Try to handle a line as a shell builtin. Returns true if handled.
 pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
-    // Expand aliases first
-    let expanded = expand_alias(line);
-    let line = expanded.as_deref().unwrap_or(line);
-
     let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
     let cmd = parts[0];
     let args = parts.get(1).map(|s| s.trim()).unwrap_or("");
@@ -294,7 +290,7 @@ fn handle_unalias(args: &str) {
     }
 }
 
-fn expand_alias(line: &str) -> Option<String> {
+pub fn expand_alias(line: &str) -> Option<String> {
     let first_word = line.split_whitespace().next()?;
     ALIASES.with(|a| {
         let aliases = a.borrow();

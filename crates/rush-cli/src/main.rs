@@ -240,7 +240,9 @@ fn main() {
 /// Checks builtins first (in-process), then delegates to dispatch for
 /// chain operators, triage, Rush eval, and shell execution.
 pub fn run_line(evaluator: &mut Evaluator, line: &str) {
-    let trimmed = line.trim();
+    let raw = line.trim();
+    let expanded = builtins::expand_alias(raw);
+    let trimmed = expanded.as_deref().unwrap_or(raw);
 
     // Only check builtins for simple commands (no chain operators).
     // This ensures "set -e; cmd" goes through dispatch for proper chain splitting.
