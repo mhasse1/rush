@@ -3,6 +3,7 @@
 //! Every command goes through this path: REPL, scripts, function bodies,
 //! init.rush, -c mode. This ensures consistent behavior everywhere.
 
+use crate::ai;
 use crate::eval::Evaluator;
 use crate::flags;
 use crate::jobs::JobTable;
@@ -274,6 +275,54 @@ pub fn dispatch_with_jobs(
 
         // Step 3: Check for pipes
         let pipe_segments = pipeline::split_pipeline(segment);
+
+        // Special case: `... | ai [args]` — capture upstream output
+        // and pass it to the ai builtin via piped_input. Without this,
+        // the native pipeline path tries to execve `ai` (a rush-cli
+        // builtin, not on PATH) and fails with 127, blaming the first
+        // word in the line rather than the real missing command.
+        if pipe_segments.len() > 1 {
+            if let Some(last) = pipe_segments.last() {
+                let last_first = last.split_whitespace().next().unwrap_or("");
+                if last_first == "ai" {
+                    let upstream_cmd = pipe_segments[..pipe_segments.len() - 1].join(" | ");
+                    let upstream = process::run_native_capture(&upstream_cmd);
+                    if !upstream.stderr.is_empty() {
+                        eprintln!("{}", upstream.stderr);
+                    }
+                    let ai_args = last.trim_start().strip_prefix("ai").unwrap_or("").trim();
+                    let (prompt, provider, model) = ai::parse_ai_args(ai_args);
+                    let exit = if prompt.is_empty() {
+                        eprintln!("ai: missing prompt — usage: ... | ai \"question\"");
+                        2
+                    } else {
+                        match ai::execute(
+                            provider.as_deref(),
+                            model.as_deref(),
+                            &prompt,
+                            Some(&upstream.stdout),
+                        ) {
+                            Ok(_) => 0,
+                            Err(e) => {
+                                eprintln!("ai: {e}");
+                                1
+                            }
+                        }
+                    };
+                    last_exit = exit;
+                    last_failed = exit != 0;
+                    evaluator.exit_code = exit;
+                    for (key, prev) in saved_vars {
+                        match prev {
+                            Some(val) => unsafe { std::env::set_var(&key, &val) },
+                            None => unsafe { std::env::remove_var(&key) },
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
         if pipe_segments.len() > 1 {
             if has_rush_pipe_ops(&pipe_segments) {
                 // Rush pipeline operators (where, sort, etc.)

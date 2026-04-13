@@ -17,6 +17,20 @@ pub fn hint_for_command(line: &str, exit_code: i32) -> Option<String> {
 
     // Command not found (127)
     if exit_code == 127 {
+        // For pipelines, blame the actual missing token rather than
+        // the first word. If any segment's first word is a rush-cli
+        // builtin or Rush keyword, that's almost certainly what
+        // failed (the native pipeline can't resolve it on PATH).
+        if line.contains('|') {
+            for seg in line.split('|') {
+                let word = seg.split_whitespace().next().unwrap_or("");
+                if is_rush_internal(word) {
+                    return Some(format!(
+                        "hint: '{word}' is a rush builtin and cannot be used as a pipeline stage yet"
+                    ));
+                }
+            }
+        }
         return hint_not_found(first_word);
     }
 
@@ -27,6 +41,20 @@ pub fn hint_for_command(line: &str, exit_code: i32) -> Option<String> {
 
     // Bash-isms that cause errors
     hint_bashism_error(line)
+}
+
+/// Names that rush handles in-process (cli builtins) or as Rush
+/// language keywords. None of these resolve via PATH, so when a 127
+/// is produced by a pipeline containing one, this is almost always
+/// the segment that failed.
+fn is_rush_internal(word: &str) -> bool {
+    matches!(
+        word,
+        "ai" | "alias" | "unalias" | "history" | "path" | "set" | "setbg"
+        | "help" | "source" | "reload" | "sync" | "sql" | "init"
+        | "puts" | "print" | "where" | "sort" | "first" | "last"
+        | "columns" | "distinct" | "count" | "select"
+    )
 }
 
 fn hint_not_found(cmd: &str) -> Option<String> {
