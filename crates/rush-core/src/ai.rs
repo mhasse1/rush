@@ -164,17 +164,43 @@ fn stream_request(
     }
 
     let text = resp.text().map_err(|e| format!("Read error: {e}"))?;
+
+    // Diagnostic: RUSH_AI_DEBUG=1 dumps the raw response body before
+    // parsing, so we can tell whether the API returned SSE, JSON, or
+    // something unexpected when the visible output is empty.
+    let debug = std::env::var("RUSH_AI_DEBUG").ok().as_deref() == Some("1");
+    if debug {
+        eprintln!("── RUSH_AI_DEBUG: raw response ({} bytes) ──", text.len());
+        eprintln!("{text}");
+        eprintln!("── end raw response ──");
+    }
+
     let mut full_response = String::new();
+    let mut matched_lines = 0usize;
+    let mut total_lines = 0usize;
 
     // Parse SSE/NDJSON response and extract tokens
     for line in text.lines() {
+        total_lines += 1;
         if let Some(token) = extract_token(line, &provider.format) {
+            matched_lines += 1;
             print!("{token}");
             std::io::stdout().flush().ok();
             full_response.push_str(&token);
         }
     }
     println!();
+
+    if full_response.is_empty() {
+        // Empty-output is almost always a format/parse mismatch
+        // (different SSE shape, or a JSON body where we expected SSE).
+        // Surface this as an error rather than silent success so the
+        // caller sees a non-zero exit and the prompt reflects failure.
+        return Err(format!(
+            "empty response from provider (lines: {total_lines}, matched: {matched_lines}). \
+            Rerun with RUSH_AI_DEBUG=1 to see the raw body."
+        ));
+    }
 
     Ok(full_response)
 }
