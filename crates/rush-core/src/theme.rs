@@ -185,9 +185,13 @@ fn nearest_256(r: f64, g: f64, b: f64) -> u8 {
 }
 
 /// Find the nearest 256-color index that meets minimum contrast against bg
-/// and avoids already-used indices (for role distinction).
+/// and avoids already-used indices (for role distinction). Caller can
+/// request chromatic-only candidates (no grayscale cells) — used when
+/// the role has meaningful hue that would otherwise get flattened by
+/// the grayscale ramp winning on L distance alone.
 fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64, avoid: &[u8]) -> u8 {
     let (target_l, target_a, target_b) = srgb_to_oklab(r, g, b);
+    let target_chromatic = (target_a.powi(2) + target_b.powi(2)).sqrt() > 0.03;
     let mut best_idx: Option<u8> = None;
     let mut best_dist = f64::MAX;
 
@@ -196,6 +200,16 @@ fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64, a
             continue;
         }
         let (pr, pg, pb) = palette_rgb(idx);
+
+        // Chromatic target ⇒ skip grayscale cells so they don't win on
+        // L distance alone (happens on mid-gray bgs where low-L green
+        // squeezes into near-black and loses its hue).
+        if target_chromatic {
+            let is_gray = (pr - pg).abs() < 0.01 && (pg - pb).abs() < 0.01;
+            if is_gray {
+                continue;
+            }
+        }
         let lum = luminance(pr, pg, pb);
         if contrast_ratio(lum, bg_lum) < min_cr {
             continue;
@@ -225,78 +239,183 @@ fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64, a
 
 // ── OKLCH Palette Generation ───────────────────────────────────────
 
-/// A semantic color role with its OKLCH parameters.
+/// Intensity within a tonal band. Every role lives in the band chosen
+/// by the background's luminance; intensity only nudges the lightness
+/// axis by ±band.step so dim / bright variants of a hue stay visually
+/// related. Dim roles also get a relaxed contrast floor so muted UI
+/// (PID, time, comment) actually *looks* muted.
+#[derive(Copy, Clone, PartialEq)]
+enum Intensity {
+    Neutral, // gray — chroma forced to 0, L lowered like Dim
+    Dim,     // closer to bg; floor 3.5:1 — dim chromatic
+    Normal,  // the tonal-band base — default for most chromatic roles
+    Bright,  // farther from bg; emphasized — dirty git, root, ssh host
+}
+
+/// A semantic color role. The tonal band (chosen from the bg) decides
+/// lightness + chroma uniformly for all roles, so the only per-role
+/// knobs are hue (role identity) and intensity (emphasis). Uniform
+/// chroma is what gives the palette its Solarized / Nord / Gruvbox
+/// cohesion.
 struct ColorRole {
-    hue: f64,       // target hue (0-360)
-    chroma: f64,    // max chroma (vibrancy cap)
-    min_contrast: f64,
+    hue: f64,            // target hue (0-360)
+    intensity: Intensity,
+}
+
+impl ColorRole {
+    /// The contrast floor this role's palette index must meet against
+    /// the background. Dim accepts 3.5:1 (intentional low contrast);
+    /// Normal and Bright demand the WCAG AA floor (4.5:1). The
+    /// contrast audit uses this value.
+    fn min_contrast(&self) -> f64 {
+        match self.intensity {
+            Intensity::Neutral | Intensity::Dim => 3.5,
+            Intensity::Normal | Intensity::Bright => 4.5,
+        }
+    }
+}
+
+/// A tonal band — base (L, C) in OKLCH plus the ± step that Dim /
+/// Bright use to shift lightness. Picked from the background
+/// luminance so the whole palette agrees on "we are in the pastel
+/// band" or "we are in the deep-muted band".
+#[derive(Copy, Clone)]
+struct TonalBand {
+    base_l: f64,
+    chroma: f64,
+    step: f64,
+}
+
+fn tonal_band(bg_rgb: (f64, f64, f64)) -> TonalBand {
+    let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    // Four bands, picked so each gives ≥4.5:1 contrast at base_L
+    // against the entire luminance window for that band. Pastel /
+    // deep-muted are low chroma (palette feels airy / inky); mid
+    // bands bump chroma to compensate for the squeezed L separation.
+    if bg_lum <= 0.12 {
+        // Deep dark bg: airy pastels sit way above
+        TonalBand { base_l: 0.82, chroma: 0.12, step: 0.05 }
+    } else if bg_lum <= 0.35 {
+        // Mid-dark bg (typical terminal bg #1a1a1a .. #2d2d2d):
+        // slightly higher L, a little more chroma for distinct pastels
+        TonalBand { base_l: 0.84, chroma: 0.12, step: 0.05 }
+    } else if bg_lum <= 0.65 {
+        // Mid bg (#7a7a7a range): L separation is tight; pick the
+        // side with more room and bump chroma so roles stay distinct
+        if bg_lum < 0.5 {
+            TonalBand { base_l: 0.92, chroma: 0.14, step: 0.04 }
+        } else {
+            TonalBand { base_l: 0.18, chroma: 0.14, step: 0.04 }
+        }
+    } else {
+        // Light bg: deep muted inks sit way below
+        TonalBand { base_l: 0.30, chroma: 0.12, step: 0.05 }
+    }
 }
 
 /// Generate an sRGB color for a role given the background.
-/// Picks lightness to achieve contrast, locks hue and caps chroma.
+/// The tonal band fixes lightness and chroma; the role contributes
+/// only hue and intensity. If the combination fails the role's
+/// contrast floor (rare at band edges), L shifts away from the bg
+/// until it passes.
 fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, f64) {
     let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
-    let (bg_l, _, bg_h) = srgb_to_oklch(bg_rgb.0, bg_rgb.1, bg_rgb.2);
-    let is_dark = bg_lum <= 0.179;
+    let (_, _, bg_h) = srgb_to_oklch(bg_rgb.0, bg_rgb.1, bg_rgb.2);
+    let band = tonal_band(bg_rgb);
+    let bg_is_darker = bg_lum < 0.5;
 
-    // If the role hue is too close to the bg hue, shift it away
-    let hue = if role.chroma > 0.01 && hue_distance(role.hue, bg_h) < 35.0 {
+    // Intensity = "distance from bg". For dark bg, fg.L > bg.L, so
+    // Bright raises L and Dim lowers it. For light bg it's inverted.
+    let direction = if bg_is_darker { 1.0 } else { -1.0 };
+    let intensity_offset = match role.intensity {
+        Intensity::Neutral | Intensity::Dim => -band.step,
+        Intensity::Normal => 0.0,
+        Intensity::Bright => band.step,
+    };
+    let mut l = (band.base_l + direction * intensity_offset).clamp(0.10, 0.97);
+
+    // Neutral roles (host, muted, time, comment, line-number) are
+    // intentionally grayscale — force chroma to 0 so the role reads
+    // as "structural non-color" even when the band is colorful.
+    let chroma = if role.intensity == Intensity::Neutral { 0.0 } else { band.chroma };
+
+    // Keep hue away from the bg hue so colored backgrounds don't
+    // swallow a role that happens to share their hue. Neutrals have
+    // zero chroma so hue is irrelevant.
+    let hue = if chroma > 0.0 && hue_distance(role.hue, bg_h) < 35.0 {
         (role.hue + 50.0) % 360.0
     } else {
         role.hue
     };
 
-    // Search the full lightness range on the correct side of the background.
-    // For dark bg: search from bg_l upward (lighter foregrounds).
-    // For light bg: search from bg_l downward (darker foregrounds).
-    let (lo, hi) = if is_dark { (bg_l + 0.15, 0.97) } else { (0.10, bg_l - 0.10) };
+    let min_cr = role.min_contrast();
+    let l_step = 0.04;
 
-    // Ensure valid range
-    if lo >= hi {
-        // Extreme case — just use white on dark, black on light
-        return if is_dark { (0.9, 0.9, 0.9) } else { (0.1, 0.1, 0.1) };
-    }
-
-    // Binary search: find the L closest to the bg (least extreme) that still meets contrast.
-    // Start from the "comfortable" end and push toward "extreme" only if needed.
-    let mut best_rgb: Option<(f64, f64, f64)> = None;
-    let mut search_lo = lo;
-    let mut search_hi = hi;
-
-    for _ in 0..30 {
-        let mid = (search_lo + search_hi) / 2.0;
-        let rgb = oklch_to_srgb(mid, role.chroma, hue);
+    // Shift L away from bg until contrast floor is met (or clamped).
+    for _ in 0..25 {
+        let rgb = oklch_to_srgb(l, chroma, hue);
         let fg_lum = luminance(rgb.0, rgb.1, rgb.2);
-        let cr = contrast_ratio(fg_lum, bg_lum);
-
-        if cr >= role.min_contrast {
-            best_rgb = Some(rgb);
-            // Good — try to get LESS extreme (closer to bg) while still passing
-            if is_dark { search_hi = mid; } else { search_lo = mid; }
-        } else {
-            // Not enough contrast — push further from bg
-            if is_dark { search_lo = mid; } else { search_hi = mid; }
-        }
-    }
-
-    // Post-validation: if nothing met contrast, use white/black
-    if let Some(rgb) = best_rgb {
-        let fg_lum = luminance(rgb.0, rgb.1, rgb.2);
-        let cr = contrast_ratio(fg_lum, bg_lum);
-        if cr >= role.min_contrast - 0.5 {
+        if contrast_ratio(fg_lum, bg_lum) >= min_cr {
             return rgb;
         }
+        let shifted = l + direction * l_step;
+        if !(0.08..=0.98).contains(&shifted) {
+            break;
+        }
+        l = shifted;
     }
 
-    // Hard fallback
-    if is_dark { (0.85, 0.85, 0.85) } else { (0.15, 0.15, 0.15) }
+    // Hard fallback — near-white on dark bg, near-black on light bg.
+    if bg_is_darker { (0.92, 0.92, 0.92) } else { (0.12, 0.12, 0.12) }
 }
 
 /// Generate 256-color code for a role, avoiding already-used indices.
 fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> u8 {
     let bg_lum = luminance(bg_rgb.0, bg_rgb.1, bg_rgb.2);
     let (r, g, b) = generate_role_color(role, bg_rgb);
-    nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast, avoid)
+
+    // Neutral roles map to the grayscale ramp directly. The general
+    // quantizer's collision penalty penalizes grays for being "close
+    // in OKLAB" to already-placed chromatic colors on the L axis,
+    // which pushes them into wildly off-hue cells. For pure grays we
+    // just want the gray ramp entry with the right luminance.
+    if role.intensity == Intensity::Neutral {
+        return nearest_grayscale(r, bg_lum, role.min_contrast(), avoid);
+    }
+
+    nearest_256_with_contrast(r, g, b, bg_lum, role.min_contrast(), avoid)
+}
+
+/// Pick a grayscale palette index (232-255, plus basic grays 8, 7, 15)
+/// whose luminance meets the contrast floor against bg and whose
+/// lightness is closest to `target_l` (sRGB gamma, 0..1). Used for
+/// roles flagged Intensity::Neutral.
+fn nearest_grayscale(target_l: f64, bg_lum: f64, min_cr: f64, avoid: &[u8]) -> u8 {
+    let candidates: &[u8] = &[
+        8, 7, 15, 16, 231, // basic grays + cube black/white
+        232, 233, 234, 235, 236, 237, 238, 239, 240, 241, 242, 243,
+        244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255,
+    ];
+    let mut best: Option<u8> = None;
+    let mut best_dist = f64::MAX;
+    for &idx in candidates {
+        if avoid.contains(&idx) {
+            continue;
+        }
+        let (r, _, _) = palette_rgb(idx);
+        let lum = luminance(r, r, r);
+        if contrast_ratio(lum, bg_lum) < min_cr {
+            continue;
+        }
+        let dist = (r - target_l).abs();
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some(idx);
+        }
+    }
+    // Fallback when no gray meets contrast: hit the far extreme
+    // (white on dark bg, black on light bg) so we at least stay legible.
+    best.unwrap_or(if bg_lum < 0.5 { 231 } else { 16 })
 }
 
 // ── Semantic Color Roles ───────────────────────────────────────────
@@ -311,43 +430,44 @@ fn role_to_256(role: &ColorRole, bg_rgb: (f64, f64, f64), avoid: &[u8]) -> u8 {
 //   300 = purple
 //   330 = magenta
 
-// Prompt roles
-const ROLE_SUCCESS: ColorRole    = ColorRole { hue: 145.0, chroma: 0.15, min_contrast: 4.5 };
-const ROLE_ERROR: ColorRole      = ColorRole { hue: 25.0,  chroma: 0.16, min_contrast: 4.5 };
-const ROLE_WARNING: ColorRole    = ColorRole { hue: 80.0,  chroma: 0.15, min_contrast: 4.5 };
-const ROLE_PATH: ColorRole       = ColorRole { hue: 250.0, chroma: 0.12, min_contrast: 4.5 };
-const ROLE_USER: ColorRole       = ColorRole { hue: 180.0, chroma: 0.10, min_contrast: 4.5 };
-const ROLE_HOST: ColorRole       = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.5 }; // neutral
-const ROLE_SSH_HOST: ColorRole   = ColorRole { hue: 80.0,  chroma: 0.14, min_contrast: 4.5 };
-const ROLE_GIT_BRANCH: ColorRole = ColorRole { hue: 80.0,  chroma: 0.12, min_contrast: 4.5 };
-const ROLE_GIT_DIRTY: ColorRole  = ColorRole { hue: 55.0,  chroma: 0.14, min_contrast: 4.5 };
-const ROLE_ROOT: ColorRole       = ColorRole { hue: 25.0,  chroma: 0.18, min_contrast: 4.5 };
-const ROLE_MUTED: ColorRole      = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 }; // gray, readable
-const ROLE_TIME: ColorRole       = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 };
+// Prompt roles. Hues are fixed identity per role; intensity says
+// "how loud is it vs. the tonal band base".
+const ROLE_SUCCESS: ColorRole    = ColorRole { hue: 145.0, intensity: Intensity::Normal };
+const ROLE_ERROR: ColorRole      = ColorRole { hue: 25.0,  intensity: Intensity::Normal };
+const ROLE_WARNING: ColorRole    = ColorRole { hue: 80.0,  intensity: Intensity::Normal };
+const ROLE_PATH: ColorRole       = ColorRole { hue: 250.0, intensity: Intensity::Normal };
+const ROLE_USER: ColorRole       = ColorRole { hue: 300.0, intensity: Intensity::Normal };
+const ROLE_HOST: ColorRole       = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+const ROLE_SSH_HOST: ColorRole   = ColorRole { hue: 80.0,  intensity: Intensity::Bright };
+const ROLE_GIT_BRANCH: ColorRole = ColorRole { hue: 100.0, intensity: Intensity::Normal };
+const ROLE_GIT_DIRTY: ColorRole  = ColorRole { hue: 55.0,  intensity: Intensity::Bright };
+const ROLE_ROOT: ColorRole       = ColorRole { hue: 15.0,  intensity: Intensity::Bright };
+const ROLE_MUTED: ColorRole      = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+const ROLE_TIME: ColorRole       = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
 
 // Syntax highlighting roles
-const ROLE_HL_KEYWORD: ColorRole  = ColorRole { hue: 330.0, chroma: 0.14, min_contrast: 4.5 };
-const ROLE_HL_STRING: ColorRole   = ColorRole { hue: 145.0, chroma: 0.12, min_contrast: 4.5 };
-const ROLE_HL_NUMBER: ColorRole   = ColorRole { hue: 180.0, chroma: 0.10, min_contrast: 4.5 };
-const ROLE_HL_COMMAND: ColorRole  = ColorRole { hue: 210.0, chroma: 0.12, min_contrast: 4.5 };
-const ROLE_HL_UNKNOWN: ColorRole  = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.5 };
-const ROLE_HL_FLAG: ColorRole     = ColorRole { hue: 55.0,  chroma: 0.12, min_contrast: 4.5 };
-const ROLE_HL_OPERATOR: ColorRole = ColorRole { hue: 300.0, chroma: 0.12, min_contrast: 4.5 };
+const ROLE_HL_KEYWORD: ColorRole  = ColorRole { hue: 330.0, intensity: Intensity::Normal };
+const ROLE_HL_STRING: ColorRole   = ColorRole { hue: 135.0, intensity: Intensity::Normal };
+const ROLE_HL_NUMBER: ColorRole   = ColorRole { hue: 180.0, intensity: Intensity::Normal };
+const ROLE_HL_COMMAND: ColorRole  = ColorRole { hue: 240.0, intensity: Intensity::Normal };
+const ROLE_HL_UNKNOWN: ColorRole  = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+const ROLE_HL_FLAG: ColorRole     = ColorRole { hue: 55.0,  intensity: Intensity::Normal };
+const ROLE_HL_OPERATOR: ColorRole = ColorRole { hue: 300.0, intensity: Intensity::Normal };
 
 // LS_COLORS roles
-const ROLE_LS_DIR: ColorRole  = ColorRole { hue: 210.0, chroma: 0.14, min_contrast: 4.5 };
-const ROLE_LS_LINK: ColorRole = ColorRole { hue: 310.0, chroma: 0.14, min_contrast: 4.5 };
-const ROLE_LS_SOCK: ColorRole = ColorRole { hue: 280.0, chroma: 0.10, min_contrast: 4.5 };
-const ROLE_LS_PIPE: ColorRole = ColorRole { hue: 55.0,  chroma: 0.10, min_contrast: 4.5 };
-const ROLE_LS_EXEC: ColorRole = ColorRole { hue: 145.0, chroma: 0.14, min_contrast: 4.5 };
-const ROLE_LS_BLK: ColorRole  = ColorRole { hue: 35.0,  chroma: 0.10, min_contrast: 4.5 };
-const ROLE_LS_CHR: ColorRole  = ColorRole { hue: 35.0,  chroma: 0.10, min_contrast: 4.5 };
+const ROLE_LS_DIR: ColorRole  = ColorRole { hue: 230.0, intensity: Intensity::Normal };
+const ROLE_LS_LINK: ColorRole = ColorRole { hue: 310.0, intensity: Intensity::Normal };
+const ROLE_LS_SOCK: ColorRole = ColorRole { hue: 280.0, intensity: Intensity::Dim };
+const ROLE_LS_PIPE: ColorRole = ColorRole { hue: 55.0,  intensity: Intensity::Dim };
+const ROLE_LS_EXEC: ColorRole = ColorRole { hue: 155.0, intensity: Intensity::Normal };
+const ROLE_LS_BLK: ColorRole  = ColorRole { hue: 35.0,  intensity: Intensity::Dim };
+const ROLE_LS_CHR: ColorRole  = ColorRole { hue: 35.0,  intensity: Intensity::Dim };
 
 // GREP_COLORS roles
-const ROLE_GREP_FN: ColorRole = ColorRole { hue: 310.0, chroma: 0.12, min_contrast: 4.5 };
-const ROLE_GREP_LN: ColorRole = ColorRole { hue: 145.0, chroma: 0.08, min_contrast: 4.5 };
-const ROLE_GREP_BN: ColorRole = ColorRole { hue: 35.0,  chroma: 0.08, min_contrast: 4.5 };
-const ROLE_GREP_SE: ColorRole = ColorRole { hue: 0.0,   chroma: 0.00, min_contrast: 4.0 };
+const ROLE_GREP_FN: ColorRole = ColorRole { hue: 310.0, intensity: Intensity::Normal };
+const ROLE_GREP_LN: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+const ROLE_GREP_BN: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+const ROLE_GREP_SE: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
 
 // ── Theme ───────────────────────────────────────────────────────────
 
@@ -777,8 +897,8 @@ mod tests {
             let (r, g, b) = generate_role_color(role, bg);
             let fg_lum = luminance(r, g, b);
             let cr = contrast_ratio(fg_lum, bg_lum);
-            assert!(cr >= role.min_contrast - 0.5,
-                "hue={} contrast {cr:.1} < min {} on dark bg", role.hue, role.min_contrast);
+            assert!(cr >= role.min_contrast() - 0.5,
+                "hue={} contrast {cr:.1} < min {} on dark bg", role.hue, role.min_contrast());
         }
     }
 
@@ -791,8 +911,8 @@ mod tests {
             let (r, g, b) = generate_role_color(role, bg);
             let fg_lum = luminance(r, g, b);
             let cr = contrast_ratio(fg_lum, bg_lum);
-            assert!(cr >= role.min_contrast - 0.5,
-                "hue={} contrast {cr:.1} < min {} on light bg", role.hue, role.min_contrast);
+            assert!(cr >= role.min_contrast() - 0.5,
+                "hue={} contrast {cr:.1} < min {} on light bg", role.hue, role.min_contrast());
         }
     }
 
@@ -1001,14 +1121,14 @@ mod tests {
                 let fg_lum = luminance(fr, fg, fb);
                 let cr = contrast_ratio(fg_lum, bg_lum);
 
-                if cr < spec.role.min_contrast {
+                if cr < spec.role.min_contrast() {
                     failures.push(format!(
                         "  FAIL: bg={bg_name} role={:<18} fg=idx {:>3} {} cr={:.2}:1 (need {:.1}:1)",
                         spec.name,
                         idx,
                         rgb_to_hex(fr, fg, fb),
                         cr,
-                        spec.role.min_contrast
+                        spec.role.min_contrast()
                     ));
                 }
             }
@@ -1124,8 +1244,8 @@ mod tests {
                 let (fr, fg, fb) = palette_rgb(idx);
                 let fg_lum = luminance(fr, fg, fb);
                 let cr = contrast_ratio(fg_lum, bg_lum);
-                let status = if cr >= spec.role.min_contrast { "✓" }
-                    else if cr >= spec.role.min_contrast - 0.5 { "~" }
+                let status = if cr >= spec.role.min_contrast() { "✓" }
+                    else if cr >= spec.role.min_contrast() - 0.5 { "~" }
                     else { "✗" };
 
                 println!("  {:<18} {:>4} {:>8} {:>7.2}:1  {}",
