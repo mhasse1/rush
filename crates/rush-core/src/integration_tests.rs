@@ -391,10 +391,14 @@ mod tests {
     // Theme
     // ═══════════════════════════════════════════════════════════════
 
+    /// Process-wide mutex so the two theme_detect tests (which
+    /// mutate RUSH_BG) don't race each other or any other parallel
+    /// test that reads/writes RUSH_BG.
+    static RUSH_BG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn theme_detect_passive_by_default() {
-        // Save-restore RUSH_BG so the test doesn't depend on the dev
-        // shell's state and doesn't leak a value into parallel tests.
+        let _guard = RUSH_BG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("RUSH_BG").ok();
         unsafe { std::env::remove_var("RUSH_BG") };
         let theme = crate::theme::detect();
@@ -411,6 +415,7 @@ mod tests {
 
     #[test]
     fn theme_detect_active_with_rush_bg() {
+        let _guard = RUSH_BG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var("RUSH_BG").ok();
         unsafe { std::env::set_var("RUSH_BG", "#1a1a1a") };
         let theme = crate::theme::detect();

@@ -190,6 +190,7 @@ mod tests {
 
     #[test]
     fn posix_param_exit_code() {
+        let _guard = process::RUSH_LAST_EXIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUSH_LAST_EXIT", "42"); }
         assert_eq!(process::expand_env_vars_pub("$?"), "42");
         unsafe { std::env::remove_var("RUSH_LAST_EXIT"); }

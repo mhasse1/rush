@@ -1039,6 +1039,12 @@ fn expand_tilde(arg: &str) -> String {
 /// Public wrapper for tests.
 pub fn expand_env_vars_pub(arg: &str) -> String { expand_env_vars(arg) }
 
+/// Process-wide mutex for tests that mutate RUSH_LAST_EXIT. Cargo
+/// runs unit tests on multiple threads by default and std::env::set_var
+/// is process-global, so without serialization these tests race.
+#[cfg(test)]
+pub(crate) static RUSH_LAST_EXIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Public wrapper for IFS split tests.
 pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
 
@@ -2054,6 +2060,7 @@ mod tests {
 
     #[test]
     fn special_param_exit_code() {
+        let _guard = super::RUSH_LAST_EXIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUSH_LAST_EXIT", "42") };
         let result = expand_env_vars("$?");
         assert_eq!(result, "42");

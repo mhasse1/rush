@@ -136,8 +136,15 @@ pub fn is_rush_syntax(input: &str) -> bool {
         return true;
     }
 
-    // Array/hash literals at start
-    if trimmed.starts_with('[') || trimmed.starts_with('{') {
+    // Array/hash literals at start. Rush literals pack tight: `[1,2]`,
+    // `{a:1}`. Shell `[ -f path ]` (the `test` bracket form) has a
+    // mandatory space after the opener, so we exclude that.
+    if trimmed.starts_with('[')
+        && trimmed.chars().nth(1).map_or(false, |c| !c.is_whitespace())
+    {
+        return true;
+    }
+    if trimmed.starts_with('{') {
         return true;
     }
 
@@ -280,5 +287,201 @@ mod tests {
 
         // Control flow with stdlib
         assert!(is_rush_syntax(r#"if File.size("log") > 1mb"#));
+    }
+
+    // ── Systematic matrix ───────────────────────────────────────────
+    //
+    // Two tables — one per classification — exercised by rush_matrix
+    // and shell_matrix below. New syntax / regressions only need a
+    // single row added, and the failure message points at the exact
+    // input so there's no guessing.
+
+    /// Inputs that MUST classify as Rush syntax.
+    const RUSH_CASES: &[&str] = &[
+        // ── Block keywords ──
+        "if x > 5",
+        "elsif y",
+        "else",
+        "unless x",
+        "while running",
+        "until done",
+        "for i in 1..10",
+        "loop",
+        "do |x|",
+        "def greet(name)",
+        "class Dog",
+        "enum Color",
+        "case x",
+        "match x",
+        "try",
+        "begin",
+        "parallel",
+        "parallel!",
+        "orchestrate",
+        // ── Control flow terminators ──
+        "end",
+        "return",
+        "return 42",
+        "break",
+        "break if done",
+        "next",
+        "next if skip",
+        "continue",
+        // ── Built-in functions (callable without parens) ──
+        "puts x",
+        "puts \"hello\"",
+        "print x",
+        "warn \"problem\"",
+        "die \"fatal\"",
+        "ask \"name?\"",
+        "sleep 1",
+        "exit",
+        "exit 1",
+        "ai \"question\"",
+        // ── Assignments ──
+        "x = 42",
+        "name = \"rush\"",
+        "a, b = 1, 2",
+        "x, y, z = [1, 2, 3]",
+        "server = \"host.example.com\"",
+        "path = \"/tmp\"",
+        // ── Compound assignments ──
+        "x += 1",
+        "x -= 1",
+        "x *= 2",
+        "x /= 2",
+        // ── Function calls with parens ──
+        "greet(\"world\")",
+        "add(1, 2)",
+        // ── Stdlib method calls ──
+        "File.read(\"x.txt\")",
+        "File.exist?(\"/etc/hosts\")",
+        "Dir.list(\".\")",
+        "Time.now",
+        "Path.join(\"a\", \"b\")",
+        "env.HOME",
+        // ── Method chains ──
+        "\"hello\".upcase",
+        "x.upcase",
+        "items.each { |x| puts x }",
+        // ── Interpolation ──
+        "puts \"hello #{name}\"",
+        // ── Control-flow with stdlib call ──
+        "if File.size(\"log\") > 1mb",
+        // ── Platform keywords ──
+        "macos",
+        "linux",
+        "win64",
+        "win32",
+        "isssh",
+        "macos.version",
+        // ── Plugins ──
+        "plugin",
+        "plugin.python",
+        // ── Bare rush block keywords (no args) ──
+        "ps",
+        "ps5",
+    ];
+
+    /// Inputs that MUST classify as shell commands.
+    const SHELL_CASES: &[&str] = &[
+        // ── Basic commands ──
+        "ls",
+        "ls -la",
+        "pwd",
+        "whoami",
+        "hostname",
+        // ── Commands with args / flags ──
+        "grep foo bar.txt",
+        "cat /etc/hosts",
+        "find . -name '*.rs'",
+        "mkdir -p /tmp/test",
+        "rm -rf /tmp/stale",
+        "cp a b",
+        "mv old new",
+        // ── Shell builtins (handled in-process, not rush syntax) ──
+        "cd /tmp",
+        "cd ~",
+        "cd -",
+        "alias ll='ls -la'",
+        "export FOO=bar",
+        "unset FOO",
+        "set -e",
+        "printf \"%s\\n\" hi",
+        "trap 'cleanup' EXIT",
+        "wait",
+        "exec bash",
+        "read name",
+        // ── Inline env var prefix (POSIX, #226) ──
+        "FOO=hi alias myalias=\"echo test\"",
+        "RUSH_AI_DEBUG=1 ai \"prompt\"",
+        "VAR1=a VAR2=b cmd arg",
+        // ── Pipes and redirects ──
+        "ps aux | grep nginx",
+        "cat f | wc -l",
+        "echo hi > /tmp/out",
+        "cmd 2>&1",
+        // ── Version control / dev ──
+        "git status",
+        "git log --oneline",
+        "docker ps",
+        "docker run --rm -it alpine sh",
+        "kubectl get pods",
+        // ── System admin ──
+        "systemctl restart nginx",
+        "systemctl status sshd",
+        "journalctl -u nginx --since today",
+        "iptables -A INPUT -p tcp --dport 80 -j ACCEPT",
+        "chmod 755 /var/www",
+        "chown -R www-data:www-data /var/www",
+        // ── Remote / transfer ──
+        "ssh user@host",
+        "scp a.txt host:/tmp/",
+        "rsync -avz /src/ user@host:/dest/",
+        // ── HTTP ──
+        "curl -H \"Authorization: Bearer token\" https://api.example.com",
+        "wget https://example.com/x.tar.gz",
+        // ── Windows / paths with = ──
+        "dsquery user \"CN=John,OU=Users,DC=corp,DC=local\"",
+        "net stop \"remoteaccess\"",
+        "net user admin /add",
+        "setx PATH \"C:\\bin;%PATH%\"",
+        "ls \"\\\\\\\\server\\\\share\"",
+        // ── Test command (looks like rush but isn't) ──
+        "test -f /etc/hosts",
+        "[ -f /etc/hosts ]",
+        // ── ps with args (only bare is rush) ──
+        "ps aux",
+        "ps -ef",
+    ];
+
+    #[test]
+    fn rush_matrix() {
+        let mut failures = Vec::new();
+        for &case in RUSH_CASES {
+            if !is_rush_syntax(case) {
+                failures.push(case);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "expected these to classify as Rush:\n  {}",
+            failures.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn shell_matrix() {
+        let mut failures = Vec::new();
+        for &case in SHELL_CASES {
+            if is_rush_syntax(case) {
+                failures.push(case);
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "expected these to classify as shell:\n  {}",
+            failures.join("\n  ")
+        );
     }
 }
