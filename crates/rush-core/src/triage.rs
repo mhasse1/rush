@@ -91,7 +91,18 @@ pub fn is_rush_syntax(input: &str) -> bool {
                             let p = part.trim();
                             !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
                         });
-                    if is_ident {
+                    // Inline env var prefix (POSIX 'VAR=val cmd args...'):
+                    // first word has '=' with no space around it AND there's
+                    // at least one more whitespace-separated word after.
+                    // That's a shell invocation, not a rush assignment.
+                    let is_inline_env_prefix = !first_word.is_empty()
+                        && first_word.contains('=')
+                        && !first_word.starts_with('=')
+                        && trimmed[first_word.len()..]
+                            .trim_start()
+                            .chars().next()
+                            .is_some();
+                    if is_ident && !is_inline_env_prefix {
                         return true;
                     }
                 }

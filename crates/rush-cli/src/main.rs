@@ -251,9 +251,36 @@ pub fn run_line(evaluator: &mut Evaluator, line: &str) {
     let trimmed = expanded.as_deref().unwrap_or(raw);
 
     // Only check builtins for simple commands (no chain operators).
-    // This ensures "set -e; cmd" goes through dispatch for proper chain splitting.
+    // This ensures "set -e; cmd" goes through dispatch for proper
+    // chain splitting.
     if !trimmed.contains("&&") && !trimmed.contains("||") && !trimmed.contains(';') {
-        if builtins::handle(evaluator, trimmed) {
+        // Strip any inline `VAR=val` prefixes and apply them for the
+        // duration of the builtin call, so `RUSH_AI_DEBUG=1 ai "..."`
+        // and similar work with in-process builtins (which otherwise
+        // never see the vars — builtins don't go through execve and
+        // dispatch's own extract would run too late for them).
+        let (inline_vars, stripped) = dispatch::extract_inline_env_vars(trimmed);
+        let saved: Vec<(String, Option<String>)> = inline_vars
+            .iter()
+            .map(|(k, _)| (k.clone(), std::env::var(k).ok()))
+            .collect();
+        for (k, v) in &inline_vars {
+            unsafe { std::env::set_var(k, v) };
+        }
+        let stripped_trimmed = stripped.trim();
+        let handled = !stripped_trimmed.is_empty()
+            && builtins::handle(evaluator, stripped_trimmed);
+        // Restore env to pre-invocation state so the vars don't leak
+        // into subsequent commands.
+        for (k, prev) in saved {
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var(&k, &v),
+                    None => std::env::remove_var(&k),
+                }
+            }
+        }
+        if handled {
             return;
         }
     }

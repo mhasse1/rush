@@ -522,7 +522,7 @@ fn find_heredoc(line: &str) -> Option<usize> {
 
 /// Extract leading VAR=val assignments from a command.
 /// `LANG=C sort file` → vars=[("LANG","C")], remaining="sort file"
-fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String) {
+pub fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String) {
     let mut vars = Vec::new();
     let words: Vec<&str> = segment.split_whitespace().collect();
     let mut cmd_start = 0;
