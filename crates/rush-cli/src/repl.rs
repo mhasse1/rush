@@ -28,10 +28,16 @@ fn history_path() -> std::path::PathBuf {
 pub fn run(is_login: bool) {
     let config = RushConfig::load();
 
-    // Initialize theme (dark/light detection, LS_COLORS, GREP_COLORS)
-    // Check for per-project .rushbg
-    if let Some(bg) = theme::load_rushbg() {
-        unsafe { std::env::set_var("RUSH_BG", &bg) };
+    // Theming is opt-in. Promote the saved config bg and any
+    // per-project .rushbg into RUSH_BG *if RUSH_BG isn't already set*
+    // (an explicit env override wins), so theme::detect sees it.
+    if std::env::var_os("RUSH_BG").is_none() {
+        if !config.bg.is_empty() {
+            unsafe { std::env::set_var("RUSH_BG", &config.bg) };
+        }
+        if let Some(bg) = theme::load_rushbg() {
+            unsafe { std::env::set_var("RUSH_BG", &bg) };
+        }
     }
 
     let detected_theme = theme::initialize();

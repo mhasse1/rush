@@ -392,10 +392,36 @@ mod tests {
     // ═══════════════════════════════════════════════════════════════
 
     #[test]
-    fn theme_detect() {
+    fn theme_detect_passive_by_default() {
+        // Save-restore RUSH_BG so the test doesn't depend on the dev
+        // shell's state and doesn't leak a value into parallel tests.
+        let prior = std::env::var("RUSH_BG").ok();
+        unsafe { std::env::remove_var("RUSH_BG") };
         let theme = crate::theme::detect();
-        // Should not crash
-        assert!(!theme.reset.is_empty());
+        assert!(!theme.is_active(), "no opt-in → passive theme");
+        assert!(theme.reset.is_empty());
+        assert!(theme.prompt_success.is_empty());
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("RUSH_BG", v),
+                None => std::env::remove_var("RUSH_BG"),
+            }
+        }
+    }
+
+    #[test]
+    fn theme_detect_active_with_rush_bg() {
+        let prior = std::env::var("RUSH_BG").ok();
+        unsafe { std::env::set_var("RUSH_BG", "#1a1a1a") };
+        let theme = crate::theme::detect();
+        assert!(theme.is_active(), "RUSH_BG set → active theme");
+        assert!(theme.bg_rgb.is_some());
+        unsafe {
+            match prior {
+                Some(v) => std::env::set_var("RUSH_BG", v),
+                None => std::env::remove_var("RUSH_BG"),
+            }
+        }
     }
 
     #[test]

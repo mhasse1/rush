@@ -399,15 +399,58 @@ impl Theme {
 
     /// Build a theme for the given background.
     /// When bg_rgb is known, all colors are generated via OKLCH for
-    /// guaranteed contrast. Without bg, falls back to safe ANSI defaults.
+    /// guaranteed contrast. Without bg, returns a passive theme that
+    /// emits no color codes — so the user's terminal keeps its own
+    /// palette and defaults. Theming is opt-in via RUSH_BG, .rushbg,
+    /// or config.bg (surfaced through setbg / setbg --save / setbg --local).
     pub fn new(is_dark: bool, bg_rgb: Option<(f64, f64, f64)>) -> Self {
         let reset = "\x1b[0m".to_string();
 
         if let Some(bg) = bg_rgb {
             Self::build_oklch(is_dark, bg, &reset)
         } else {
-            Self::build_fallback(is_dark, &reset)
+            Self::passive()
         }
+    }
+
+    /// Passive theme: every role is the empty string, so rush emits no
+    /// color codes at all. The prompt, syntax highlighter, LS_COLORS,
+    /// and GREP_COLORS all become no-ops and the terminal's own
+    /// defaults show through. Active theming requires explicit opt-in.
+    pub fn passive() -> Self {
+        let empty = String::new();
+        Self {
+            is_dark: false, bg_rgb: None,
+            prompt_success: empty.clone(),
+            prompt_failed: empty.clone(),
+            prompt_time: empty.clone(),
+            prompt_user: empty.clone(),
+            prompt_host: empty.clone(),
+            prompt_ssh_host: empty.clone(),
+            prompt_path: empty.clone(),
+            prompt_git_branch: empty.clone(),
+            prompt_git_dirty: empty.clone(),
+            prompt_root: empty.clone(),
+            muted: empty.clone(),
+            error: empty.clone(),
+            warning: empty.clone(),
+            reset: empty.clone(),
+            hl_keyword: empty.clone(),
+            hl_string: empty.clone(),
+            hl_number: empty.clone(),
+            hl_command: empty.clone(),
+            hl_unknown_cmd: empty.clone(),
+            hl_flag: empty.clone(),
+            hl_operator: empty.clone(),
+            hl_pipe: empty.clone(),
+            hl_comment: empty,
+        }
+    }
+
+    /// Whether this theme emits any color codes. Passive themes return
+    /// false; OKLCH-computed themes return true.
+    pub fn is_active(&self) -> bool {
+        self.bg_rgb.is_some()
     }
 
     /// Build theme with OKLCH-generated colors, all contrast-validated.
@@ -474,7 +517,10 @@ impl Theme {
         }
     }
 
-    /// Fallback: safe ANSI colors when background is unknown.
+    /// Kept for reference — unused. Passive mode is used instead when
+    /// no background opt-in signal is present. Delete if it stays
+    /// unused through the next release.
+    #[allow(dead_code)]
     fn build_fallback(is_dark: bool, reset: &str) -> Self {
         if is_dark {
             Self {
@@ -604,41 +650,28 @@ pub fn set_background(hex: &str, emit_osc: bool) -> Option<Theme> {
 
 // ── Detection + Initialization ──────────────────────────────────────
 
-/// Auto-detect terminal background and build theme.
+/// Pick a theme based on explicit user opt-in. Theming is OFF by
+/// default — rush doesn't guess at the terminal background and doesn't
+/// inject color codes. The user turns it on via:
+///
+///   * `RUSH_BG=#RRGGBB` environment variable
+///   * `.rushbg` file in the project directory (read by the REPL and
+///     promoted to RUSH_BG before this runs)
+///   * `setbg <hex>` in an interactive session, which also writes
+///     RUSH_BG in the running process
+///   * `set --save bg <hex>` in config.json (promoted to RUSH_BG by the
+///     REPL before this runs)
+///
+/// When none of those are present, we return a passive theme that
+/// emits no color codes and leaves the terminal alone.
 pub fn detect() -> Theme {
-    // 1. RUSH_BG env var (explicit, highest priority)
     if let Ok(bg) = std::env::var("RUSH_BG") {
         if let Some((r, g, b)) = parse_hex(&bg) {
             let is_dark = luminance(r, g, b) <= 0.179;
             return Theme::new(is_dark, Some((r, g, b)));
         }
     }
-
-    // 2. COLORFGBG (set by many terminals: "fg;bg")
-    if let Ok(colorfgbg) = std::env::var("COLORFGBG") {
-        if let Some(bg) = colorfgbg.rsplit(';').next() {
-            if let Ok(n) = bg.parse::<u8>() {
-                let is_dark = n < 8;
-                return Theme::new(is_dark, None);
-            }
-        }
-    }
-
-    // 3. macOS appearance
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("defaults")
-            .args(["read", "-g", "AppleInterfaceStyle"])
-            .output()
-        {
-            let is_dark = output.status.success()
-                && String::from_utf8_lossy(&output.stdout).trim().eq_ignore_ascii_case("dark");
-            return Theme::new(is_dark, None);
-        }
-    }
-
-    // 4. Default: dark
-    Theme::new(true, None)
+    Theme::passive()
 }
 
 /// Set LS_COLORS, LSCOLORS, GREP_COLORS, CLICOLOR env vars.
@@ -655,9 +688,13 @@ pub fn set_native_color_env_vars(theme: &Theme) {
 }
 
 /// Initialize theme: detect, set env vars, return theme.
+/// Passive themes don't touch LS_COLORS / GREP_COLORS / CLICOLOR —
+/// those remain whatever the parent shell or terminal left them.
 pub fn initialize() -> Theme {
     let theme = detect();
-    set_native_color_env_vars(&theme);
+    if theme.is_active() {
+        set_native_color_env_vars(&theme);
+    }
     theme
 }
 
@@ -822,13 +859,24 @@ mod tests {
     }
 
     #[test]
-    fn theme_with_and_without_bg() {
-        let with_bg = Theme::new(true, Some((0.1, 0.1, 0.15)));
-        let without_bg = Theme::new(true, None);
-        assert!(with_bg.prompt_success.contains("\x1b["));
-        assert!(without_bg.prompt_success.contains("\x1b["));
-        assert!(with_bg.bg_rgb.is_some());
-        assert!(without_bg.bg_rgb.is_none());
+    fn theme_with_bg_is_active() {
+        // Opt-in path: a known bg RGB yields a fully-populated OKLCH
+        // theme with ANSI escape codes.
+        let t = Theme::new(true, Some((0.1, 0.1, 0.15)));
+        assert!(t.is_active());
+        assert!(t.bg_rgb.is_some());
+        assert!(t.prompt_success.contains("\x1b["));
+    }
+
+    #[test]
+    fn theme_without_bg_is_passive() {
+        // Default path: no bg → passive theme, every role is empty,
+        // rush emits zero color codes and the terminal keeps its own.
+        let t = Theme::new(true, None);
+        assert!(!t.is_active());
+        assert!(t.bg_rgb.is_none());
+        assert!(t.prompt_success.is_empty());
+        assert!(t.reset.is_empty());
     }
 
     #[test]
