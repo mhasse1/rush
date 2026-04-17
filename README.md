@@ -200,6 +200,8 @@ $ rush --llm
 
 Built-in commands: `lcat` (file reader with MIME detection), `spool` (paginated output), `help` (on-demand reference), `timeout` (runaway prevention). Output capped at 4KB with spool for overflow. TTY blocklist prevents interactive commands with suggested alternatives.
 
+LLM/MCP mode is a command executor, not a REPL — bare expressions (`y.sum`, `x + 1`) evaluate silently. Use `puts` or `print` when you want the value to appear in stdout.
+
 **Local LLM agent.** `rush --agent "task"` runs a Claude Code-style agent loop against a local Ollama instance. The agent receives the Rush language spec automatically, generates Rush commands, gets structured JSON results, and iterates.
 
 ## MCP Server

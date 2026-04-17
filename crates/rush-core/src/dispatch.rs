@@ -250,7 +250,14 @@ pub fn dispatch_with_jobs(
 
         // cd — must work in chains: cd /tmp && pwd
         if first_word == "cd" {
-            let target = segment[first_word.len()..].trim();
+            // Parse through the shared quote/escape-aware tokenizer so
+            // `cd "Application Support"` and `cd Application\ Support`
+            // resolve to a single path argument. Tilde expansion is only
+            // applied to an unquoted `~` at the start; quoted `"~"` would
+            // ideally stay literal, but that edge case isn't worth extra
+            // plumbing today.
+            let parts = process::parse_command_line(segment);
+            let target = parts.get(1).map(String::as_str).unwrap_or("");
             let path = if target.is_empty() || target == "~" {
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
             } else if let Some(rest) = target.strip_prefix("~/") {
@@ -936,5 +943,87 @@ mod tests {
         let (_, _) = run("puts \"hello\"");
         // No xtrace output expected
         flags::set_xtrace(false);
+    }
+
+    // ── cd: quoted / escaped path arguments (#231) ───────────────────
+
+    // std::env::set_current_dir mutates process-global state; serialize
+    // cwd-mutating tests to avoid interleaving with parallel test runs.
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn with_cd_in<F: FnOnce()>(path: &std::path::Path, f: F) {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        f();
+        let actual = std::env::current_dir().unwrap();
+        let want = path.canonicalize().unwrap();
+        let got = actual.canonicalize().unwrap_or(actual);
+        assert_eq!(got, want, "expected cwd to be {want:?}, got {got:?}");
+        std::env::set_current_dir(saved).ok();
+    }
+
+    fn fresh_space_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("rush cd test {tag} {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn cd_double_quoted_path_with_space() {
+        let dir = fresh_space_dir("dq");
+        with_cd_in(&dir, || {
+            let (code, _) = run(&format!("cd \"{}\"", dir.display()));
+            assert_eq!(code, 0);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cd_single_quoted_path_with_space() {
+        let dir = fresh_space_dir("sq");
+        with_cd_in(&dir, || {
+            let (code, _) = run(&format!("cd '{}'", dir.display()));
+            assert_eq!(code, 0);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cd_backslash_escaped_space() {
+        let dir = fresh_space_dir("esc");
+        with_cd_in(&dir, || {
+            let escaped = dir.display().to_string().replace(' ', "\\ ");
+            let (code, _) = run(&format!("cd {escaped}"));
+            assert_eq!(code, 0);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cd_plain_path_still_works() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        let dir = std::env::temp_dir();
+        let (code, _) = run(&format!("cd {}", dir.display()));
+        assert_eq!(code, 0);
+        std::env::set_current_dir(saved).ok();
+    }
+
+    #[test]
+    fn cd_no_arg_goes_home() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        let home = std::env::var("HOME").unwrap_or_default();
+        if !home.is_empty() {
+            let (code, _) = run("cd");
+            assert_eq!(code, 0);
+            let actual = std::env::current_dir().unwrap();
+            assert_eq!(
+                actual.canonicalize().unwrap_or(actual),
+                std::path::PathBuf::from(&home).canonicalize().unwrap(),
+            );
+        }
+        std::env::set_current_dir(saved).ok();
     }
 }

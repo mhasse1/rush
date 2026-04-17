@@ -757,7 +757,11 @@ fn execute_command(input: &str, session: &mut LlmSession) -> LlmResult {
     }
 
     if first_word == "cd" {
-        let target = input.strip_prefix("cd").unwrap_or("").trim();
+        // Parse through the shared tokenizer so quoted/escaped paths
+        // (`cd "Application Support"`, `cd foo\ bar`) reach set_current_dir
+        // as a single argument. Mirrors dispatch.rs handling.
+        let parts = crate::process::parse_command_line(input);
+        let target = parts.get(1).map(String::as_str).unwrap_or("");
         let path = if target.is_empty() || target == "~" {
             std::env::var("HOME").unwrap_or_else(|_| ".".into())
         } else if let Some(rest) = target.strip_prefix("~/") {

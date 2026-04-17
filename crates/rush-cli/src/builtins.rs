@@ -15,6 +15,77 @@ thread_local! {
     static ALIASES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     // job table for background processes
     pub(crate) static JOB_TABLE: RefCell<rush_core::jobs::JobTable> = RefCell::new(rush_core::jobs::JobTable::new());
+    // Session baseline bg (config.json bg, captured at startup). Used to
+    // revert when cd'ing out of a .rushbg directory into one without.
+    // None = autoload not initialized (non-interactive modes) → hook is
+    // a no-op so scripts / pipelines don't flicker the terminal bg.
+    // Some("") = baseline is "no bg" → reset terminal default on exit.
+    static BASELINE_BG: RefCell<Option<String>> = const { RefCell::new(None) };
+    // The .rushbg value currently applied (last autoloaded folder bg).
+    // None = not currently inside a .rushbg override, so baseline is active.
+    static ACTIVE_RUSHBG: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Record the session baseline bg (typically `config.bg` from config.json)
+/// and enable `.rushbg` autoload on cd. Called once at REPL startup; not
+/// called in `-c`, stdin-pipe, or script modes, so the autoload hook stays
+/// inert for non-interactive invocations.
+pub fn set_baseline_bg(hex: &str) {
+    BASELINE_BG.with(|b| *b.borrow_mut() = Some(hex.to_string()));
+    // If the session already started inside a `.rushbg` dir, seed
+    // ACTIVE_RUSHBG so the first cd-away correctly reverts to baseline.
+    if let Some(rushbg) = rush_core::theme::load_rushbg() {
+        if rushbg != hex {
+            ACTIVE_RUSHBG.with(|a| *a.borrow_mut() = Some(rushbg));
+        }
+    }
+}
+
+/// Reload `.rushbg` from the current working directory and apply its bg,
+/// or revert to the session baseline if no `.rushbg` is present. Called
+/// after every successful cwd change in cd / pushd / popd. No-op unless
+/// `set_baseline_bg` was called (interactive REPL only).
+fn apply_rushbg_for_cwd() {
+    let Some(baseline) = BASELINE_BG.with(|b| b.borrow().clone()) else {
+        return;
+    };
+    let desired = rush_core::theme::load_rushbg();
+    let currently_active = ACTIVE_RUSHBG.with(|a| a.borrow().clone());
+
+    match (desired, currently_active) {
+        (Some(new_hex), ref active) if active.as_deref() != Some(new_hex.as_str()) => {
+            // Entering a .rushbg dir with a new (or different) color.
+            apply_bg_silent(&new_hex);
+            ACTIVE_RUSHBG.with(|a| *a.borrow_mut() = Some(new_hex));
+        }
+        (Some(_), _) => {
+            // Same .rushbg as already active — nothing to do.
+        }
+        (None, Some(_)) => {
+            // Leaving a .rushbg dir; revert to baseline.
+            if baseline.is_empty() {
+                // No baseline → reset terminal bg.
+                print!("\x1b]111\x07");
+                use std::io::Write;
+                std::io::stdout().flush().ok();
+                unsafe { std::env::remove_var("RUSH_BG") };
+            } else {
+                apply_bg_silent(&baseline);
+            }
+            ACTIVE_RUSHBG.with(|a| *a.borrow_mut() = None);
+        }
+        (None, None) => {
+            // No .rushbg and no active override — nothing to do.
+        }
+    }
+}
+
+/// Apply a bg hex without the "Background set to …" announcement that
+/// `setbg` prints. Updates OSC 11/10, RUSH_BG, and native color env vars.
+fn apply_bg_silent(hex: &str) {
+    if let Some(theme) = rush_core::theme::set_background(hex, true) {
+        rush_core::theme::set_native_color_env_vars(&theme);
+    }
 }
 
 /// Try to handle a line as a shell builtin. Returns true if handled.
@@ -121,6 +192,14 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
 fn handle_cd(evaluator: &mut Evaluator, target: &str) {
     let current = cwd_string();
 
+    // Parse through the shared tokenizer so quoted/escaped paths
+    // (`cd "Application Support"`, `cd foo\ bar`, `cd 'a b'`) reach
+    // set_current_dir as a single argument. For plain/short input
+    // (empty, `~`, `-`, `..`) this still round-trips cleanly.
+    let tokens = rush_core::process::parse_command_line(target);
+    let unquoted = tokens.first().map(String::as_str).unwrap_or("").to_string();
+    let target = unquoted.as_str();
+
     let path = if target.is_empty() || target == "~" {
         home_dir()
     } else if target == "-" {
@@ -137,6 +216,7 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
         Ok(()) => {
             OLDPWD.with(|p| *p.borrow_mut() = Some(current));
             evaluator.exit_code = 0;
+            apply_rushbg_for_cwd();
         }
         Err(e) => {
             eprintln!("cd: {path}: {e}");
@@ -349,6 +429,7 @@ fn handle_pushd(evaluator: &mut Evaluator, target: &str) {
         Ok(()) => {
             evaluator.exit_code = 0;
             handle_dirs();
+            apply_rushbg_for_cwd();
         }
         Err(e) => {
             eprintln!("pushd: {path}: {e}");
@@ -367,6 +448,7 @@ fn handle_popd(evaluator: &mut Evaluator) {
                 Ok(()) => {
                     evaluator.exit_code = 0;
                     handle_dirs();
+                    apply_rushbg_for_cwd();
                 }
                 Err(e) => {
                     eprintln!("popd: {path}: {e}");
@@ -2037,10 +2119,21 @@ fn run_color_selector() -> Option<String> {
     println!("  ─────────────────────────────────────────────────");
     println!();
 
+    // Each cell is ~25 visible chars: 2 leading + 2-swatch + 1 + 2-idx + ") " + 16-name.
+    // Compute columns from terminal width (COLUMNS env, fallback 80), clamped to [1, 6].
+    // The 6-col cap matches the original look on wide terminals; narrower terminals
+    // get fewer columns instead of wrapping mid-cell.
+    const CELL_WIDTH: usize = 25;
+    let term_width = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(80);
+    let cols = ((term_width.saturating_sub(2)) / CELL_WIDTH).clamp(1, 6);
+
     let mut index = 1;
     for (label, colors) in sections {
         println!("  {label}:");
-        for row in colors.chunks(6) {
+        for row in colors.chunks(cols) {
             print!("  ");
             for entry in row {
                 // Show color swatch using bg color + two spaces

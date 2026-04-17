@@ -18,6 +18,8 @@ Supports variables (x = 42), string interpolation (\"hello #{name}\"), \
 arrays ([1,2,3]), hashes ({a: 1}), control flow (if/unless/while/for-in), \
 method chaining (\"hello\".upcase), pipeline operators (| where/select/sort/as json), \
 and a File/Dir/Time stdlib. Also runs standard Unix commands (ls, grep, find, etc.). \
+Rush is a command executor here, not a REPL — bare expressions (y.sum, x + 1) \
+evaluate but do not write to stdout. Wrap values you want returned with puts or print. \
 Read the rush://lang-spec resource for the full language specification.";
 
 use crate::lang_spec::LANG_SPEC;
@@ -118,7 +120,7 @@ fn handle_tools_list() -> Result<JsonValue, (i32, String)> {
         "tools": [
             {
                 "name": "rush_execute",
-                "description": "Execute a command in the persistent Rush shell session. Supports Rush syntax, Unix shell commands, and pipeline operators. Variables, cwd, and environment persist across calls.",
+                "description": "Execute a command in the persistent Rush shell session. Supports Rush syntax, Unix shell commands, and pipeline operators. Variables, cwd, and environment persist across calls. Bare expressions (e.g. `y.sum`, `x + 1`) evaluate but do not write to stdout — wrap values you want returned with `puts` or `print`.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

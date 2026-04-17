@@ -40,6 +40,10 @@ pub fn run(is_login: bool) {
         }
     }
 
+    // Record the session baseline bg so `.rushbg` autoload (on cd) can
+    // revert to it when leaving an override directory.
+    builtins::set_baseline_bg(&config.bg);
+
     let detected_theme = theme::initialize();
 
     let mut output = StdOutput;

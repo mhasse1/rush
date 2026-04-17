@@ -256,6 +256,10 @@ predicates:
   - "$?.ok? / $?.failed? / $?.code — last exit status"
 
 # ── BUILT-IN FUNCTIONS ───────────────────────────────────────────
+# Note: bare expressions (x + 1, y.sum, "hello #{name}") evaluate
+# but do NOT write to stdout — Rush is a shell, not a REPL. Use
+# puts/print to emit a value. This matters especially in --llm /
+# --mcp modes where output is the only channel the caller sees.
 builtins:
   - "puts expr — print with newline"
   - "print expr — print without newline"
