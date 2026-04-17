@@ -195,8 +195,18 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
     // Parse through the shared tokenizer so quoted/escaped paths
     // (`cd "Application Support"`, `cd foo\ bar`, `cd 'a b'`) reach
     // set_current_dir as a single argument. For plain/short input
-    // (empty, `~`, `-`, `..`) this still round-trips cleanly.
-    let tokens = rush_core::process::parse_command_line(target);
+    // (empty, `~`, `-`, `..`) this still round-trips cleanly. On
+    // Windows, normalize `\` → `/` first so POSIX-style backslash
+    // escapes don't eat path separators.
+    #[cfg(windows)]
+    let parse_input: std::borrow::Cow<str> = if target.contains('\\') {
+        std::borrow::Cow::Owned(target.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(target)
+    };
+    #[cfg(not(windows))]
+    let parse_input: &str = target;
+    let tokens = rush_core::process::parse_command_line(&parse_input);
     let unquoted = tokens.first().map(String::as_str).unwrap_or("").to_string();
     let target = unquoted.as_str();
 

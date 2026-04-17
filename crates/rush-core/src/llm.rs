@@ -759,8 +759,18 @@ fn execute_command(input: &str, session: &mut LlmSession) -> LlmResult {
     if first_word == "cd" {
         // Parse through the shared tokenizer so quoted/escaped paths
         // (`cd "Application Support"`, `cd foo\ bar`) reach set_current_dir
-        // as a single argument. Mirrors dispatch.rs handling.
-        let parts = crate::process::parse_command_line(input);
+        // as a single argument. Mirrors dispatch.rs handling, including
+        // the Windows \ → / swap so POSIX-style backslash-escape parsing
+        // doesn't eat path separators.
+        #[cfg(windows)]
+        let parse_input: std::borrow::Cow<str> = if input.contains('\\') {
+            std::borrow::Cow::Owned(input.replace('\\', "/"))
+        } else {
+            std::borrow::Cow::Borrowed(input)
+        };
+        #[cfg(not(windows))]
+        let parse_input: &str = input;
+        let parts = crate::process::parse_command_line(&parse_input);
         let target = parts.get(1).map(String::as_str).unwrap_or("");
         let path = if target.is_empty() || target == "~" {
             std::env::var("HOME").unwrap_or_else(|_| ".".into())

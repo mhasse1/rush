@@ -255,8 +255,18 @@ pub fn dispatch_with_jobs(
             // resolve to a single path argument. Tilde expansion is only
             // applied to an unquoted `~` at the start; quoted `"~"` would
             // ideally stay literal, but that edge case isn't worth extra
-            // plumbing today.
-            let parts = process::parse_command_line(segment);
+            // plumbing today. On Windows, swap backslash path separators
+            // to `/` before parsing — `parse_command_line` treats `\` as
+            // a POSIX escape, which would strip Windows path separators.
+            #[cfg(windows)]
+            let parse_input: std::borrow::Cow<str> = if segment.contains('\\') {
+                std::borrow::Cow::Owned(segment.replace('\\', "/"))
+            } else {
+                std::borrow::Cow::Borrowed(segment)
+            };
+            #[cfg(not(windows))]
+            let parse_input: &str = segment;
+            let parts = process::parse_command_line(&parse_input);
             let target = parts.get(1).map(String::as_str).unwrap_or("");
             let path = if target.is_empty() || target == "~" {
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
@@ -989,7 +999,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Backslash-escaped spaces are a POSIX convention; on Windows
+    // users quote paths instead, and bare `\` is a path separator.
     #[test]
+    #[cfg(unix)]
     fn cd_backslash_escaped_space() {
         let dir = fresh_space_dir("esc");
         with_cd_in(&dir, || {
