@@ -125,6 +125,27 @@ impl JobTable {
         }
     }
 
+    /// Return each job as a single line, pipe-friendly (no alignment
+    /// padding, no current-job marker). Used by rush-cli's `jobs` when
+    /// invoked as a pipeline RHS so downstream `grep`/`awk` can parse
+    /// without fighting alignment whitespace.
+    pub fn snapshot_lines(&self) -> Vec<String> {
+        let mut ids: Vec<usize> = self.jobs.keys().copied().collect();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| {
+                let job = &self.jobs[&id];
+                let state_str = match job.state {
+                    JobState::Running => "Running",
+                    JobState::Stopped => "Stopped",
+                    JobState::Done(0) => "Done",
+                    JobState::Done(_) => "Exit",
+                };
+                format!("[{id}] {state_str} {} {}", job.pid, job.command)
+            })
+            .collect()
+    }
+
     /// Get the current (most recent) job ID.
     fn current_job_id(&self) -> usize {
         self.jobs.keys().max().copied().unwrap_or(0)

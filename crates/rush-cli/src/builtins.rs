@@ -116,18 +116,150 @@ pub fn is_builtin(name: &str) -> bool {
 /// if the builtin has no stdin semantics — in which case dispatch will
 /// emit "builtin does not consume stdin".
 ///
-/// Most rush-cli builtins return `None` here today. Slice B (data-
-/// producer builtins) and slice C (puts/print/warn sinks) in #224 will
-/// flip more names to `Some`.
-pub fn handle_pipe(_name: &str, _args: &str, _stdin: &[u8]) -> Option<i32> {
-    // Slice A: only the trivial shims consume stdin transparently so
-    // `cmd | true` and `cmd | false` don't regress into a "does not
-    // consume stdin" error. Real data-producer/sink wiring lands later.
-    match _name {
+/// Data-producer builtins ignore `_stdin` and emit a **pipe-friendly**
+/// variant of their interactive output (no leading decorations, one
+/// record per line) so `alias | grep git`, `path | grep .cargo`, etc.
+/// compose cleanly. Interactive output stays unchanged.
+pub fn handle_pipe(name: &str, args: &str, _stdin: &[u8]) -> Option<i32> {
+    match name {
+        // Trivial shims — consume stdin transparently.
         "true" | ":" => Some(0),
         "false" => Some(1),
+
+        // Data producers: stdin ignored, pipe-friendly output emitted.
+        "alias" => Some(alias_pipe_output(args)),
+        "history" => Some(history_pipe_output(args)),
+        "dirs" => Some(dirs_pipe_output()),
+        "path" => Some(path_pipe_output(args)),
+        "pwd" => Some(pwd_pipe_output()),
+        "which" | "type" => Some(which_pipe_output(args)),
+        "jobs" => Some(jobs_pipe_output()),
+
         _ => None,
     }
+}
+
+fn alias_pipe_output(args: &str) -> i32 {
+    let args = args.trim();
+    if args.is_empty() {
+        // All aliases: `name=value` lines, sorted.
+        ALIASES.with(|a| {
+            let aliases = a.borrow();
+            let mut sorted: Vec<_> = aliases.iter().collect();
+            sorted.sort_by_key(|(k, _)| (*k).clone());
+            for (name, expansion) in sorted {
+                println!("{name}={expansion}");
+            }
+        });
+        return 0;
+    }
+    // `alias NAME` lookup — emit `NAME=VALUE` if found.
+    if !args.contains('=') {
+        return ALIASES.with(|a| {
+            if let Some(exp) = a.borrow().get(args) {
+                println!("{args}={exp}");
+                0
+            } else {
+                eprintln!("alias: {args}: not found");
+                1
+            }
+        });
+    }
+    // Setter form (`alias name=value`) doesn't belong in a pipeline.
+    // Fall back to interactive handling; stdin is irrelevant.
+    handle_alias(args);
+    0
+}
+
+fn history_pipe_output(args: &str) -> i32 {
+    if args == "-c" || args == "--clear" {
+        // Clearing from a pipe is allowed; no numbered output.
+        let path = config_dir().join("history");
+        std::fs::write(&path, "").ok();
+        return 0;
+    }
+    let path = config_dir().join("history");
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let lines: Vec<&str> = content.lines().collect();
+    let n: usize = args.trim().parse().unwrap_or(lines.len());
+    let start = lines.len().saturating_sub(n);
+    for line in &lines[start..] {
+        println!("{line}");
+    }
+    0
+}
+
+fn dirs_pipe_output() -> i32 {
+    let cwd = cwd_string();
+    println!("{cwd}");
+    let stack = DIR_STACK.with(|s| s.borrow().clone());
+    for dir in stack.iter().rev() {
+        println!("{dir}");
+    }
+    0
+}
+
+fn path_pipe_output(args: &str) -> i32 {
+    let subcmd = args.split_whitespace().next().unwrap_or("");
+    if !subcmd.is_empty() && subcmd != "show" {
+        // Action subcommands (add/remove/clean) don't make sense in a
+        // pipeline. Let the interactive handler run and succeed.
+        handle_path(args);
+        return 0;
+    }
+    let path = std::env::var("PATH").unwrap_or_default();
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    for dir in path.split(sep) {
+        if !dir.is_empty() {
+            println!("{dir}");
+        }
+    }
+    0
+}
+
+fn pwd_pipe_output() -> i32 {
+    let cwd = std::env::current_dir()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace('\\', "/");
+    println!("{cwd}");
+    0
+}
+
+fn which_pipe_output(args: &str) -> i32 {
+    let name = args.trim();
+    if name.is_empty() {
+        eprintln!("which: usage: which <command>");
+        return 2;
+    }
+    if is_builtin(name) {
+        println!("{name}: shell builtin");
+        return 0;
+    }
+    let expansion = ALIASES.with(|a| a.borrow().get(name).cloned());
+    if let Some(exp) = expansion {
+        println!("{name}={exp}");
+        return 0;
+    }
+    if let Some(path) = rush_core::process::which(name) {
+        println!("{path}");
+        0
+    } else {
+        eprintln!("which: {name}: not found");
+        1
+    }
+}
+
+fn jobs_pipe_output() -> i32 {
+    // JobTable::list() writes to stdout in interactive form. For the
+    // pipe variant we emit `[N] STATUS PID COMMAND` lines which are
+    // easier to grep/awk and free of terminal highlighting.
+    JOB_TABLE.with(|jt| {
+        for line in jt.borrow().snapshot_lines() {
+            println!("{line}");
+        }
+    });
+    0
 }
 
 /// Try to handle a line as a shell builtin. Returns true if handled.
