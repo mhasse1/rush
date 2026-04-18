@@ -96,12 +96,16 @@ pub fn run(is_login: bool) {
                 ReedlineEvent::MenuNext,
             ]),
         );
-        // Shift+Tab usually arrives as KeyCode::BackTab (no modifier).
-        emacs_bindings.add_binding(
-            KeyModifiers::NONE,
-            KeyCode::BackTab,
-            ReedlineEvent::MenuPrevious,
-        );
+        // Shift+Tab arrives as one of three encodings depending on
+        // terminal emulator / crossterm version. Bind all three to
+        // MenuPrevious so backward-navigation works everywhere.
+        for (modifiers, code) in [
+            (KeyModifiers::NONE, KeyCode::BackTab),
+            (KeyModifiers::SHIFT, KeyCode::BackTab),
+            (KeyModifiers::SHIFT, KeyCode::Tab),
+        ] {
+            emacs_bindings.add_binding(modifiers, code, ReedlineEvent::MenuPrevious);
+        }
         Box::new(Emacs::new(emacs_bindings))
     } else {
         let mut insert_bindings = default_vi_insert_keybindings();
@@ -113,13 +117,16 @@ pub fn run(is_login: bool) {
                 ReedlineEvent::MenuNext,
             ]),
         );
-        // Shift+Tab usually arrives as KeyCode::BackTab (no modifier);
-        // #203 shift-tab-to-navigate-backward.
-        insert_bindings.add_binding(
-            KeyModifiers::NONE,
-            KeyCode::BackTab,
-            ReedlineEvent::MenuPrevious,
-        );
+        // Shift+Tab arrives as one of three encodings depending on
+        // terminal emulator / crossterm version. Bind all three to
+        // MenuPrevious so backward-navigation works everywhere (#203).
+        for (modifiers, code) in [
+            (KeyModifiers::NONE, KeyCode::BackTab),
+            (KeyModifiers::SHIFT, KeyCode::BackTab),
+            (KeyModifiers::SHIFT, KeyCode::Tab),
+        ] {
+            insert_bindings.add_binding(modifiers, code, ReedlineEvent::MenuPrevious);
+        }
         let mut normal_bindings = default_vi_normal_keybindings();
         if has_fzf() {
             // fzf available: Ctrl+R, /, and ? all go to fzf
@@ -183,7 +190,12 @@ pub fn run(is_login: bool) {
         // through the menu cleanly. Users can still see the full list
         // in the IdeMenu and pick one with Tab / Shift+Tab / Enter.
         .with_partial_completions(false)
-        .with_immediate_completions(false)
+        // Immediate completions: as the user Tabs through the menu,
+        // the buffer shows the currently-highlighted suggestion so the
+        // eventual Enter commits what they can already see. Without
+        // this the menu displays candidates but the buffer sits at
+        // the partial until Enter.
+        .with_immediate_completions(true)
         .with_ansi_colors(true);
 
     let show_timing = config.show_timing;
