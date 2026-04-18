@@ -253,9 +253,15 @@ Complete feature list for Rush v0.9.x-beta.
 - Auto-detects dark/light terminal background
 - Theme-aware colors for `ls`, `grep`, and all output
 - `set bg "#hex"` / `setbg "#hex"` — set terminal background
-- `setbg --selector` — in-terminal color picker with curated palette
-- `--save` — persist globally, `--local` — per-project via `.rushbg`
+- `setbg --selector` — in-terminal color picker, column count adapts to `$COLUMNS`
+- `setbg --flavor pastel|muted|vibrant|mono` — chroma profile for the whole palette
+- `setbg --accent "#hex"` — override the Accent family (ssh-host, flags); `--accent reset` restores default cyan
+- `--save` persists globally; `--local` writes `.rushbg` per-project
+- `.rushbg` autoloads on `cd` in and reverts on `cd` out (REPL only)
+- 8 semantic hue families: Neutral, Info, Emphasis, Success, Warning, Error, Data, Accent
+- CIEDE2000 collision avoidance between roles (ΔE2000 ≥ 5)
 - Respects `NO_COLOR` environment variable
+- Env overrides: `RUSH_BG`, `RUSH_FLAVOR`, `RUSH_ACCENT`
 - Native color env vars auto-set: `LS_COLORS`, `LSCOLORS`, `GREP_COLORS`, `CLICOLOR`
 
 ---

@@ -1,5 +1,19 @@
 # Status Line Design
 
+> **Status: aspirational / exploratory.** This document describes a hypothetical
+> persistent top-of-terminal status bar using ANSI scroll regions. It is **not**
+> the implementation rush actually uses today.
+>
+> The current prompt is a **per-iteration two-line prompt**: a status line
+> rendered via `prompt_left` (exit code, time, user@host, cwd, git, PID,
+> [stale]) followed by a dedicated input line with a short mode marker
+> (`»` / `:`) that swaps to `| ` when the completion menu opens. See
+> `user-manual.md#prompt` and `rust-rush-features.md#prompt` for the real
+> layout.
+>
+> Keep this file if/when we revisit a persistent status bar; delete it if
+> that direction gets officially dropped.
+
 ## Goal
 
 A persistent status line at the **top** of the terminal that shows contextual information — hints, mode indicators, background job counts, and whatever else we want in the future. Replaces the broken floating hint approach.

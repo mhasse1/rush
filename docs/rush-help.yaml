@@ -532,6 +532,36 @@ pipelines:
     - rush: 'docker ps | where Status ~ "Up" | select Names'
       note: "Auto-objectify with where filter"
 
+  builtins_in_pipelines:
+    summary: "Rush shell builtins work anywhere in a pipeline"
+    note: "Data-producer builtins emit pipe-friendly output (name=value lines, one record per line). puts/print/warn act as terminal sinks for shell output."
+    producers_rhs:
+      - rush: 'echo ignored | alias'
+        note: "Alias list as name=value lines"
+      - rush: 'alias | grep git'
+        note: "Filter aliases by grep"
+      - rush: 'alias | first 3'
+        note: "Rush pipe ops on alias output"
+      - rush: 'path | where /bin/'
+        note: "Filter PATH entries"
+      - rush: 'history | tail -20'
+        note: "Recent commands, plain lines (no numbers)"
+    sinks:
+      - rush: 'hostname | puts'
+        note: "Emit with trailing newline"
+      - rush: 'cat foo | print'
+        note: "Emit without trailing newline"
+      - rush: 'dmesg | warn'
+        note: "Emit to stderr"
+    middle:
+      - rush: 'ls | alias | head -5'
+        note: "Builtin in middle; captured and fed to head"
+    error:
+      example: 'echo hi | cd /tmp'
+      output: '"rush: cd: builtin does not consume stdin"'
+      note: "Non-consuming builtins fail with a clear message, not exit 127"
+    producers: ["alias", "history", "dirs", "path", "pwd", "which", "type", "jobs"]
+
 regex:
   summary: "Regular expressions"
   literal: "/pattern/flags"
@@ -1036,7 +1066,7 @@ sync:
     - "secrets.rush is always excluded from sync"
 
 setbg:
-  summary: "Terminal background color — set, pick, persist, per-project"
+  summary: "Terminal background color — set, pick, persist, per-project, flavor + accent"
 
   usage:
     - 'setbg "#1a1a2e"             — set background for this session'
@@ -1044,26 +1074,60 @@ setbg:
     - "setbg --selector            — interactive color picker in terminal"
     - "setbg --selector --save     — pick and persist globally"
     - "setbg --selector --local    — pick and save to .rushbg (per-project)"
+    - "setbg --flavor pastel       — swap the whole palette's chroma profile"
+    - "setbg --accent '#FF6B00'    — override the Accent family hue"
     - "setbg off                   — remove background color"
     - 'set bg "#1a1a2e"            — alternative syntax via set command'
 
   selector:
     - "Curated palette of dark/light colors"
-    - "HSL-derived similar colors for fine-tuning"
+    - "Column count adapts to terminal width (COLUMNS env)"
     - "Arrow keys to navigate, Enter to select"
     - "Live preview — terminal updates as you browse"
 
   per_project:
-    - ".rushbg file in project root sets background on cd"
+    - ".rushbg file in project root sets background automatically when you cd into that directory (interactive REPL only)"
+    - "cd out into a directory without .rushbg reverts to the session baseline (config.bg)"
     - "Created by setbg --selector --local or manually"
     - "Contains a single hex color value"
     - "Helps visually distinguish project terminals"
+
+  flavor:
+    summary: "Chroma profile applied to the whole palette"
+    values:
+      - "pastel  — low chroma, airy (×0.65)"
+      - "muted   — default (×1.00)"
+      - "vibrant — higher chroma (×1.40)"
+      - "mono    — chroma 0, grayscale across every family"
+    persistence: "setbg --flavor <name> --save persists to config.json. Env override: RUSH_FLAVOR."
+
+  accent:
+    summary: "Override the Accent family hue (ssh-host, flag, secondary-emphasis roles)"
+    usage:
+      - "setbg '#1a1a1a' --accent '#FF6B00'     — orange accent"
+      - "setbg --accent reset                    — back to default cyan"
+    note: "Success (green), Warning (amber), Error (red) stay semantically fixed — only the Accent family rotates."
+    persistence: "setbg --accent <hex> --save persists to config.json. Env override: RUSH_ACCENT."
+
+  semantic_families:
+    summary: "Every role maps to one of 8 hue families × 3 intensities"
+    families:
+      - "Neutral  (gray)   — banner, PID, time, host, comment, pipe, separators"
+      - "Info     (blue)   — path, known command, keyword, autosuggestion"
+      - "Emphasis (indigo) — user, active prompt marker"
+      - "Success  (green)  — ✓, clean git, string literal, grep filename"
+      - "Warning  (amber)  — dirty git, warn, unknown-cmd hint"
+      - "Error    (red)    — ✗, error/stderr, root, grep match"
+      - "Data     (purple) — numbers, operators"
+      - "Accent   (cyan)   — ssh-host, flag, secondary emphasis"
 
   rules:
     - "setbg without --save is session-only"
     - "setbg --save writes to config.json (applied at startup)"
     - "setbg --local writes .rushbg in current directory"
-    - "Per-project .rushbg overrides global bg when you cd into that directory"
+    - "Per-project .rushbg autoloads on cd and reverts on cd out"
+    - "--flavor and --accent can be set alone (no bg hex) to re-theme at current bg"
+    - "Collision avoidance between roles uses CIEDE2000 (ΔE2000 ≥ 5) for visible distinctness"
     - "Respects NO_COLOR environment variable"
 
   tips:
@@ -1140,10 +1204,6 @@ known-issues:
       reason: "puts is Rush syntax — the parser doesn't understand shell redirects"
       workaround: 'File.append("file.txt", "text") for >>, File.write("file.txt", "text") for >'
       alt: 'echo "text" >> file.txt  (echo goes through shell path, supports redirects)'
-
-    - problem: "Rush builtins (history, alias, cd, export) cannot be piped"
-      reason: "Builtins write directly to console, bypassing the pipeline"
-      workaround: "history | distinct works (special-cased). Other builtins not yet pipeable."
 
     - problem: "Variables matching builtin names (dirs, jobs, fg) can't be assigned"
       reason: "IsShellBuiltin() rejects them during triage before assignment is detected"

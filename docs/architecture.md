@@ -39,7 +39,7 @@ rush/
 │   │
 │   ├── rush-cli/           # Binary and REPL (8 modules)
 │   │   ├── main.rs         # Entry point, flag parsing, mode dispatch
-│   │   ├── repl.rs         # Reedline-based REPL, fzf integration
+│   │   ├── repl.rs         # Rushline-based REPL, fzf integration
 │   │   ├── builtins.rs     # 50+ shell builtins (cd, export, alias, path, set, etc.)
 │   │   ├── prompt.rs       # Git-aware prompt with timing
 │   │   ├── completer.rs    # Tab completion (commands, paths, methods, pipeline ops)
@@ -96,4 +96,5 @@ Three modes:
 - **Native interpreter, not transpiler.** The .NET version transpiled Rush to PowerShell. Rust Rush evaluates directly. This removes the .NET dependency, gives ~10ms startup, and makes behavior predictable (no PowerShell semantics leaking through).
 - **Cross-platform paths.** Backslashes from Windows env vars are normalized to `/` during expansion. The parser treats `\` as escape consistently on all platforms. `.native_path` converts back for Windows-specific handoff.
 - **Objectify.** Text output from any command can be parsed into structured data (array of hashes) using configurable per-command hints (YAML, three-layer: built-in → system → user).
-- **Reedline fork.** Vi `/` search required a fork of the reedline line editor. fzf integration (auto-detected) provides Ctrl+R and Esc+/ history search.
+- **Rushline (reedline fork).** The line editor lives at [`mhasse1/rushline`](https://github.com/mhasse1/rushline) — a sibling project to rush, forked from [`nushell/reedline`](https://github.com/nushell/reedline) and MIT-licensed like upstream. Divergence is concentrated in vi-mode ergonomics, menu behavior (below-prompt IdeMenu, sync selection movement, hints-suppressed-while-menu-active), and history deletion. Changes that make sense for everyone get offered back to nushell — see `UPSTREAM.md` in the rushline repo for the current list. fzf integration (auto-detected) provides Ctrl+R and Esc+/ history search.
+- **`$?` via thread-local.** `$?` expansion reads a per-thread `LAST_EXIT_CODE` cell in `process.rs` rather than the `RUSH_LAST_EXIT` environment variable. Env vars are process-global and raced tests that asserted on `$?`; the cell is hermetic per test (#229).

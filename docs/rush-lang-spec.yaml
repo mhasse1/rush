@@ -245,6 +245,34 @@ pipeline_ops:
   - "| tee file — write to file and pass through"
   - "| objectify — convert text table to objects"
   - "| columns 1,3,5 — select columns by index (1-based)"
+  - "| puts / print / warn — terminal sinks (hostname | puts prints hostname)"
+
+# ── BUILTINS IN PIPELINES ────────────────────────────────────────
+# Rush-cli builtins compose with pipelines in any position:
+#
+#   echo hi | alias              — RHS: data-producer builtin,
+#                                   stdin ignored, emits pipe-friendly
+#                                   `name=value` lines
+#   alias | grep ga              — LHS: builtin output captured and
+#                                   fed into the native tail
+#   ls | alias | head -5         — middle: captured, reinjected
+#   alias | first 3              — builtin output → Rush pipe ops
+#   hostname | puts              — terminal sink, prints to stdout
+#
+# Data-producer builtins emit plain lines (no numbering, no indicator
+# marks, no shell-alias quoting) when invoked as a pipeline stage:
+#
+#   alias         producer: `ga=/usr/bin/git add`
+#   history       producer: plain command lines (no `123  ` prefix)
+#   dirs          producer: one dir per line
+#   path          producer: one PATH entry per line (no ✓/✗/↑ marks)
+#   pwd           producer: one line
+#   which/type    producer: one line per lookup
+#   jobs          producer: `[1] Running PID cmd`
+#
+# Non-producing builtins (cd, exit, export, …) invoked on the RHS
+# emit `rush: NAME: builtin does not consume stdin` instead of
+# exec-failing with 127.
 
 # ── PREDICATE METHODS ────────────────────────────────────────────
 predicates:

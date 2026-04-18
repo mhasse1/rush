@@ -253,14 +253,18 @@ JSON-RPC 2.0 over stdio:
 
 ## REPL
 
-- Vi mode (insert/normal) with mode indicator (» / :)
+- Line editor: [`rushline`](https://github.com/mhasse1/rushline) — fork of nushell/reedline
+- Vi mode (insert/normal) with mode marker at start of input line (» / :)
 - Emacs mode (`set emacs`)
-- Fish-style autosuggestions from history
-- Tab completion: commands, paths, Rush methods, env vars, pipe operators
+- Fish-style autosuggestions from history (suppressed while completion menu is open)
+- Tab completion (IdeMenu): commands, paths, Rush methods, env vars, pipe operators
+  - Menu renders **below** the prompt — status line stays visible
+  - Case-insensitive matching for paths and commands
+  - Shift+Tab cycles backward
 - Syntax highlighting: Rush keywords + shell commands
 - Multi-line editing (if/def/for blocks)
 - Persistent history (~/.config/rush/history, 10K entries)
-- Reverse search (Ctrl+R)
+- Reverse search (Ctrl+R) — uses fzf when installed
 - Command timing (>500ms shown)
 - Training hints after failed commands
 - First-run welcome
@@ -269,24 +273,31 @@ JSON-RPC 2.0 over stdio:
 ## Prompt
 
 ```
-✓ 16:54 » mark@rocinante  src/rush  main*
-  
+
+✓ 16:54  mark@rocinante  src/rush  main*  [12345]
+» 
 ```
+Two-line prompt: a status line in `prompt_left` followed by a short mode marker + input. The mode marker (`»` insert, `:` vi-normal) is swapped to `| ` automatically when a completion menu opens.
+
 - Exit status: ✓ (green) / ✗ code (red)
 - Time: HH:MM
-- Mode: » (insert) / : (vi normal)
 - User@Host (SSH detection)
 - CWD (last 2 levels, ~ for home)
 - Git branch + dirty *
 - [stale] when binary updated
+- [pid] muted, for attaching debuggers / profilers
 
 ## Theme
 
 - Dark/light auto-detection (RUSH_BG, COLORFGBG, macOS appearance)
 - 256-color LS_COLORS/GREP_COLORS with hue-aware selection
-- WCAG contrast validation
+- WCAG contrast floor + CIEDE2000 collision avoidance (ΔE2000 ≥ 5)
+- 8 semantic hue families × 3 intensities (Neutral, Info, Emphasis, Success, Warning, Error, Data, Accent)
 - `setbg #hex` with OSC 11 + re-theme
-- Per-project `.rushbg` files
+- `setbg --flavor pastel|muted|vibrant|mono` — chroma profile
+- `setbg --accent #hex` — override Accent family hue
+- Per-project `.rushbg` files, autoloaded on cd (REPL)
+- Env overrides: `RUSH_BG`, `RUSH_FLAVOR`, `RUSH_ACCENT`
 - NO_COLOR support
 
 ## Configuration

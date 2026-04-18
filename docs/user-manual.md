@@ -208,6 +208,32 @@ setbg --selector --save    # Pick and persist globally
 setbg --selector --local   # Pick and save per-project (.rushbg)
 ```
 
+**Per-project `.rushbg`.** Drop a `.rushbg` file (single hex color) into a project directory; when you `cd` into it the bg switches automatically, and `cd` out reverts to your configured bg (config.json `bg`). Autoload is REPL-only — scripts and `-c` invocations don't flicker the terminal.
+
+**Flavor (chroma profile).** The whole palette can shift chroma as one knob:
+
+```rush
+setbg --flavor pastel          # low chroma, airy
+setbg --flavor muted           # default
+setbg --flavor vibrant         # higher chroma, gamut-clipped per role
+setbg --flavor mono            # chroma 0 — grayscale across every family
+setbg --flavor pastel --save   # persist to config.json
+```
+
+Env override: `RUSH_FLAVOR=mono rush` for one session without touching config.
+
+**Accent.** Override the Accent hue family (ssh-host, flags, secondary emphasis) with a custom color:
+
+```rush
+setbg --accent "#FF6B00"         # orange accents
+setbg --accent reset             # back to default cyan
+setbg --accent "#00AACC" --save  # persist
+```
+
+Semantic families stay fixed — red still means error, green still means success — only the Accent family rotates around your chosen hue. Env override: `RUSH_ACCENT=#FF6B00`.
+
+**8 semantic hue families.** Every colored role maps to one of: Neutral (gray), Info (blue), Emphasis (indigo), Success (green), Warning (amber), Error (red), Data (purple), Accent (cyan). Role collision is checked with CIEDE2000 (ΔE2000 ≥ 5) so distinct roles stay visibly distinct across backgrounds.
+
 If you've customized `LS_COLORS` or `GREP_COLORS` in your shell profile, Rush respects your values.
 Set `NO_COLOR=1` to disable all color output.
 
@@ -228,20 +254,24 @@ reload     # re-read config files (settings, theme, aliases)
 
 ### Prompt
 
-The default prompt shows:
+The default prompt uses two lines — a status line followed by a dedicated input line:
 
 ```
-✓ 14:32  mark@macbook  rush/src  main*
-  █
+
+✓ 14:32  mark@macbook  rush/src  main*  [12345]
+» █
 ```
 
-Components (left to right):
+Components of the **status line** (left to right):
 - **Exit status**: ✓ (success) or ✗ + exit code (failure)
 - **Time**: 24-hour HH:mm
 - **User@host**: highlights differently when connected via SSH
 - **Path**: shortened to last 2 directory levels (`~` for home)
 - **Git branch**: with `*` suffix if there are uncommitted changes
 - **Stale indicator**: `[stale]` in yellow when the binary has been updated — run `reload --hard` to restart
+- **PID**: `[12345]` in muted color, for attaching debuggers / profilers to the running shell
+
+The **input line** starts with a short mode marker (`»` in insert, `:` in vi-normal) followed by your input. When a completion menu is active the marker is replaced with `| ` so you can tell at a glance that a menu is open.
 
 ### Vi Mode (Default)
 
@@ -252,9 +282,13 @@ Rush defaults to vi-style line editing.
 | Key | Action |
 |-----|--------|
 | `Esc` | Switch to normal mode |
-| `Tab` | Complete paths and commands |
+| `Tab` | Open the completion menu below the prompt / cycle to next match |
+| `Shift+Tab` | Cycle backward through completions |
+| `Enter` | Commit the selected completion (or the typed line if no menu) |
 | `Ctrl+C` | Cancel current line |
-| `Ctrl+R` | Reverse history search |
+| `Ctrl+R` | Reverse history search (uses fzf if installed) |
+
+Tab completion is **case-insensitive** for paths, commands, builtins, and keywords — typing `cd DOC<tab>` completes `Documents/`. The menu renders below the prompt line so your status line / cwd / git branch stays visible while you browse.
 
 **Normal mode** (after pressing Esc):
 
