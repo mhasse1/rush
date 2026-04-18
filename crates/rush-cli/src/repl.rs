@@ -40,6 +40,12 @@ pub fn run(is_login: bool) {
         }
     }
 
+    // Promote the flavor (#228 slice 3) the same way — env wins over
+    // config so an ad-hoc override like `RUSH_FLAVOR=mono rush` works.
+    if std::env::var_os("RUSH_FLAVOR").is_none() && !config.flavor.is_empty() {
+        unsafe { std::env::set_var("RUSH_FLAVOR", &config.flavor) };
+    }
+
     // Record the session baseline bg so `.rushbg` autoload (on cd) can
     // revert to it when leaving an override directory.
     builtins::set_baseline_bg(&config.bg);

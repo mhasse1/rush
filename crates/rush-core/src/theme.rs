@@ -459,6 +459,59 @@ const fn role(family: RoleFamily, intensity: Intensity) -> ColorRole {
     ColorRole { family, intensity }
 }
 
+/// Chroma profile — a single knob over the whole palette that scales
+/// (or zeros out) the per-role chroma coming out of the tonal band.
+/// Set via `setbg --flavor <name>` and persisted in `config.flavor`.
+/// Read from the `RUSH_FLAVOR` env var at theme-generation time (like
+/// RUSH_BG) so the REPL, setbg, and MCP all see the same value.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Flavor {
+    Pastel,   // low chroma, airy
+    Muted,    // default — matches current palette
+    Vibrant,  // higher chroma, gamut-clipped per-role
+    Mono,     // chroma 0, intensity is the only variation
+}
+
+impl Flavor {
+    /// Multiplier applied to the tonal-band chroma. `Mono` short-circuits
+    /// downstream (zeroing chroma entirely including for chromatic roles).
+    fn chroma_scale(self) -> f64 {
+        match self {
+            Flavor::Pastel  => 0.65,
+            Flavor::Muted   => 1.00,
+            Flavor::Vibrant => 1.40,
+            Flavor::Mono    => 0.00,
+        }
+    }
+
+    /// Parse a user-supplied name (case-insensitive). Unknown → Muted.
+    pub fn parse(s: &str) -> Flavor {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "pastel"  => Flavor::Pastel,
+            "vibrant" => Flavor::Vibrant,
+            "mono" | "monochrome" | "grayscale" => Flavor::Mono,
+            _ => Flavor::Muted,
+        }
+    }
+
+    /// Canonical short name for config persistence.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Flavor::Pastel  => "pastel",
+            Flavor::Muted   => "muted",
+            Flavor::Vibrant => "vibrant",
+            Flavor::Mono    => "mono",
+        }
+    }
+
+    /// Current session flavor — reads `RUSH_FLAVOR`; defaults to Muted.
+    fn current() -> Flavor {
+        std::env::var("RUSH_FLAVOR")
+            .map(|s| Flavor::parse(&s))
+            .unwrap_or(Flavor::Muted)
+    }
+}
+
 impl ColorRole {
     /// The contrast floor this role's palette index must meet against
     /// the background. Dim accepts 3.5:1 (intentional low contrast);
@@ -534,8 +587,13 @@ fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, 
     // Neutral roles (host, muted, time, comment, line-number) are
     // intentionally grayscale — force chroma to 0 so the role reads
     // as "structural non-color" even when the band is colorful.
-    let is_neutral = role.family.is_neutral() || role.intensity == Intensity::Neutral;
-    let chroma = if is_neutral { 0.0 } else { band.chroma };
+    // Mono flavor collapses every role to the grayscale axis so the
+    // whole palette reduces to lightness-only variation (#228).
+    let flavor = Flavor::current();
+    let is_neutral = role.family.is_neutral()
+        || role.intensity == Intensity::Neutral
+        || flavor == Flavor::Mono;
+    let chroma = if is_neutral { 0.0 } else { band.chroma * flavor.chroma_scale() };
 
     // Family supplies the canonical hue; keep it away from the bg hue
     // so colored backgrounds don't swallow a role that happens to
@@ -1287,6 +1345,62 @@ mod tests {
         // Chroma-zero → r ≈ g ≈ b (within ~1% per channel after
         // gamut rounding).
         assert!(max - min < 0.03, "expected grayscale, got ({r:.3},{g:.3},{b:.3})");
+    }
+
+    // ── Flavor knob (#228 slice 3) ───────────────────────────────────
+
+    /// Clear RUSH_FLAVOR after the test block. Tests that set the env
+    /// must be serialized since env is process-global.
+    struct FlavorGuard;
+    impl Drop for FlavorGuard {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var("RUSH_FLAVOR") };
+        }
+    }
+
+    static FLAVOR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn flavor_mono_produces_grayscale_roles() {
+        let _l = FLAVOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("RUSH_FLAVOR", "mono") };
+        let _g = FlavorGuard;
+
+        let bg = (0.12, 0.12, 0.12);
+        // Even a chromatic-family role should come out grayscale.
+        let (r, g, b) = generate_role_color(&ROLE_SUCCESS, bg);
+        let spread = r.max(g).max(b) - r.min(g).min(b);
+        assert!(spread < 0.03, "mono should force grayscale, got ({r:.3},{g:.3},{b:.3})");
+    }
+
+    #[test]
+    fn flavor_pastel_reduces_chroma_vs_muted() {
+        let _l = FLAVOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let bg = (0.15, 0.15, 0.15);
+
+        unsafe { std::env::set_var("RUSH_FLAVOR", "muted") };
+        let muted = generate_role_color(&ROLE_SUCCESS, bg);
+        let (_, c_muted, _) = srgb_to_oklch(muted.0, muted.1, muted.2);
+
+        unsafe { std::env::set_var("RUSH_FLAVOR", "pastel") };
+        let pastel = generate_role_color(&ROLE_SUCCESS, bg);
+        let (_, c_pastel, _) = srgb_to_oklch(pastel.0, pastel.1, pastel.2);
+
+        unsafe { std::env::remove_var("RUSH_FLAVOR") };
+
+        assert!(
+            c_pastel < c_muted,
+            "pastel chroma {c_pastel:.3} should be < muted {c_muted:.3}"
+        );
+    }
+
+    #[test]
+    fn flavor_parse_is_case_insensitive_and_defaults_to_muted() {
+        assert_eq!(Flavor::parse("PASTEL"), Flavor::Pastel);
+        assert_eq!(Flavor::parse("Vibrant"), Flavor::Vibrant);
+        assert_eq!(Flavor::parse("mono"), Flavor::Mono);
+        assert_eq!(Flavor::parse("nonsense"), Flavor::Muted);
+        assert_eq!(Flavor::parse(""), Flavor::Muted);
     }
 
     #[test]

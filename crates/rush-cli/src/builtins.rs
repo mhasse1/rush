@@ -1196,17 +1196,56 @@ fn handle_setbg(args: &str) {
 
     let save = args.contains("--save");
     let local = args.contains("--local");
-    let hex = args.split_whitespace()
-        .find(|w| w.starts_with('#') || w.chars().all(|c| c.is_ascii_hexdigit()))
-        .unwrap_or(args.split_whitespace().next().unwrap_or(""));
 
-    let hex = if hex.starts_with('#') { hex.to_string() } else { format!("#{hex}") };
+    // --flavor <name> — chroma profile knob (#228 slice 3). Parsed
+    // before hex extraction so the name doesn't get swallowed by the
+    // "hex-looking" heuristic below.
+    let flavor_name = parse_flag_value(args, "--flavor");
+    if let Some(name) = &flavor_name {
+        let flavor = rush_core::theme::Flavor::parse(name);
+        unsafe { std::env::set_var("RUSH_FLAVOR", flavor.as_str()) };
+        if save {
+            let mut config = rush_core::config::RushConfig::load();
+            config.set("flavor", flavor.as_str());
+            config.save().ok();
+        }
+    }
+
+    // Allow `setbg --flavor <name>` with no hex — just re-theme at
+    // the current bg with the new chroma.
+    let hex_token = args.split_whitespace()
+        .find(|w| w.starts_with('#') || (!w.starts_with("--") && w.chars().all(|c| c.is_ascii_hexdigit()) && w.len() == 6));
+    let hex = match hex_token {
+        Some(tok) => {
+            if tok.starts_with('#') { tok.to_string() } else { format!("#{tok}") }
+        }
+        None => {
+            // No hex — use current RUSH_BG if set, else nothing to do.
+            match std::env::var("RUSH_BG") {
+                Ok(bg) if !bg.is_empty() => bg,
+                _ => {
+                    if flavor_name.is_some() {
+                        println!("Flavor set (no bg configured yet — use setbg <hex> to activate).");
+                        return;
+                    }
+                    eprintln!("setbg: no background hex given and RUSH_BG is empty");
+                    return;
+                }
+            }
+        }
+    };
 
     match rush_core::theme::set_background(&hex, true) {
         Some(theme) => {
             // Re-set color env vars with new theme
             rush_core::theme::set_native_color_env_vars(&theme);
-            println!("Background set to {hex} ({})", if theme.is_dark { "dark" } else { "light" });
+            let flavor_note = flavor_name.as_deref()
+                .map(|f| format!(", flavor {f}"))
+                .unwrap_or_default();
+            println!(
+                "Background set to {hex} ({}{flavor_note})",
+                if theme.is_dark { "dark" } else { "light" },
+            );
 
             if save {
                 let mut config = rush_core::config::RushConfig::load();
@@ -1219,6 +1258,14 @@ fn handle_setbg(args: &str) {
         }
         None => eprintln!("setbg: invalid hex color '{hex}'"),
     }
+}
+
+/// Extract the value following `--flag` in an args string. Returns
+/// `None` if the flag is absent or has no value token after it.
+fn parse_flag_value(args: &str, flag: &str) -> Option<String> {
+    let tokens: Vec<&str> = args.split_whitespace().collect();
+    let pos = tokens.iter().position(|t| *t == flag)?;
+    tokens.get(pos + 1).map(|s| s.to_string())
 }
 
 // ── which / type ────────────────────────────────────────────────────

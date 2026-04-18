@@ -24,6 +24,10 @@ pub struct RushConfig {
     pub ai_model: String,
     #[serde(default)]
     pub bg: String,
+    /// Chroma profile: "pastel", "muted" (default), "vibrant", or "mono".
+    /// Applied to the whole palette when theming is active. See #228.
+    #[serde(default = "default_flavor")]
+    pub flavor: String,
     #[serde(default)]
     pub aliases: HashMap<String, String>,
 }
@@ -33,6 +37,7 @@ fn default_history_size() -> usize { 10_000 }
 fn default_true() -> bool { true }
 fn default_anthropic() -> String { "anthropic".to_string() }
 fn default_auto() -> String { "auto".to_string() }
+fn default_flavor() -> String { "muted".to_string() }
 
 impl Default for RushConfig {
     fn default() -> Self {
@@ -46,6 +51,7 @@ impl Default for RushConfig {
             ai_provider: "anthropic".into(),
             ai_model: "auto".into(),
             bg: String::new(),
+            flavor: "muted".into(),
             aliases: HashMap::new(),
         }
     }
@@ -146,6 +152,10 @@ impl RushConfig {
             }
             "bg" => {
                 self.bg = value.to_string();
+                true
+            }
+            "flavor" => {
+                self.flavor = value.to_string();
                 true
             }
             _ => false,
