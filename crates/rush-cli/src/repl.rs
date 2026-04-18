@@ -89,7 +89,12 @@ pub fn run(is_login: bool) {
     let completion_menu = Box::new(
         IdeMenu::default()
             .with_name("completion_menu")
-            .with_default_border(),
+            .with_default_border()
+            // Pull the menu left of the cursor so it aligns roughly
+            // with the prompt's 2-space indent instead of being
+            // cursor-anchored (which put it arbitrarily far right
+            // depending on how much the user had typed).
+            .with_cursor_offset(-3),
     );
 
     // Edit mode from config
