@@ -389,22 +389,25 @@ pub fn dispatch_with_jobs_and_builtins(
                     .strip_prefix(first_first)
                     .unwrap_or("")
                     .trim_start();
-                let bytes = capture_builtin_stdout(builtins, first_first, args);
+                let bytes = capture_builtin_stdout(builtins, first_first, args, &[]);
                 let remaining: Vec<String> = pipe_segments[1..].to_vec();
 
                 let code = if remaining.is_empty() {
                     // Degenerate case — shouldn't happen since len > 1.
                     0
-                } else if has_rush_pipe_ops(&remaining) || remaining.iter().any(|s| {
-                    let fw = s.split_whitespace().next().unwrap_or("");
-                    pipeline::is_pipe_op(fw)
-                }) {
-                    // Rush pipe ops downstream: convert captured bytes
-                    // to an array of lines and thread through the pipe
-                    // op chain.
+                } else if segments_need_rush_pipeline(&remaining, pipeline_builtins.as_deref()) {
+                    // Rush pipe ops or mid-/end-pipe builtins downstream:
+                    // convert captured bytes to an array of lines and
+                    // thread through the pipe-op chain (which is now
+                    // builtin-aware for shell-segment stages).
                     let text = String::from_utf8_lossy(&bytes).into_owned();
                     let initial = pipeline::text_to_array(&text);
-                    run_pipeline_from_value(evaluator, initial, &remaining)
+                    run_pipeline_from_value(
+                        evaluator,
+                        initial,
+                        &remaining,
+                        pipeline_builtins.as_deref_mut(),
+                    )
                 } else {
                     // Native tail — grep, awk, head, etc. Spawn the
                     // chain with the first stage's stdin filled from
@@ -425,51 +428,22 @@ pub fn dispatch_with_jobs_and_builtins(
             }
         }
 
-        // Pipeline RHS that's a rush-cli builtin: the native pipe chain
-        // below can only execve names on PATH, so things like
-        // `echo hi | alias` fail with 127. If the host supplied the
-        // builtin callbacks, capture upstream output and route it into
-        // the builtin. When the builtin doesn't consume stdin we emit
-        // a clear message instead of masquerading as an exec failure.
         if pipe_segments.len() > 1 {
-            let last = pipe_segments.last().expect("checked len > 1");
-            let last_first = last.split_whitespace().next().unwrap_or("");
-            if let Some(builtins) = pipeline_builtins.as_deref_mut() {
-                if !last_first.is_empty() && (builtins.is_builtin)(last_first) {
-                    let upstream_cmd = pipe_segments[..pipe_segments.len() - 1].join(" | ");
-                    let upstream = process::run_native_capture(&upstream_cmd);
-                    if !upstream.stderr.is_empty() {
-                        eprintln!("{}", upstream.stderr);
-                    }
-                    let args = last.trim_start()
-                        .strip_prefix(last_first)
-                        .unwrap_or("")
-                        .trim_start();
-                    let code = match (builtins.handle_pipe)(last_first, args, upstream.stdout.as_bytes()) {
-                        Some(code) => code,
-                        None => {
-                            eprintln!("rush: {last_first}: builtin does not consume stdin");
-                            1
-                        }
-                    };
-                    last_exit = code;
-                    last_failed = code != 0;
-                    evaluator.exit_code = code;
-                    for (key, prev) in saved_vars {
-                        match prev {
-                            Some(val) => unsafe { std::env::set_var(&key, &val) },
-                            None => unsafe { std::env::remove_var(&key) },
-                        }
-                    }
-                    continue;
-                }
-            }
-        }
-
-        if pipe_segments.len() > 1 {
-            if has_rush_pipe_ops(&pipe_segments) {
-                // Rush pipeline operators (where, sort, etc.)
-                let code = run_pipeline(evaluator, &pipe_segments);
+            // Route through Rush's value-flow pipeline when any segment
+            // is a Rush pipe op or a rush-cli builtin in a middle/terminal
+            // position (#224 RHS, #238 middle). The LHS-builtin case is
+            // already handled above. Everything else stays on the native
+            // fork/exec/dup2 path.
+            let need_rush_pipeline = segments_need_rush_pipeline(
+                &pipe_segments,
+                pipeline_builtins.as_deref(),
+            );
+            if need_rush_pipeline {
+                let code = run_pipeline(
+                    evaluator,
+                    &pipe_segments,
+                    pipeline_builtins.as_deref_mut(),
+                );
                 last_exit = code;
                 last_failed = code != 0;
                 evaluator.exit_code = code;
@@ -839,24 +813,40 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
 
 // ── Pipeline Execution ──────────────────────────────────────────────
 
-fn has_rush_pipe_ops(segments: &[String]) -> bool {
-    segments.iter().skip(1).any(|seg| {
-        let first_word = seg.split_whitespace().next().unwrap_or("");
-        pipeline::is_pipe_op(first_word)
-    })
-}
-
 fn run_pipeline(
     evaluator: &mut Evaluator,
     segments: &[String],
+    builtins: Option<&mut PipelineBuiltins>,
 ) -> i32 {
     if segments.is_empty() { return 0; }
 
     let first = &segments[0];
     let auto_obj = pipeline::should_auto_objectify(first);
 
+    let mut builtins = builtins;
+
     // Execute first segment
-    let value = if !triage::is_rush_syntax(first) {
+    let first_word = first.split_whitespace().next().unwrap_or("");
+    let first_is_builtin = builtins
+        .as_deref_mut()
+        .map(|b| !first_word.is_empty() && (b.is_builtin)(first_word))
+        .unwrap_or(false);
+
+    let value = if first_is_builtin {
+        // LHS builtin in a Rush-pipe-op pipeline. Capture its pipe-
+        // friendly output via fd-redirect and convert to an array of
+        // lines for downstream pipe ops / builtins.
+        let b = builtins.as_deref_mut().expect("first_is_builtin implies Some");
+        let args = first.trim_start().strip_prefix(first_word).unwrap_or("").trim_start();
+        let bytes = capture_builtin_stdout(b, first_word, args, &[]);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let text_val = pipeline::text_to_array(&text);
+        if auto_obj {
+            pipeline::apply_pipe_op(text_val, &pipeline::parse_pipe_op("objectify"))
+        } else {
+            text_val
+        }
+    } else if !triage::is_rush_syntax(first) {
         let result = process::run_native_capture(first);
         if !result.stderr.is_empty() {
             eprintln!("{}", result.stderr);
@@ -882,61 +872,130 @@ fn run_pipeline(
         }
     };
 
-    run_pipeline_from_value(evaluator, value, &segments[1..])
+    run_pipeline_from_value(evaluator, value, &segments[1..], builtins)
+}
+
+/// Render a Value as the text that will be written to a child process's
+/// stdin (or passed to a builtin's `handle_pipe`). Arrays are joined
+/// with newlines so shell stages see one record per line; scalars use
+/// their normal rush_string form. This matches what `puts` prints.
+fn format_value_for_stdin(value: &Value) -> String {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .map(|v| v.to_rush_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => other.to_rush_string(),
+    }
 }
 
 /// Apply the remaining pipeline segments to a pre-computed initial
 /// value. Split out of `run_pipeline` so the LHS-builtin path in #236
 /// can capture a builtin's output into a Value and thread it through
-/// the rest of the pipeline (Rush pipe ops, or shell stages that
-/// expect text on stdin).
+/// the rest of the pipeline. Middle/terminal rush-cli builtins (#238)
+/// are routed via the supplied `PipelineBuiltins` so `ls | alias | head`
+/// and `hostname | alias | first 1` stop failing with 127.
 fn run_pipeline_from_value(
     evaluator: &mut Evaluator,
     mut value: Value,
     rest_segments: &[String],
+    mut builtins: Option<&mut PipelineBuiltins>,
 ) -> i32 {
-    for segment in rest_segments {
+    if rest_segments.is_empty() {
+        let output = value.to_rush_string();
+        if !output.is_empty() {
+            println!("{output}");
+        }
+        return evaluator.exit_code;
+    }
+
+    let last_idx = rest_segments.len() - 1;
+
+    for (i, segment) in rest_segments.iter().enumerate() {
         let first_word = segment.split_whitespace().next().unwrap_or("");
+        let is_last = i == last_idx;
+
+        // Rush pipe op (where, sort, first, puts, …) — pure value flow.
         if pipeline::is_pipe_op(first_word) {
             let op = pipeline::parse_pipe_op(segment);
             value = pipeline::apply_pipe_op(value, &op);
-        } else {
-            // Shell segment in Rush pipeline — pipe Rush value into command's stdin
-            let input_text = value.to_rush_string();
-            let parts = process::parse_command_line(segment);
-            if !parts.is_empty() {
-                let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
-                match std::process::Command::new(&parts[0])
-                    .args(&args)
-                    .stdin(std::process::Stdio::piped())
-                    .stdout(std::process::Stdio::piped())
-                    .stderr(std::process::Stdio::inherit())
-                    .spawn()
-                {
-                    Ok(mut child) => {
-                        use std::io::Write;
-                        if let Some(mut stdin) = child.stdin.take() {
-                            stdin.write_all(input_text.as_bytes()).ok();
-                        }
-                        match child.wait_with_output() {
-                            Ok(output) => {
-                                value = Value::String(
-                                    String::from_utf8_lossy(&output.stdout).trim_end().to_string()
-                                );
-                            }
-                            Err(_) => { value = Value::String(String::new()); }
-                        }
+            continue;
+        }
+
+        // Rush-cli builtin stage: consume the current value as stdin
+        // bytes and replace with the builtin's output (or, if it's the
+        // terminal stage, let its output go straight to the user).
+        let is_rush_builtin = builtins
+            .as_deref_mut()
+            .map(|b| !first_word.is_empty() && (b.is_builtin)(first_word))
+            .unwrap_or(false);
+        if is_rush_builtin {
+            let b = builtins.as_deref_mut().expect("is_rush_builtin implies Some");
+            let args = segment
+                .trim_start()
+                .strip_prefix(first_word)
+                .unwrap_or("")
+                .trim_start();
+            let stdin_text = format_value_for_stdin(&value);
+            if is_last {
+                // Terminal builtin: call directly so its output reaches
+                // real stdout instead of being captured and reserialized
+                // through `Array.to_rush_string()`.
+                let code = (b.handle_pipe)(first_word, args, stdin_text.as_bytes())
+                    .unwrap_or_else(|| {
+                        eprintln!("rush: {first_word}: builtin does not consume stdin");
+                        1
+                    });
+                evaluator.exit_code = code;
+                value = Value::Nil;
+                continue;
+            }
+            // Middle builtin: capture so downstream stages can use it.
+            let captured = capture_builtin_stdout(b, first_word, args, stdin_text.as_bytes());
+            let text = String::from_utf8_lossy(&captured).into_owned();
+            value = pipeline::text_to_array(&text);
+            continue;
+        }
+
+        // Shell segment — pipe current value's stdin text into the
+        // child and read its stdout back as the new value.
+        let input_text = format_value_for_stdin(&value);
+        let parts = process::parse_command_line(segment);
+        if parts.is_empty() {
+            continue;
+        }
+        let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
+        match std::process::Command::new(&parts[0])
+            .args(&args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+        {
+            Ok(mut child) => {
+                use std::io::Write;
+                if let Some(mut stdin) = child.stdin.take() {
+                    stdin.write_all(input_text.as_bytes()).ok();
+                }
+                match child.wait_with_output() {
+                    Ok(output) => {
+                        value = Value::String(
+                            String::from_utf8_lossy(&output.stdout).trim_end().to_string(),
+                        );
                     }
-                    Err(e) => {
-                        eprintln!("rush: {}: {e}", parts[0]);
+                    Err(_) => {
                         value = Value::String(String::new());
                     }
                 }
             }
+            Err(e) => {
+                eprintln!("rush: {}: {e}", parts[0]);
+                value = Value::String(String::new());
+            }
         }
     }
 
-    // Print result
     let output = value.to_rush_string();
     if !output.is_empty() {
         println!("{output}");
@@ -945,15 +1004,49 @@ fn run_pipeline_from_value(
     evaluator.exit_code
 }
 
+/// True if this multi-segment pipeline needs Rush's value-flow pipeline
+/// (`run_pipeline`) rather than the native pipe chain — i.e. any segment
+/// is a Rush pipe op, or any segment is a rush-cli builtin that can't
+/// be execve'd.
+///
+/// All positions are scanned. Index 0 usually isn't a pipe op in top-
+/// level dispatch (it's the first command), but `run_pipeline_from_value`
+/// calls this helper on the *remaining* slice after an LHS-builtin
+/// capture — where index 0 of `remaining` may very well be a pipe op
+/// or another builtin. The top-level LHS-builtin fast path checks
+/// `is_builtin` on `pipe_segments[0]` before calling this predicate,
+/// so we never double-handle that case.
+fn segments_need_rush_pipeline(
+    segments: &[String],
+    builtins: Option<&PipelineBuiltins>,
+) -> bool {
+    for seg in segments {
+        let fw = seg.split_whitespace().next().unwrap_or("");
+        if pipeline::is_pipe_op(fw) {
+            return true;
+        }
+        if let Some(b) = builtins {
+            if !fw.is_empty() && (b.is_builtin)(fw) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Capture stdout from a single rush-cli builtin invocation by redirecting
-/// fd 1 through a pipe. Stderr is left untouched so real error messages
-/// still reach the user. Returns the captured bytes (empty on error or
-/// on Windows, where fd redirection isn't wired up yet).
+/// fd 1 through a pipe. `upstream_stdin` is passed straight through to
+/// `handle_pipe` — empty for an LHS builtin (#236), non-empty when the
+/// builtin is a middle/RHS stage consuming upstream bytes (#238).
+/// Stderr is left untouched so real error messages still reach the user.
+/// Returns the captured bytes (empty on error or on Windows, where fd
+/// redirection isn't wired up yet).
 #[cfg(unix)]
 fn capture_builtin_stdout(
     builtins: &mut PipelineBuiltins,
     name: &str,
     args: &str,
+    upstream_stdin: &[u8],
 ) -> Vec<u8> {
     use std::io::Read;
     use std::os::unix::io::{FromRawFd, RawFd};
@@ -991,7 +1084,7 @@ fn capture_builtin_stdout(
         buf
     });
 
-    let _code = (builtins.handle_pipe)(name, args, &[]);
+    let _code = (builtins.handle_pipe)(name, args, upstream_stdin);
 
     let _ = std::io::stdout().flush();
     unsafe {
@@ -1007,11 +1100,12 @@ fn capture_builtin_stdout(
     builtins: &mut PipelineBuiltins,
     name: &str,
     args: &str,
+    upstream_stdin: &[u8],
 ) -> Vec<u8> {
     // Windows: fd redirection requires SetStdHandle / CreatePipe; skip
     // for now. The builtin writes directly to the console, which is at
     // least no worse than the pre-fix 127 behavior.
-    let _ = (builtins.handle_pipe)(name, args, &[]);
+    let _ = (builtins.handle_pipe)(name, args, upstream_stdin);
     Vec::new()
 }
 
@@ -1450,5 +1544,43 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "fakebuiltin");
         assert!(calls[0].2.is_empty());
+    }
+
+    // ── Middle-builtin routing (#238) ────────────────────────────────
+
+    #[test]
+    fn pipe_middle_builtin_receives_upstream_stdin() {
+        // `echo hello | middlebuiltin | cat` — middle builtin should
+        // receive the echo output as stdin and its captured output
+        // should be fed into cat. With our mock returning Some(0) the
+        // builtin "consumes" stdin; we verify it was called and saw
+        // the upstream bytes.
+        let mut results = std::collections::HashMap::new();
+        results.insert("middlebuiltin".to_string(), Some(0));
+        let (_code, calls) = run_with_pipeline_builtins(
+            "echo hello | middlebuiltin | cat",
+            &["middlebuiltin"],
+            results,
+        );
+        assert_eq!(calls.len(), 1, "middle builtin should be called once");
+        let (name, _args, stdin) = &calls[0];
+        assert_eq!(name, "middlebuiltin");
+        // echo hello → text_to_array → Array(["hello"]) → "hello"
+        assert_eq!(std::str::from_utf8(stdin).unwrap(), "hello");
+    }
+
+    #[test]
+    fn pipe_middle_builtin_in_rush_pipe_op_chain() {
+        // `echo a | middlebuiltin | first 1` — builtin between shell
+        // upstream and Rush pipe op downstream.
+        let mut results = std::collections::HashMap::new();
+        results.insert("middlebuiltin".to_string(), Some(0));
+        let (_code, calls) = run_with_pipeline_builtins(
+            "echo a | middlebuiltin | first 1",
+            &["middlebuiltin"],
+            results,
+        );
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "middlebuiltin");
     }
 }
