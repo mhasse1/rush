@@ -47,17 +47,20 @@ impl RushPrompt {
 
 impl Prompt for RushPrompt {
     fn render_prompt_left(&self) -> Cow<'_, str> {
-        // Everything goes in the indicator — left is just the blank line
-        Cow::Borrowed("\n")
-    }
-
-    fn render_prompt_right(&self) -> Cow<'_, str> {
-        Cow::Borrowed("")
-    }
-
-    fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
+        // The status line lives in the LEFT slot (not the indicator) so
+        // reedline's menu activation — which *replaces* the indicator
+        // with its own marker ("| ") — doesn't wipe our status. Format:
+        //
+        //   \n
+        //   ✓ 13:33  mark@spark  ~  main  [pid]\n
+        //
+        // The final newline ends the status line; the input line starts
+        // on the next row, prefixed by the indicator below.
         let t = &self.theme;
         let mut line = String::with_capacity(256);
+
+        // Leading blank line — one row of breathing space between commands.
+        line.push('\n');
 
         // Exit status: ✓ or ✗ [code]
         if self.last_exit_code == 0 {
@@ -71,13 +74,6 @@ impl Prompt for RushPrompt {
         // Time
         let now = chrono_hhmm();
         line.push_str(&format!(" {}{}{}", t.prompt_time, now, t.reset));
-
-        // Mode character
-        let mode_char = match edit_mode {
-            PromptEditMode::Vi(PromptViMode::Normal) => ":",
-            _ => "»",
-        };
-        line.push_str(&format!(" {}{}{}", t.muted, mode_char, t.reset));
 
         // User@Host
         let user = std::env::var("USER")
@@ -116,10 +112,27 @@ impl Prompt for RushPrompt {
         // sample / profilers to the right process).
         line.push_str(&format!("  {}[{}]{}", t.muted, std::process::id(), t.reset));
 
-        // Input on next line
-        line.push_str("\n  ");
+        // Trailing newline ends the status line.
+        line.push('\n');
 
         Cow::Owned(line)
+    }
+
+    fn render_prompt_right(&self) -> Cow<'_, str> {
+        Cow::Borrowed("")
+    }
+
+    fn render_prompt_indicator(&self, edit_mode: PromptEditMode) -> Cow<'_, str> {
+        // Indicator is the 2-char marker on the input line. Stays short
+        // because reedline *replaces* it with the menu's marker ("| ")
+        // when a completion menu is active; we want both replacements
+        // to land at the same input-column alignment.
+        let t = &self.theme;
+        let mode_char = match edit_mode {
+            PromptEditMode::Vi(PromptViMode::Normal) => ":",
+            _ => "»",
+        };
+        Cow::Owned(format!("{}{}{} ", t.muted, mode_char, t.reset))
     }
 
     fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
