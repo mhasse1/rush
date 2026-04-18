@@ -138,6 +138,154 @@ fn hue_distance(h1: f64, h2: f64) -> f64 {
     if d > 180.0 { 360.0 - d } else { d }
 }
 
+// ── Color Math: CIE L*a*b* + CIEDE2000 ─────────────────────────────
+//
+// OKLAB is used for color derivation (cohesive palette identity), but
+// collision avoidance switches to ΔE2000 — the CIE 2000 formula is
+// the industry-standard perceptual difference metric and gives real
+// guarantees about visible distinctness. See #228.
+//
+// CIEDE2000 operates on CIE L*a*b* (not OKLAB), so we need the full
+// sRGB → linear → XYZ (D65) → CIE Lab conversion.
+
+/// sRGB (0-1) → CIE L*a*b* under a D65 white point.
+fn srgb_to_cielab(r: f64, g: f64, b: f64) -> (f64, f64, f64) {
+    let r = srgb_to_linear(r);
+    let g = srgb_to_linear(g);
+    let b = srgb_to_linear(b);
+
+    // Linear sRGB → XYZ (D65). sRGB matrix, IEC 61966-2-1.
+    let x = 0.4124564 * r + 0.3575761 * g + 0.1804375 * b;
+    let y = 0.2126729 * r + 0.7151522 * g + 0.0721750 * b;
+    let z = 0.0193339 * r + 0.1191920 * g + 0.9503041 * b;
+
+    // Normalize by D65 white point.
+    const XN: f64 = 0.95047;
+    const YN: f64 = 1.00000;
+    const ZN: f64 = 1.08883;
+    let fx = lab_f(x / XN);
+    let fy = lab_f(y / YN);
+    let fz = lab_f(z / ZN);
+
+    let l = 116.0 * fy - 16.0;
+    let a = 500.0 * (fx - fy);
+    let b_star = 200.0 * (fy - fz);
+    (l, a, b_star)
+}
+
+/// CIE Lab f() helper: piecewise cube-root / linear.
+fn lab_f(t: f64) -> f64 {
+    // δ = 6/29; threshold = δ³, slope = 1/(3δ²), offset = 4/29
+    const DELTA: f64 = 6.0 / 29.0;
+    let threshold = DELTA * DELTA * DELTA;
+    if t > threshold {
+        t.cbrt()
+    } else {
+        t / (3.0 * DELTA * DELTA) + 4.0 / 29.0
+    }
+}
+
+/// CIEDE2000 color-difference between two CIE L*a*b* samples.
+///
+/// Implements the formula from Sharma, Wu, Dalal, "The CIEDE2000 Color-
+/// Difference Formula: Implementation Notes, Supplementary Test Data,
+/// and Mathematical Observations" (2005). Weighting factors kL = kC = kH
+/// = 1.0 (standard observer, no weighting).
+///
+/// A ΔE2000 of ~2.3 is the "just noticeable difference" threshold; the
+/// #228 collision-avoidance uses ≥ 5.0 for clearly distinct roles.
+fn ciede2000(lab1: (f64, f64, f64), lab2: (f64, f64, f64)) -> f64 {
+    let (l1, a1, b1) = lab1;
+    let (l2, a2, b2) = lab2;
+
+    // Step 1: compute C1*, C2*, and their mean C̄*
+    let c1_star = (a1 * a1 + b1 * b1).sqrt();
+    let c2_star = (a2 * a2 + b2 * b2).sqrt();
+    let c_bar = (c1_star + c2_star) / 2.0;
+
+    // Step 2: G factor (compensates low-chroma a* shift toward blue)
+    let c_bar7 = c_bar.powi(7);
+    let g = 0.5 * (1.0 - (c_bar7 / (c_bar7 + 25f64.powi(7))).sqrt());
+
+    // Step 3: rotated a′, new C′ and h′
+    let a1_prime = (1.0 + g) * a1;
+    let a2_prime = (1.0 + g) * a2;
+    let c1_prime = (a1_prime * a1_prime + b1 * b1).sqrt();
+    let c2_prime = (a2_prime * a2_prime + b2 * b2).sqrt();
+    let h1_prime = atan2_deg(b1, a1_prime);
+    let h2_prime = atan2_deg(b2, a2_prime);
+
+    // Step 4: ΔL′, ΔC′, ΔH′
+    let delta_l = l2 - l1;
+    let delta_c = c2_prime - c1_prime;
+
+    let delta_h_prime_deg = if c1_prime * c2_prime == 0.0 {
+        0.0
+    } else {
+        let d = h2_prime - h1_prime;
+        if d > 180.0 { d - 360.0 } else if d < -180.0 { d + 360.0 } else { d }
+    };
+    let delta_h = 2.0 * (c1_prime * c2_prime).sqrt()
+        * (delta_h_prime_deg.to_radians() / 2.0).sin();
+
+    // Step 5: averages L̄′, C̄′, H̄′
+    let l_bar_prime = (l1 + l2) / 2.0;
+    let c_bar_prime = (c1_prime + c2_prime) / 2.0;
+
+    let h_bar_prime = if c1_prime * c2_prime == 0.0 {
+        h1_prime + h2_prime
+    } else {
+        let d = (h1_prime - h2_prime).abs();
+        if d <= 180.0 {
+            (h1_prime + h2_prime) / 2.0
+        } else if h1_prime + h2_prime < 360.0 {
+            (h1_prime + h2_prime + 360.0) / 2.0
+        } else {
+            (h1_prime + h2_prime - 360.0) / 2.0
+        }
+    };
+
+    // Step 6: T, ΔΘ, R_C, S_L, S_C, S_H, R_T
+    let t = 1.0
+        - 0.17 * ((h_bar_prime - 30.0).to_radians()).cos()
+        + 0.24 * ((2.0 * h_bar_prime).to_radians()).cos()
+        + 0.32 * ((3.0 * h_bar_prime + 6.0).to_radians()).cos()
+        - 0.20 * ((4.0 * h_bar_prime - 63.0).to_radians()).cos();
+
+    let delta_theta =
+        30.0 * (-((h_bar_prime - 275.0) / 25.0).powi(2)).exp();
+    let c_bar_prime7 = c_bar_prime.powi(7);
+    let r_c = 2.0 * (c_bar_prime7 / (c_bar_prime7 + 25f64.powi(7))).sqrt();
+
+    let l_term = (l_bar_prime - 50.0).powi(2);
+    let s_l = 1.0 + (0.015 * l_term) / (20.0 + l_term).sqrt();
+    let s_c = 1.0 + 0.045 * c_bar_prime;
+    let s_h = 1.0 + 0.015 * c_bar_prime * t;
+    let r_t = -((2.0 * delta_theta).to_radians()).sin() * r_c;
+
+    // Step 7: ΔE₀₀
+    let dl = delta_l / s_l;
+    let dc = delta_c / s_c;
+    let dh = delta_h / s_h;
+    (dl * dl + dc * dc + dh * dh + r_t * dc * dh).sqrt()
+}
+
+/// atan2 in degrees, normalized to [0, 360).
+fn atan2_deg(y: f64, x: f64) -> f64 {
+    if x == 0.0 && y == 0.0 {
+        return 0.0;
+    }
+    let h = y.atan2(x).to_degrees();
+    if h < 0.0 { h + 360.0 } else { h }
+}
+
+/// ΔE2000 between two sRGB samples (0-1). Convenience wrapper used by
+/// the distinctness audit tests.
+#[cfg(test)]
+fn ciede2000_srgb(c1: (f64, f64, f64), c2: (f64, f64, f64)) -> f64 {
+    ciede2000(srgb_to_cielab(c1.0, c1.1, c1.2), srgb_to_cielab(c2.0, c2.1, c2.2))
+}
+
 // ── xterm 256-color palette ─────────────────────────────────────────
 
 /// Get RGB for a 256-color palette index.
@@ -214,16 +362,23 @@ fn nearest_256_with_contrast(r: f64, g: f64, b: f64, bg_lum: f64, min_cr: f64, a
         if contrast_ratio(lum, bg_lum) < min_cr {
             continue;
         }
-        // Also avoid colors too close in luminance to already-used colors
-        // Penalize closeness to already-used colors (OKLAB perceptual distance)
+        // Penalize candidates too close to already-used palette cells.
+        // Uses CIEDE2000 (ΔE2000 < 5 → visibly similar; see #228) so
+        // cohabitation on the same background is judged by the industry-
+        // standard perceptual metric rather than OKLAB Euclidean.
         let (pl, pa, pb_ok) = srgb_to_oklab(pr, pg, pb);
+        let candidate_lab = srgb_to_cielab(pr, pg, pb);
         let mut collision_penalty = 0.0_f64;
         for &used_idx in avoid {
             let (ur, ug, ub) = palette_rgb(used_idx);
-            let (ul, ua, ub_ok) = srgb_to_oklab(ur, ug, ub);
-            let oklab_dist = ((pl - ul).powi(2) + (pa - ua).powi(2) + (pb_ok - ub_ok).powi(2)).sqrt();
-            if oklab_dist < 0.15 {
-                collision_penalty += 2.0 - (oklab_dist * 13.0); // closer = higher penalty
+            let used_lab = srgb_to_cielab(ur, ug, ub);
+            let de = ciede2000(candidate_lab, used_lab);
+            if de < 5.0 {
+                // Scale so an identical cell (de=0) pays 2.0 and a
+                // cell right at the threshold (de=5) pays 0 — matches
+                // the weighting curve of the previous OKLAB heuristic
+                // so downstream scoring doesn't need retuning.
+                collision_penalty += 2.0 * (1.0 - de / 5.0);
             }
         }
         let dist = (target_l - pl).powi(2) + (target_a - pa).powi(2) + (target_b - pb_ok).powi(2);
@@ -1022,6 +1177,64 @@ mod tests {
         assert!(!light.is_dark);
     }
 
+    // ── CIEDE2000 reference pairs ────────────────────────────────────
+    //
+    // Reference values from Sharma, Wu, Dalal "The CIEDE2000 Color-
+    // Difference Formula: Implementation Notes, Supplementary Test
+    // Data, and Mathematical Observations" (Color Res. Appl. 30, 21-30
+    // 2005), Table 1. These are the canonical test vectors used to
+    // validate CIEDE2000 implementations.
+
+    fn assert_de_close(got: f64, want: f64, tag: &str) {
+        let tol = 0.01;
+        assert!(
+            (got - want).abs() < tol,
+            "ΔE2000 {tag}: got {got:.4}, want {want:.4} (tol {tol})"
+        );
+    }
+
+    #[test]
+    fn ciede2000_reference_pair_1() {
+        // Sharma et al. row 1: saturated blues
+        let got = ciede2000((50.0, 2.6772, -79.7751), (50.0, 0.0, -82.7485));
+        assert_de_close(got, 2.0425, "row 1");
+    }
+
+    #[test]
+    fn ciede2000_reference_pair_2() {
+        let got = ciede2000((50.0, 3.1571, -77.2803), (50.0, 0.0, -82.7485));
+        assert_de_close(got, 2.8615, "row 2");
+    }
+
+    #[test]
+    fn ciede2000_reference_pair_3() {
+        let got = ciede2000((50.0, 2.8361, -74.0200), (50.0, 0.0, -82.7485));
+        assert_de_close(got, 3.4412, "row 3");
+    }
+
+    #[test]
+    fn ciede2000_large_difference() {
+        // Equal-L complementary a* sanity check — not a reference
+        // vector, just a guard that ΔE grows with hue separation.
+        let got = ciede2000((50.0, 50.0, 0.0), (50.0, -50.0, 0.0));
+        assert!(got > 50.0, "expected large ΔE for complementary, got {got}");
+    }
+
+    #[test]
+    fn ciede2000_identical_is_zero() {
+        let got = ciede2000((53.0, 20.0, -30.0), (53.0, 20.0, -30.0));
+        assert!(got < 1e-9, "identical colors should have ΔE 0, got {got}");
+    }
+
+    #[test]
+    fn srgb_to_cielab_white_is_100() {
+        // sRGB white should map to L*=100, a*≈0, b*≈0 under D65.
+        let (l, a, b) = srgb_to_cielab(1.0, 1.0, 1.0);
+        assert!((l - 100.0).abs() < 0.1, "L* should be 100, got {l}");
+        assert!(a.abs() < 0.5, "a* should be ~0, got {a}");
+        assert!(b.abs() < 0.5, "b* should be ~0, got {b}");
+    }
+
     #[test]
     fn rushbg_nonexistent() {
         let _ = load_rushbg();
@@ -1189,16 +1402,17 @@ mod tests {
                     let lum_a = luminance(ra, ga, ba);
                     let lum_b = luminance(rb, gb, bb);
                     let cr = contrast_ratio(lum_a, lum_b);
-                    // Check perceptual distance in OKLAB (accounts for hue, not just luminance)
-                    let (la, aa, ab) = srgb_to_oklab(ra, ga, ba);
-                    let (lb, ba_ok, bb_ok) = srgb_to_oklab(rb, gb, bb);
-                    let oklab_dist = ((la - lb).powi(2) + (aa - ba_ok).powi(2) + (ab - bb_ok).powi(2)).sqrt();
-                    // Colors are "too similar" only if BOTH luminance AND hue are close.
-                    // Threshold 0.10 catches truly confusable pairs while allowing
-                    // different-hue-same-luminance pairs that the 256 palette forces.
-                    if cr < 1.3 && oklab_dist < 0.10 {
+                    // Perceptual distance via ΔE2000 — industry standard
+                    // for "are these visibly the same color?" (#228).
+                    let de = ciede2000_srgb((ra, ga, ba), (rb, gb, bb));
+                    // Colors are "too similar" only if BOTH luminance AND
+                    // hue are close. ΔE2000 < 5 is visibly similar; the
+                    // cr < 1.3 guard keeps different-hue-same-luminance
+                    // pairs (which the 256 palette sometimes forces) from
+                    // tripping the audit.
+                    if cr < 1.3 && de < 5.0 {
                         collisions.push(format!(
-                            "  TOO SIMILAR: bg={bg_name} {name_a}(idx {idx_a} {}) vs {name_b}(idx {idx_b} {}) cr={cr:.2}:1 oklab_dist={oklab_dist:.3}",
+                            "  TOO SIMILAR: bg={bg_name} {name_a}(idx {idx_a} {}) vs {name_b}(idx {idx_b} {}) cr={cr:.2}:1 ΔE2000={de:.2}",
                             rgb_to_hex(ra, ga, ba),
                             rgb_to_hex(rb, gb, bb),
                         ));
