@@ -18,11 +18,17 @@ pub struct PipeOp {
 /// NOTE: grep, head, tail are intentionally NOT here — they are native
 /// Unix commands that users expect to work in pipes. Rush's structured
 /// pipeline ops are only the ones that don't collide with real commands.
+///
+/// `puts` / `print` / `warn` are Rush output functions re-used here as
+/// terminal pipe sinks so `hostname | puts` and `ls | print` behave the
+/// way users expect instead of failing with 127 (the names aren't on
+/// PATH). They consume the upstream value and emit it to stdout/stderr.
 const PIPE_OPS: &[&str] = &[
     "where", "select", "sort", "count", "first", "last", "skip",
     "sum", "avg", "min", "max", "distinct", "uniq", "reverse",
     "as", "from", "objectify", "tee",
     "each", "times", "columns", "json",
+    "puts", "print", "warn",
 ];
 
 /// Check if a word is a pipeline operator.
@@ -87,8 +93,51 @@ pub fn apply_pipe_op(input: Value, op: &PipeOp) -> Value {
         "grep" => apply_grep(input, &op.args),
         "tee" => apply_tee(input, &op.args),
         "columns" => apply_columns(input, &op.args),
+        "puts" => apply_puts(input),
+        "print" => apply_print(input),
+        "warn" => apply_warn(input),
         _ => input,
     }
+}
+
+/// Render a pipeline value for printing: arrays become one element per
+/// line so that upstream shell output (converted to an array of lines
+/// by `text_to_array`) round-trips cleanly. Scalars use their normal
+/// rush_string representation.
+fn format_for_output(input: &Value) -> String {
+    match input {
+        Value::Array(items) => items.iter()
+            .map(|v| v.to_rush_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        other => other.to_rush_string(),
+    }
+}
+
+/// `| puts` — emit upstream to stdout with a trailing newline. Returns
+/// Nil so downstream pipe ops (if any) see an empty chain.
+fn apply_puts(input: Value) -> Value {
+    let out = format_for_output(&input);
+    if !out.is_empty() {
+        println!("{out}");
+    }
+    Value::Nil
+}
+
+/// `| print` — emit upstream to stdout without adding a trailing newline.
+fn apply_print(input: Value) -> Value {
+    use std::io::Write;
+    let out = format_for_output(&input);
+    print!("{out}");
+    std::io::stdout().flush().ok();
+    Value::Nil
+}
+
+/// `| warn` — emit upstream to stderr with a trailing newline.
+fn apply_warn(input: Value) -> Value {
+    let out = format_for_output(&input);
+    eprintln!("{out}");
+    Value::Nil
 }
 
 /// Convert text stdout into an array of lines for pipeline processing.
@@ -1178,5 +1227,46 @@ mod tests {
         let first3 = apply_pipe_op(sorted, &parse_pipe_op("first 3"));
         let sum = apply_pipe_op(first3, &parse_pipe_op("sum"));
         assert_eq!(sum, Value::Int(6)); // 1 + 2 + 3
+    }
+
+    // ── puts / print / warn as pipe sinks (#224-C) ──────────────────
+
+    #[test]
+    fn puts_print_warn_recognized_as_pipe_ops() {
+        assert!(is_pipe_op("puts"));
+        assert!(is_pipe_op("print"));
+        assert!(is_pipe_op("warn"));
+    }
+
+    #[test]
+    fn puts_returns_nil_after_consuming() {
+        // puts is a terminal sink — it prints and returns Nil so any
+        // (unusual) downstream pipe op sees an empty chain.
+        let input = str_arr(&["a", "b", "c"]);
+        assert_eq!(apply_pipe_op(input, &parse_pipe_op("puts")), Value::Nil);
+    }
+
+    #[test]
+    fn print_returns_nil() {
+        let input = Value::String("hello".into());
+        assert_eq!(apply_pipe_op(input, &parse_pipe_op("print")), Value::Nil);
+    }
+
+    #[test]
+    fn warn_returns_nil() {
+        let input = Value::String("oops".into());
+        assert_eq!(apply_pipe_op(input, &parse_pipe_op("warn")), Value::Nil);
+    }
+
+    #[test]
+    fn format_for_output_joins_arrays_with_newlines() {
+        let arr = str_arr(&["alpha", "beta", "gamma"]);
+        assert_eq!(format_for_output(&arr), "alpha\nbeta\ngamma");
+    }
+
+    #[test]
+    fn format_for_output_scalar_uses_rush_string() {
+        assert_eq!(format_for_output(&Value::String("hi".into())), "hi");
+        assert_eq!(format_for_output(&Value::Int(42)), "42");
     }
 }
