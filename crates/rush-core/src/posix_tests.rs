@@ -190,10 +190,10 @@ mod tests {
 
     #[test]
     fn posix_param_exit_code() {
-        let _guard = process::RUSH_LAST_EXIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::set_var("RUSH_LAST_EXIT", "42"); }
+        // Thread-local last-exit (#229) — no mutex needed, no env mutation.
+        process::set_last_exit_code(42);
         assert_eq!(process::expand_env_vars_pub("$?"), "42");
-        unsafe { std::env::remove_var("RUSH_LAST_EXIT"); }
+        process::set_last_exit_code(0);
     }
 
     #[test]
@@ -1040,8 +1040,15 @@ mod tests {
     // POSIX Builtins: umask (#166)
     // ═══════════════════════════════════════════════════════════════
 
+    /// libc::umask is process-global, so parallel tests stomp each
+    /// other without a mutex. Previously they happened to serialize
+    /// via incidental contention on RUSH_LAST_EXIT_LOCK; #229 removed
+    /// that lock so we now need our own.
+    static UMASK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn posix_umask_set_and_restore() {
+        let _g = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let orig = unsafe { libc::umask(0o077) };
         let back = unsafe { libc::umask(orig) };
         assert_eq!(back, 0o077);
@@ -1049,6 +1056,7 @@ mod tests {
 
     #[test]
     fn posix_umask_zero() {
+        let _g = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let orig = unsafe { libc::umask(0) };
         let back = unsafe { libc::umask(orig) };
         assert_eq!(back, 0);
@@ -1056,6 +1064,7 @@ mod tests {
 
     #[test]
     fn posix_umask_common_values() {
+        let _g = UMASK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for mask in [0o022, 0o027, 0o077, 0o002] {
             let orig = unsafe { libc::umask(mask) };
             let back = unsafe { libc::umask(orig) };

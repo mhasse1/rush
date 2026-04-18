@@ -511,8 +511,10 @@ pub fn dispatch_with_jobs_and_builtins(
             }
         }
 
-        // Update $? for special parameter expansion
-        unsafe { std::env::set_var("RUSH_LAST_EXIT", last_exit.to_string()) };
+        // Update $? for special parameter expansion — thread-local
+        // cell rather than a process-global env var (#229), so parallel
+        // tests don't race on the same variable.
+        process::set_last_exit_code(last_exit);
 
         // set -e: exit on failure (with POSIX exceptions)
         // Exceptions: condition of if/while/until, left side of && or ||
@@ -1429,19 +1431,15 @@ mod tests {
     // ── PipelineBuiltins plumbing (#224-A) ───────────────────────────
 
     /// Helper: dispatch a line with a test PipelineBuiltins that records
-    /// invocations. Returns (exit_code, invocations). Acquires the
-    /// shared RUSH_LAST_EXIT mutex because dispatch writes the env var
-    /// on every call and would otherwise race parallel tests that assert
-    /// on `$?`.
+    /// invocations. Returns (exit_code, invocations). Since #229 moved
+    /// `$?` to a thread-local, this no longer needs the RUSH_LAST_EXIT
+    /// mutex — each test thread has its own last-exit cell.
     fn run_with_pipeline_builtins(
         line: &str,
         names: &[&str],
         results: std::collections::HashMap<String, Option<i32>>,
     ) -> (i32, Vec<(String, String, Vec<u8>)>) {
         use std::cell::RefCell;
-        let _guard = crate::process::RUSH_LAST_EXIT_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
         let calls: RefCell<Vec<(String, String, Vec<u8>)>> = RefCell::new(Vec::new());
         let names_owned: Vec<String> = names.iter().map(|s| s.to_string()).collect();
 

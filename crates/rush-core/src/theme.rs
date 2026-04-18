@@ -1380,11 +1380,16 @@ mod tests {
         }
     }
 
-    static FLAVOR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    /// Shared lock for every test that mutates RUSH_FLAVOR or RUSH_ACCENT.
+    /// Both knobs read env inside `generate_role_color`, so a flavor
+    /// test and an accent test running concurrently can cross-contaminate
+    /// each other's theme. One mutex keeps the whole theme-env surface
+    /// single-threaded inside the test suite.
+    static THEME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn flavor_mono_produces_grayscale_roles() {
-        let _l = FLAVOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUSH_FLAVOR", "mono") };
         let _g = FlavorGuard;
 
@@ -1397,7 +1402,7 @@ mod tests {
 
     #[test]
     fn flavor_pastel_reduces_chroma_vs_muted() {
-        let _l = FLAVOR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let bg = (0.15, 0.15, 0.15);
 
         unsafe { std::env::set_var("RUSH_FLAVOR", "muted") };
@@ -1418,8 +1423,6 @@ mod tests {
 
     // ── Accent override (#228 slice 4) ───────────────────────────────
 
-    static ACCENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     struct AccentGuard;
     impl Drop for AccentGuard {
         fn drop(&mut self) {
@@ -1429,7 +1432,7 @@ mod tests {
 
     #[test]
     fn accent_overrides_accent_family_hue() {
-        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUSH_ACCENT", "#FF6B00") }; // orange
         let _g = AccentGuard;
 
@@ -1447,7 +1450,7 @@ mod tests {
 
     #[test]
     fn accent_does_not_affect_success_family() {
-        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::set_var("RUSH_ACCENT", "#FF6B00") };
         let _g = AccentGuard;
 
@@ -1463,7 +1466,7 @@ mod tests {
 
     #[test]
     fn accent_missing_falls_back_to_default_cyan() {
-        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         unsafe { std::env::remove_var("RUSH_ACCENT") };
 
         let bg = (0.12, 0.12, 0.12);

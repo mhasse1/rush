@@ -1039,11 +1039,30 @@ fn expand_tilde(arg: &str) -> String {
 /// Public wrapper for tests.
 pub fn expand_env_vars_pub(arg: &str) -> String { expand_env_vars(arg) }
 
-/// Process-wide mutex for tests that mutate RUSH_LAST_EXIT. Cargo
-/// runs unit tests on multiple threads by default and std::env::set_var
-/// is process-global, so without serialization these tests race.
-#[cfg(test)]
-pub(crate) static RUSH_LAST_EXIT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// ── Last exit code state (#229) ─────────────────────────────────────
+//
+// `$?` used to read the process-global `RUSH_LAST_EXIT` env var, which
+// meant every test that ran a dispatch pipeline raced the two tests
+// that asserted on `$?`. The fix: a thread-local cell. Each test runs
+// on its own thread under cargo's default parallel runner, so the cell
+// is hermetic per test — and production still works because the REPL
+// dispatches and expands on the same (main) thread.
+
+thread_local! {
+    static LAST_EXIT_CODE: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// Read the current thread's last-exit value. Used by `$?` expansion.
+pub fn last_exit_code() -> i32 {
+    LAST_EXIT_CODE.with(|c| c.get())
+}
+
+/// Set the current thread's last-exit value. Called by dispatch after
+/// each top-level command and by tests that need to stage a specific
+/// `$?`.
+pub fn set_last_exit_code(code: i32) {
+    LAST_EXIT_CODE.with(|c| c.set(code));
+}
 
 /// Public wrapper for IFS split tests.
 pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
@@ -1207,9 +1226,8 @@ fn expand_env_vars(arg: &str) -> String {
             // Special parameters: $? $$ $! $0 $# $@ $* $-
             match chars[i + 1] {
                 '?' => {
-                    // $? — last exit code (from RUSH_LAST_EXIT env or 0)
-                    let code = std::env::var("RUSH_LAST_EXIT").unwrap_or_else(|_| "0".into());
-                    result.push_str(&code);
+                    // $? — last exit code (thread-local, see #229)
+                    result.push_str(&last_exit_code().to_string());
                     i += 2;
                     continue;
                 }
@@ -2060,11 +2078,12 @@ mod tests {
 
     #[test]
     fn special_param_exit_code() {
-        let _guard = super::RUSH_LAST_EXIT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        unsafe { std::env::set_var("RUSH_LAST_EXIT", "42") };
+        // `$?` reads a thread-local cell (#229) so this no longer needs
+        // a process-wide mutex — each test thread has its own value.
+        super::set_last_exit_code(42);
         let result = expand_env_vars("$?");
         assert_eq!(result, "42");
-        unsafe { std::env::remove_var("RUSH_LAST_EXIT") };
+        super::set_last_exit_code(0);
     }
 
     #[test]
