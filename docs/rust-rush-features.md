@@ -85,6 +85,7 @@
 - `.sort`, `.reverse`, `.uniq`, `.flatten`, `.join(sep)`
 - `.push`, `.first`, `.last`, `.length`, `.sum`, `.min`, `.max`
 - `.include?`, `.empty?`, `.reduce { |acc, x| }`
+- Block forms: `{ |args| body }` for one-liners, `do |args| ... end` for multi-line — both accepted everywhere a block is expected
 
 ### Hashes
 - `{a: 1, b: 2}` literal, `h.keys`, `h.values`

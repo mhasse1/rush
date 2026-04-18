@@ -1,7 +1,8 @@
 # Rush Language Spec — One-Shot LLM Reference
 # Architecture: Rush code → Lexer → Parser → AST → Evaluator (native Rust)
 # Shell commands run via fork/exec. Rush syntax evaluates natively.
-# No $ prefix, blocks use end, interpolation is #{expr}, braces for lambdas only.
+# No $ prefix, blocks use end, interpolation is #{expr}.
+# Lambda blocks: `{ |args| body }` (one-liner) or `do |args| ... end` (multi-line).
 
 meta:
   engine: "Native Rust interpreter"
@@ -94,7 +95,11 @@ functions:
 
 # ── BLOCKS & LAMBDAS ────────────────────────────────────────────
 blocks:
-  syntax: "collection.method { |item| body }"
+  syntax:
+    braces: "collection.method { |item| body }       # one-liner"
+    do_end: "collection.method do |item|\n  body\nend     # multi-line"
+  equivalence: "Both forms are semantically identical; choose by readability."
+  no_params: "do ... end and { } both accept zero params"
   methods:
     each: "iterate (no return value)"
     map: "transform each element → new array"
@@ -111,6 +116,10 @@ blocks:
       .reverse
       .first(10)
       .each { |f| puts f.name }
+  multiline_example: |
+    [1, 2, 3].map do |x|
+      x * 2
+    end
 
 # ── ARRAYS ───────────────────────────────────────────────────────
 arrays:

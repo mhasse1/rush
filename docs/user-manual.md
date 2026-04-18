@@ -945,9 +945,12 @@ break if count > 100        # Exit the loop
 **Iteration with `.times`:**
 
 ```rush
-5.times { |i|
+5.times do |i|
   puts "iteration #{i}"    # 0, 1, 2, 3, 4
-}
+end
+
+# Or the one-liner brace form:
+5.times { |i| puts "iteration #{i}" }
 ```
 
 ### Parallel Execution
@@ -1252,17 +1255,34 @@ Enum rules:
 
 ### Blocks & Iteration
 
-**Block syntax** — `{ |args| }` or `do |args| ... end`:
+**Block syntax** — Rush has two equivalent forms for the same block:
 
 ```rush
+# Brace form — best for one-liners
 files.each { |f| puts f.Name }
 
 names = users.map { |u| u.name }
 
 big_files = files.select { |f| f.Length > 1mb }
-
-small_files = files.reject { |f| f.Length > 1mb }
 ```
+
+```rush
+# do/end form — best for multi-line bodies; reads like the rest of Rush
+files.each do |f|
+  puts f.Name
+end
+
+totals = orders.map do |o|
+  subtotal = o.qty * o.price
+  subtotal * (1 + tax_rate)
+end
+
+h.each do |k, v|
+  puts "#{k} = #{v}"
+end
+```
+
+Both forms are semantically identical. Pick whichever reads better. The `do ... end` form fits Rush's usual `...end` rhythm for anything that spans more than one line; the brace form is tighter inside pipelines and chains. No-param blocks work too: `3.times do ... end` or `3.times { ... }`.
 
 **Available iteration methods:**
 

@@ -1980,6 +1980,42 @@ mod tests {
     }
 
     #[test]
+    fn method_with_do_block() {
+        let nodes = parse("items.each do |x|\n  puts x\nend").unwrap();
+        assert!(matches!(
+            &nodes[0],
+            Node::MethodCall { block: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn method_with_do_block_no_params() {
+        let nodes = parse("3.times do\n  puts 1\nend").unwrap();
+        assert!(matches!(
+            &nodes[0],
+            Node::MethodCall { block: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn method_with_do_block_multi_params() {
+        let nodes = parse("h.each do |k, v|\n  puts k\nend").unwrap();
+        let Node::MethodCall { block: Some(block), .. } = &nodes[0] else {
+            panic!("expected MethodCall with block");
+        };
+        assert_eq!(block.params.len(), 2);
+    }
+
+    #[test]
+    fn do_block_with_parens() {
+        let nodes = parse("items.reduce(0) do |acc, x|\n  acc + x\nend").unwrap();
+        assert!(matches!(
+            &nodes[0],
+            Node::MethodCall { block: Some(_), args, .. } if args.len() == 1
+        ));
+    }
+
+    #[test]
     fn index_access() {
         let nodes = parse("arr[0]").unwrap();
         assert!(matches!(&nodes[0], Node::MethodCall { method, .. } if method == "[]"));

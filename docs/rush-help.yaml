@@ -178,6 +178,7 @@ arrays:
     - { method: ".find { |x| bool }", returns: "first match" }
     - { method: ".any? { |x| bool }", returns: "bool" }
     - { method: ".all? { |x| bool }", returns: "bool" }
+    - note: "Every `{ |x| ... }` form also accepts `do |x| ... end`. Use braces for one-liners, `do/end` for multi-line bodies."
 
   examples:
     - rush: |
@@ -191,6 +192,13 @@ arrays:
         doubled = evens.map { |n| n * 2 }
       note: "Method chaining: filter then transform"
 
+    - rush: |
+        totals = orders.map do |o|
+          subtotal = o.qty * o.price
+          subtotal * (1 + tax_rate)
+        end
+      note: "do/end block for multi-line bodies"
+
 hashes:
   summary: "Hash (dictionary) literals and methods"
   literal: '{ name: "DNS", port: 53 }'
@@ -199,7 +207,13 @@ hashes:
     - { syntax: 'h["key"]', note: "bracket access" }
     - { syntax: 'h.key', note: "dot access (when key is simple identifier)" }
 
-  iteration: 'h.each { |k, v| puts "#{k}=#{v}" }'
+  iteration: |
+    h.each { |k, v| puts "#{k}=#{v}" }
+
+    # or multi-line:
+    h.each do |k, v|
+      puts "#{k}=#{v}"
+    end
 
   examples:
     - rush: |
