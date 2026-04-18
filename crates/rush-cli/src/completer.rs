@@ -363,3 +363,28 @@ fn complete_commands(partial: &str, span: Span) -> Vec<Suggestion> {
     suggestions.sort_by(|a, b| a.value.cmp(&b.value));
     suggestions
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_path_is_case_insensitive() {
+        // /E should match /etc (and everything else starting with 'e').
+        let span = Span::new(0, 2);
+        let hits = complete_path("/E", span);
+        let names: Vec<&str> = hits.iter().map(|s| s.value.as_str()).collect();
+        assert!(
+            names.iter().any(|n| *n == "/etc/"),
+            "expected /etc/ in case-insensitive hits for /E, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn complete_path_keeps_case_sensitive_match_too() {
+        // Exact-case /e should also find /etc (regression guard).
+        let span = Span::new(0, 2);
+        let hits = complete_path("/e", span);
+        assert!(hits.iter().any(|s| s.value == "/etc/"));
+    }
+}

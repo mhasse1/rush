@@ -1,7 +1,7 @@
 use reedline::{
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
-    DefaultHinter, Emacs, FileBackedHistory, IdeMenu, KeyCode, KeyModifiers, Reedline,
-    ReedlineEvent, ReedlineMenu, Signal, Vi,
+    DefaultHinter, Emacs, FileBackedHistory, IdeMenu, KeyCode, KeyModifiers, MenuBuilder,
+    Reedline, ReedlineEvent, ReedlineMenu, Signal, Vi,
 };
 
 use rush_core::config::RushConfig;
@@ -77,9 +77,11 @@ pub fn run(is_login: bool) {
     // IdeMenu renders below the prompt line (LSP-style) instead of
     // stomping the prompt in place the way ColumnarMenu did — the user
     // keeps the cwd / git branch / PID visible while navigating
-    // completions (#186). IdeMenu's default name is "ide_completion_menu";
-    // keybindings below reference that name.
-    let completion_menu = Box::new(IdeMenu::default());
+    // completions (#186). Explicit `.with_name("completion_menu")` so
+    // the keybinding references below are unambiguous.
+    let completion_menu = Box::new(
+        IdeMenu::default().with_name("completion_menu"),
+    );
 
     // Edit mode from config
     let edit_mode: Box<dyn reedline::EditMode> = if config.edit_mode == "emacs" {
@@ -90,18 +92,14 @@ pub fn run(is_login: bool) {
             KeyModifiers::NONE,
             KeyCode::Tab,
             ReedlineEvent::UntilFound(vec![
-                ReedlineEvent::Menu("ide_completion_menu".to_string()),
+                ReedlineEvent::Menu("completion_menu".to_string()),
                 ReedlineEvent::MenuNext,
             ]),
         );
+        // Shift+Tab usually arrives as KeyCode::BackTab (no modifier).
         emacs_bindings.add_binding(
             KeyModifiers::NONE,
             KeyCode::BackTab,
-            ReedlineEvent::MenuPrevious,
-        );
-        emacs_bindings.add_binding(
-            KeyModifiers::SHIFT,
-            KeyCode::Tab,
             ReedlineEvent::MenuPrevious,
         );
         Box::new(Emacs::new(emacs_bindings))
@@ -111,21 +109,15 @@ pub fn run(is_login: bool) {
             KeyModifiers::NONE,
             KeyCode::Tab,
             ReedlineEvent::UntilFound(vec![
-                ReedlineEvent::Menu("ide_completion_menu".to_string()),
+                ReedlineEvent::Menu("completion_menu".to_string()),
                 ReedlineEvent::MenuNext,
             ]),
         );
-        // Shift+Tab navigates backward through completions (#203).
-        // Most terminals emit this as KeyCode::BackTab with no modifier,
-        // but some send it as Tab+SHIFT — bind both to be safe.
+        // Shift+Tab usually arrives as KeyCode::BackTab (no modifier);
+        // #203 shift-tab-to-navigate-backward.
         insert_bindings.add_binding(
             KeyModifiers::NONE,
             KeyCode::BackTab,
-            ReedlineEvent::MenuPrevious,
-        );
-        insert_bindings.add_binding(
-            KeyModifiers::SHIFT,
-            KeyCode::Tab,
             ReedlineEvent::MenuPrevious,
         );
         let mut normal_bindings = default_vi_normal_keybindings();
@@ -185,7 +177,12 @@ pub fn run(is_login: bool) {
         .with_validator(Box::new(RushValidator))
         .with_buffer_editor(buffer_editor_cmd, temp_file)
         .with_quick_completions(false)
-        .with_partial_completions(true)
+        // Partial completions were inserting the longest common prefix
+        // on Tab *and* opening the menu at the same time — the side
+        // effect of the insert prevented subsequent Tabs from cycling
+        // through the menu cleanly. Users can still see the full list
+        // in the IdeMenu and pick one with Tab / Shift+Tab / Enter.
+        .with_partial_completions(false)
         .with_immediate_completions(false)
         .with_ansi_colors(true);
 
