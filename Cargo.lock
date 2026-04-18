@@ -1108,7 +1108,7 @@ dependencies = [
 [[package]]
 name = "rushline"
 version = "0.46.0-rush.1"
-source = "git+https://github.com/mhasse1/rushline.git?branch=main#5ac91c14c6b7383971760fd2b0f29e9387c4d7e3"
+source = "git+https://github.com/mhasse1/rushline.git?branch=main#06fc1a3edb5991cda3b4eab9cb9a7dee3c4c916c"
 dependencies = [
  "chrono",
  "crossterm",
