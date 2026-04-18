@@ -1211,6 +1211,36 @@ fn handle_setbg(args: &str) {
         }
     }
 
+    // --accent <hex> — accent-family hue override (#228 slice 4).
+    // Reset with `--accent none` / `--accent reset` to fall back to
+    // the default cyan accent. Invalid hex is ignored (with a warning)
+    // rather than aborting; the bg can still re-theme on its own.
+    let accent_arg = parse_flag_value(args, "--accent");
+    let mut accent_applied: Option<String> = None;
+    if let Some(accent) = &accent_arg {
+        let acc = accent.trim();
+        if acc.eq_ignore_ascii_case("none") || acc.eq_ignore_ascii_case("reset") {
+            unsafe { std::env::remove_var("RUSH_ACCENT") };
+            accent_applied = Some("reset".to_string());
+            if save {
+                let mut config = rush_core::config::RushConfig::load();
+                config.set("accent", "");
+                config.save().ok();
+            }
+        } else if rush_core::theme::parse_hex(acc).is_some() {
+            let normalized = if acc.starts_with('#') { acc.to_string() } else { format!("#{acc}") };
+            unsafe { std::env::set_var("RUSH_ACCENT", &normalized) };
+            accent_applied = Some(normalized.clone());
+            if save {
+                let mut config = rush_core::config::RushConfig::load();
+                config.set("accent", &normalized);
+                config.save().ok();
+            }
+        } else {
+            eprintln!("setbg --accent: invalid hex '{acc}' (ignored)");
+        }
+    }
+
     // Allow `setbg --flavor <name>` with no hex — just re-theme at
     // the current bg with the new chroma.
     let hex_token = args.split_whitespace()
@@ -1224,8 +1254,8 @@ fn handle_setbg(args: &str) {
             match std::env::var("RUSH_BG") {
                 Ok(bg) if !bg.is_empty() => bg,
                 _ => {
-                    if flavor_name.is_some() {
-                        println!("Flavor set (no bg configured yet — use setbg <hex> to activate).");
+                    if flavor_name.is_some() || accent_applied.is_some() {
+                        println!("Setting saved (no bg configured yet — use setbg <hex> to activate).");
                         return;
                     }
                     eprintln!("setbg: no background hex given and RUSH_BG is empty");
@@ -1242,8 +1272,11 @@ fn handle_setbg(args: &str) {
             let flavor_note = flavor_name.as_deref()
                 .map(|f| format!(", flavor {f}"))
                 .unwrap_or_default();
+            let accent_note = accent_applied.as_deref()
+                .map(|a| if a == "reset" { ", accent reset".to_string() } else { format!(", accent {a}") })
+                .unwrap_or_default();
             println!(
-                "Background set to {hex} ({}{flavor_note})",
+                "Background set to {hex} ({}{flavor_note}{accent_note})",
                 if theme.is_dark { "dark" } else { "light" },
             );
 

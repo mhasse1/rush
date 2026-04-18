@@ -512,6 +512,21 @@ impl Flavor {
     }
 }
 
+/// Current user-supplied accent hue in OKLCH degrees, if `RUSH_ACCENT`
+/// is set to a parseable hex color. Overrides the `RoleFamily::Accent`
+/// base hue so `ssh-host`, `flag`, and other secondary-emphasis roles
+/// pick up the user's color. Returns `None` when the env var is missing
+/// or malformed — in which case the default cyan accent stays in place.
+///
+/// Scoped to the Accent family only (#228 slice 4). Success/Warning/Error
+/// stay semantically fixed: red still means error regardless of accent.
+fn current_accent_hue() -> Option<f64> {
+    let hex = std::env::var("RUSH_ACCENT").ok()?;
+    let (r, g, b) = parse_hex(&hex)?;
+    let (_, _, h) = srgb_to_oklch(r, g, b);
+    Some(h)
+}
+
 impl ColorRole {
     /// The contrast floor this role's palette index must meet against
     /// the background. Dim accepts 3.5:1 (intentional low contrast);
@@ -598,7 +613,14 @@ fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, 
     // Family supplies the canonical hue; keep it away from the bg hue
     // so colored backgrounds don't swallow a role that happens to
     // share their family. Neutrals skip this because chroma is 0.
-    let base_hue = role.family.base_hue();
+    // The Accent family is special: when the user has set RUSH_ACCENT,
+    // its base hue shifts to the accent color so `ssh-host`, `flag`,
+    // and other secondary-emphasis roles pick it up (#228 slice 4).
+    let base_hue = if role.family == RoleFamily::Accent {
+        current_accent_hue().unwrap_or_else(|| role.family.base_hue())
+    } else {
+        role.family.base_hue()
+    };
     let hue = if chroma > 0.0 && hue_distance(base_hue, bg_h) < 35.0 {
         (base_hue + 50.0) % 360.0
     } else {
@@ -1391,6 +1413,67 @@ mod tests {
         assert!(
             c_pastel < c_muted,
             "pastel chroma {c_pastel:.3} should be < muted {c_muted:.3}"
+        );
+    }
+
+    // ── Accent override (#228 slice 4) ───────────────────────────────
+
+    static ACCENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct AccentGuard;
+    impl Drop for AccentGuard {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var("RUSH_ACCENT") };
+        }
+    }
+
+    #[test]
+    fn accent_overrides_accent_family_hue() {
+        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("RUSH_ACCENT", "#FF6B00") }; // orange
+        let _g = AccentGuard;
+
+        let bg = (0.12, 0.12, 0.12);
+        let accent_role = role(RoleFamily::Accent, Intensity::Normal);
+        let (r, g, b) = generate_role_color(&accent_role, bg);
+        let (_, _, h) = srgb_to_oklch(r, g, b);
+        // OKLCH hue of #FF6B00 is ~45° (orange). After bg-collision
+        // avoidance (bg hue ~260°, far from 45°) it should stay put.
+        assert!(
+            (20.0..80.0).contains(&h),
+            "Accent family with orange RUSH_ACCENT should produce orange hue, got {h}"
+        );
+    }
+
+    #[test]
+    fn accent_does_not_affect_success_family() {
+        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::set_var("RUSH_ACCENT", "#FF6B00") };
+        let _g = AccentGuard;
+
+        let bg = (0.12, 0.12, 0.12);
+        let (r, g, b) = generate_role_color(&ROLE_SUCCESS, bg);
+        let (_, _, h) = srgb_to_oklch(r, g, b);
+        // Success family stays green (~145°) regardless of accent.
+        assert!(
+            (120.0..=170.0).contains(&h),
+            "Success family should stay green, got hue {h}"
+        );
+    }
+
+    #[test]
+    fn accent_missing_falls_back_to_default_cyan() {
+        let _l = ACCENT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe { std::env::remove_var("RUSH_ACCENT") };
+
+        let bg = (0.12, 0.12, 0.12);
+        let accent_role = role(RoleFamily::Accent, Intensity::Normal);
+        let (r, g, b) = generate_role_color(&accent_role, bg);
+        let (_, _, h) = srgb_to_oklch(r, g, b);
+        // Default cyan base hue is 195°.
+        assert!(
+            (175.0..=215.0).contains(&h),
+            "Accent without override should be cyan (~195°), got {h}"
         );
     }
 

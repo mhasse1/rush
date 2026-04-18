@@ -28,6 +28,11 @@ pub struct RushConfig {
     /// Applied to the whole palette when theming is active. See #228.
     #[serde(default = "default_flavor")]
     pub flavor: String,
+    /// Optional accent hex (#RRGGBB). When set, overrides the Accent
+    /// family hue so ssh-host / flag / secondary-emphasis roles pick
+    /// up the user's color. Empty = use the default cyan accent. #228.
+    #[serde(default)]
+    pub accent: String,
     #[serde(default)]
     pub aliases: HashMap<String, String>,
 }
@@ -52,6 +57,7 @@ impl Default for RushConfig {
             ai_model: "auto".into(),
             bg: String::new(),
             flavor: "muted".into(),
+            accent: String::new(),
             aliases: HashMap::new(),
         }
     }
@@ -156,6 +162,10 @@ impl RushConfig {
             }
             "flavor" => {
                 self.flavor = value.to_string();
+                true
+            }
+            "accent" => {
+                self.accent = value.to_string();
                 true
             }
             _ => false,

@@ -46,6 +46,11 @@ pub fn run(is_login: bool) {
         unsafe { std::env::set_var("RUSH_FLAVOR", &config.flavor) };
     }
 
+    // Promote accent (#228 slice 4) the same way.
+    if std::env::var_os("RUSH_ACCENT").is_none() && !config.accent.is_empty() {
+        unsafe { std::env::set_var("RUSH_ACCENT", &config.accent) };
+    }
+
     // Record the session baseline bg so `.rushbg` autoload (on cd) can
     // revert to it when leaving an override directory.
     builtins::set_baseline_bg(&config.bg);
