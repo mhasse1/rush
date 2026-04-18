@@ -407,14 +407,56 @@ enum Intensity {
     Bright,  // farther from bg; emphasized — dirty git, root, ssh host
 }
 
+/// Semantic hue family. Eight families × 3 intensities (24 slots) form
+/// the palette-level abstraction the UI roles map into. Collapsing the
+/// old 30 bespoke hues into these families gives the palette a cohesive
+/// identity and shrinks the contrast-audit matrix. See #228.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RoleFamily {
+    Neutral,   // banner, PID, time, host, comment, pipe, separators
+    Info,      // path, known command, keyword, autosuggestion
+    Emphasis,  // user, active prompt marker, selected menu item
+    Success,   // ✓, clean git, string literal, grep filename
+    Warning,   // dirty git, warn, unknown-command hint, training hint
+    Error,     // ✗, error/stderr, root, grep match
+    Data,      // numbers, operators, structured-output headers
+    Accent,    // ssh-host, flag, secondary emphasis
+}
+
+impl RoleFamily {
+    /// Canonical hue anchor for this family (OKLCH degrees, 0-360).
+    /// Neutral is chroma=0 so its hue value is irrelevant.
+    const fn base_hue(self) -> f64 {
+        match self {
+            RoleFamily::Neutral  =>   0.0,
+            RoleFamily::Info     => 240.0, // blue
+            RoleFamily::Emphasis => 285.0, // indigo
+            RoleFamily::Success  => 145.0, // green
+            RoleFamily::Warning  =>  75.0, // amber
+            RoleFamily::Error    =>  25.0, // red
+            RoleFamily::Data     => 310.0, // purple
+            RoleFamily::Accent   => 195.0, // cyan
+        }
+    }
+
+    /// True if this family uses zero chroma (grayscale lightness axis).
+    const fn is_neutral(self) -> bool {
+        matches!(self, RoleFamily::Neutral)
+    }
+}
+
 /// A semantic color role. The tonal band (chosen from the bg) decides
 /// lightness + chroma uniformly for all roles, so the only per-role
-/// knobs are hue (role identity) and intensity (emphasis). Uniform
-/// chroma is what gives the palette its Solarized / Nord / Gruvbox
-/// cohesion.
+/// knobs are family (hue identity) and intensity (emphasis).
 struct ColorRole {
-    hue: f64,            // target hue (0-360)
+    family: RoleFamily,
     intensity: Intensity,
+}
+
+/// Compact constructor so each `ROLE_*` const reads as its family +
+/// intensity rather than a bare hue number.
+const fn role(family: RoleFamily, intensity: Intensity) -> ColorRole {
+    ColorRole { family, intensity }
 }
 
 impl ColorRole {
@@ -492,15 +534,17 @@ fn generate_role_color(role: &ColorRole, bg_rgb: (f64, f64, f64)) -> (f64, f64, 
     // Neutral roles (host, muted, time, comment, line-number) are
     // intentionally grayscale — force chroma to 0 so the role reads
     // as "structural non-color" even when the band is colorful.
-    let chroma = if role.intensity == Intensity::Neutral { 0.0 } else { band.chroma };
+    let is_neutral = role.family.is_neutral() || role.intensity == Intensity::Neutral;
+    let chroma = if is_neutral { 0.0 } else { band.chroma };
 
-    // Keep hue away from the bg hue so colored backgrounds don't
-    // swallow a role that happens to share their hue. Neutrals have
-    // zero chroma so hue is irrelevant.
-    let hue = if chroma > 0.0 && hue_distance(role.hue, bg_h) < 35.0 {
-        (role.hue + 50.0) % 360.0
+    // Family supplies the canonical hue; keep it away from the bg hue
+    // so colored backgrounds don't swallow a role that happens to
+    // share their family. Neutrals skip this because chroma is 0.
+    let base_hue = role.family.base_hue();
+    let hue = if chroma > 0.0 && hue_distance(base_hue, bg_h) < 35.0 {
+        (base_hue + 50.0) % 360.0
     } else {
-        role.hue
+        base_hue
     };
 
     let min_cr = role.min_contrast();
@@ -574,55 +618,50 @@ fn nearest_grayscale(target_l: f64, bg_lum: f64, min_cr: f64, avoid: &[u8]) -> u
 }
 
 // ── Semantic Color Roles ───────────────────────────────────────────
+//
+// Every role maps to a `RoleFamily` + `Intensity`. The family anchors
+// the hue (Info=blue, Emphasis=indigo, Success=green, Warning=amber,
+// Error=red, Data=purple, Accent=cyan, Neutral=gray). Intensity nudges
+// lightness relative to the tonal-band base so dim / normal / bright
+// variants of the same family stay visually related.
 
-// OKLCH hues (approximate):
-//   0   = pink/red
-//   30  = orange
-//   90  = yellow
-//   140 = green
-//   180 = teal/cyan
-//   250 = blue
-//   300 = purple
-//   330 = magenta
+// Prompt roles.
+const ROLE_SUCCESS: ColorRole    = role(RoleFamily::Success,  Intensity::Normal);
+const ROLE_ERROR: ColorRole      = role(RoleFamily::Error,    Intensity::Normal);
+const ROLE_WARNING: ColorRole    = role(RoleFamily::Warning,  Intensity::Normal);
+const ROLE_PATH: ColorRole       = role(RoleFamily::Info,     Intensity::Normal);
+const ROLE_USER: ColorRole       = role(RoleFamily::Emphasis, Intensity::Normal);
+const ROLE_HOST: ColorRole       = role(RoleFamily::Neutral,  Intensity::Neutral);
+const ROLE_SSH_HOST: ColorRole   = role(RoleFamily::Accent,   Intensity::Bright);
+const ROLE_GIT_BRANCH: ColorRole = role(RoleFamily::Success,  Intensity::Normal);
+const ROLE_GIT_DIRTY: ColorRole  = role(RoleFamily::Warning,  Intensity::Bright);
+const ROLE_ROOT: ColorRole       = role(RoleFamily::Error,    Intensity::Bright);
+const ROLE_MUTED: ColorRole      = role(RoleFamily::Neutral,  Intensity::Neutral);
+const ROLE_TIME: ColorRole       = role(RoleFamily::Neutral,  Intensity::Neutral);
 
-// Prompt roles. Hues are fixed identity per role; intensity says
-// "how loud is it vs. the tonal band base".
-const ROLE_SUCCESS: ColorRole    = ColorRole { hue: 145.0, intensity: Intensity::Normal };
-const ROLE_ERROR: ColorRole      = ColorRole { hue: 25.0,  intensity: Intensity::Normal };
-const ROLE_WARNING: ColorRole    = ColorRole { hue: 80.0,  intensity: Intensity::Normal };
-const ROLE_PATH: ColorRole       = ColorRole { hue: 250.0, intensity: Intensity::Normal };
-const ROLE_USER: ColorRole       = ColorRole { hue: 300.0, intensity: Intensity::Normal };
-const ROLE_HOST: ColorRole       = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
-const ROLE_SSH_HOST: ColorRole   = ColorRole { hue: 80.0,  intensity: Intensity::Bright };
-const ROLE_GIT_BRANCH: ColorRole = ColorRole { hue: 100.0, intensity: Intensity::Normal };
-const ROLE_GIT_DIRTY: ColorRole  = ColorRole { hue: 55.0,  intensity: Intensity::Bright };
-const ROLE_ROOT: ColorRole       = ColorRole { hue: 15.0,  intensity: Intensity::Bright };
-const ROLE_MUTED: ColorRole      = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
-const ROLE_TIME: ColorRole       = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+// Syntax highlighting roles.
+const ROLE_HL_KEYWORD: ColorRole  = role(RoleFamily::Info,    Intensity::Normal);
+const ROLE_HL_STRING: ColorRole   = role(RoleFamily::Success, Intensity::Normal);
+const ROLE_HL_NUMBER: ColorRole   = role(RoleFamily::Data,    Intensity::Normal);
+const ROLE_HL_COMMAND: ColorRole  = role(RoleFamily::Info,    Intensity::Normal);
+const ROLE_HL_UNKNOWN: ColorRole  = role(RoleFamily::Neutral, Intensity::Neutral);
+const ROLE_HL_FLAG: ColorRole     = role(RoleFamily::Accent,  Intensity::Normal);
+const ROLE_HL_OPERATOR: ColorRole = role(RoleFamily::Data,    Intensity::Normal);
 
-// Syntax highlighting roles
-const ROLE_HL_KEYWORD: ColorRole  = ColorRole { hue: 330.0, intensity: Intensity::Normal };
-const ROLE_HL_STRING: ColorRole   = ColorRole { hue: 135.0, intensity: Intensity::Normal };
-const ROLE_HL_NUMBER: ColorRole   = ColorRole { hue: 180.0, intensity: Intensity::Normal };
-const ROLE_HL_COMMAND: ColorRole  = ColorRole { hue: 240.0, intensity: Intensity::Normal };
-const ROLE_HL_UNKNOWN: ColorRole  = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
-const ROLE_HL_FLAG: ColorRole     = ColorRole { hue: 55.0,  intensity: Intensity::Normal };
-const ROLE_HL_OPERATOR: ColorRole = ColorRole { hue: 300.0, intensity: Intensity::Normal };
+// LS_COLORS roles.
+const ROLE_LS_DIR: ColorRole  = role(RoleFamily::Info,    Intensity::Normal);
+const ROLE_LS_LINK: ColorRole = role(RoleFamily::Data,    Intensity::Normal);
+const ROLE_LS_SOCK: ColorRole = role(RoleFamily::Data,    Intensity::Dim);
+const ROLE_LS_PIPE: ColorRole = role(RoleFamily::Warning, Intensity::Dim);
+const ROLE_LS_EXEC: ColorRole = role(RoleFamily::Success, Intensity::Normal);
+const ROLE_LS_BLK: ColorRole  = role(RoleFamily::Warning, Intensity::Dim);
+const ROLE_LS_CHR: ColorRole  = role(RoleFamily::Warning, Intensity::Dim);
 
-// LS_COLORS roles
-const ROLE_LS_DIR: ColorRole  = ColorRole { hue: 230.0, intensity: Intensity::Normal };
-const ROLE_LS_LINK: ColorRole = ColorRole { hue: 310.0, intensity: Intensity::Normal };
-const ROLE_LS_SOCK: ColorRole = ColorRole { hue: 280.0, intensity: Intensity::Dim };
-const ROLE_LS_PIPE: ColorRole = ColorRole { hue: 55.0,  intensity: Intensity::Dim };
-const ROLE_LS_EXEC: ColorRole = ColorRole { hue: 155.0, intensity: Intensity::Normal };
-const ROLE_LS_BLK: ColorRole  = ColorRole { hue: 35.0,  intensity: Intensity::Dim };
-const ROLE_LS_CHR: ColorRole  = ColorRole { hue: 35.0,  intensity: Intensity::Dim };
-
-// GREP_COLORS roles
-const ROLE_GREP_FN: ColorRole = ColorRole { hue: 310.0, intensity: Intensity::Normal };
-const ROLE_GREP_LN: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
-const ROLE_GREP_BN: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
-const ROLE_GREP_SE: ColorRole = ColorRole { hue: 0.0,   intensity: Intensity::Neutral };
+// GREP_COLORS roles.
+const ROLE_GREP_FN: ColorRole = role(RoleFamily::Success, Intensity::Normal);
+const ROLE_GREP_LN: ColorRole = role(RoleFamily::Neutral, Intensity::Neutral);
+const ROLE_GREP_BN: ColorRole = role(RoleFamily::Neutral, Intensity::Neutral);
+const ROLE_GREP_SE: ColorRole = role(RoleFamily::Neutral, Intensity::Neutral);
 
 // ── Theme ───────────────────────────────────────────────────────────
 
@@ -1053,7 +1092,7 @@ mod tests {
             let fg_lum = luminance(r, g, b);
             let cr = contrast_ratio(fg_lum, bg_lum);
             assert!(cr >= role.min_contrast() - 0.5,
-                "hue={} contrast {cr:.1} < min {} on dark bg", role.hue, role.min_contrast());
+                "hue={} contrast {cr:.1} < min {} on dark bg", role.family.base_hue(), role.min_contrast());
         }
     }
 
@@ -1067,7 +1106,7 @@ mod tests {
             let fg_lum = luminance(r, g, b);
             let cr = contrast_ratio(fg_lum, bg_lum);
             assert!(cr >= role.min_contrast() - 0.5,
-                "hue={} contrast {cr:.1} < min {} on light bg", role.hue, role.min_contrast());
+                "hue={} contrast {cr:.1} < min {} on light bg", role.family.base_hue(), role.min_contrast());
         }
     }
 
@@ -1082,7 +1121,7 @@ mod tests {
             let fg_lum = luminance(r, g, b);
             let cr = contrast_ratio(fg_lum, bg_lum);
             assert!(cr >= 3.0,
-                "hue={} contrast {cr:.1} < 3.0 on mid-gray bg", role.hue);
+                "hue={} contrast {cr:.1} < 3.0 on mid-gray bg", role.family.base_hue());
         }
     }
 
@@ -1224,6 +1263,57 @@ mod tests {
     fn ciede2000_identical_is_zero() {
         let got = ciede2000((53.0, 20.0, -30.0), (53.0, 20.0, -30.0));
         assert!(got < 1e-9, "identical colors should have ΔE 0, got {got}");
+    }
+
+    // ── Role-family cohesion (#228 slice 2) ──────────────────────────
+
+    #[test]
+    fn roles_in_same_family_share_hue_anchor() {
+        // Two roles in the Success family should pull from the same
+        // base_hue; intensity is the only thing that differs.
+        assert_eq!(ROLE_SUCCESS.family, RoleFamily::Success);
+        assert_eq!(ROLE_GIT_BRANCH.family, RoleFamily::Success);
+        assert_eq!(RoleFamily::Success.base_hue(), 145.0);
+    }
+
+    #[test]
+    fn neutral_family_forces_zero_chroma() {
+        // Any role whose family is Neutral should produce a grayscale
+        // color regardless of the tonal band's chroma setting.
+        let bg = (0.12, 0.12, 0.12); // deep dark
+        let (r, g, b) = generate_role_color(&ROLE_MUTED, bg);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        // Chroma-zero → r ≈ g ≈ b (within ~1% per channel after
+        // gamut rounding).
+        assert!(max - min < 0.03, "expected grayscale, got ({r:.3},{g:.3},{b:.3})");
+    }
+
+    #[test]
+    fn families_are_mutually_distinct() {
+        // Generate a representative color per family on a neutral dark
+        // bg and verify ΔE2000 ≥ 5 between every pair. This is the
+        // palette-level guarantee that motivates the family restructure.
+        let bg = (0.15, 0.15, 0.15);
+        let samples: &[(RoleFamily, (f64, f64, f64))] = &[
+            (RoleFamily::Info,     generate_role_color(&role(RoleFamily::Info,     Intensity::Normal), bg)),
+            (RoleFamily::Emphasis, generate_role_color(&role(RoleFamily::Emphasis, Intensity::Normal), bg)),
+            (RoleFamily::Success,  generate_role_color(&role(RoleFamily::Success,  Intensity::Normal), bg)),
+            (RoleFamily::Warning,  generate_role_color(&role(RoleFamily::Warning,  Intensity::Normal), bg)),
+            (RoleFamily::Error,    generate_role_color(&role(RoleFamily::Error,    Intensity::Normal), bg)),
+            (RoleFamily::Data,     generate_role_color(&role(RoleFamily::Data,     Intensity::Normal), bg)),
+            (RoleFamily::Accent,   generate_role_color(&role(RoleFamily::Accent,   Intensity::Normal), bg)),
+        ];
+        for i in 0..samples.len() {
+            for j in (i + 1)..samples.len() {
+                let de = ciede2000_srgb(samples[i].1, samples[j].1);
+                assert!(
+                    de >= 5.0,
+                    "family {:?} and {:?} too close: ΔE2000={de:.2}",
+                    samples[i].0, samples[j].0,
+                );
+            }
+        }
     }
 
     #[test]
