@@ -1494,6 +1494,12 @@ mod tests {
         // Generate a representative color per family on a neutral dark
         // bg and verify ΔE2000 ≥ 5 between every pair. This is the
         // palette-level guarantee that motivates the family restructure.
+        // Acquires THEME_ENV_LOCK because `generate_role_color` reads
+        // RUSH_FLAVOR / RUSH_ACCENT, which flavor/accent tests mutate.
+        let _l = THEME_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Ensure no leftover flavor/accent from a previous test.
+        unsafe { std::env::remove_var("RUSH_FLAVOR") };
+        unsafe { std::env::remove_var("RUSH_ACCENT") };
         let bg = (0.15, 0.15, 0.15);
         let samples: &[(RoleFamily, (f64, f64, f64))] = &[
             (RoleFamily::Info,     generate_role_color(&role(RoleFamily::Info,     Intensity::Normal), bg)),

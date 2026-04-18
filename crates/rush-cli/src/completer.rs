@@ -288,9 +288,14 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
     };
 
     if let Ok(entries) = std::fs::read_dir(dir) {
+        let prefix_lc = prefix.to_lowercase();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(prefix) {
+            // Case-insensitive match so `cd DOC<tab>` finds `docs/`.
+            // Matches the convention the rest of the completer already
+            // uses for methods / pipe ops / builtins / keywords (#203).
+            let matches = name.starts_with(prefix) || name.to_lowercase().starts_with(&prefix_lc);
+            if matches {
                 // Use entry.path().is_dir() to follow symlinks (e.g., /home@ → directory)
                 let is_dir = entry.path().is_dir();
                 let full = if partial.contains('/') {
@@ -331,11 +336,14 @@ fn complete_commands(partial: &str, span: Span) -> Vec<Suggestion> {
     let path_var = std::env::var("PATH").unwrap_or_default();
     let separator = if cfg!(windows) { ';' } else { ':' };
 
+    let partial_lc = partial.to_lowercase();
     for dir in path_var.split(separator) {
         if let Ok(entries) = std::fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(partial) && !seen.contains(&name) && !is_backup_file(&name) {
+                // Case-insensitive match so `LS<tab>` finds `ls` (#203).
+                let matches = name.starts_with(partial) || name.to_lowercase().starts_with(&partial_lc);
+                if matches && !seen.contains(&name) && !is_backup_file(&name) {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
