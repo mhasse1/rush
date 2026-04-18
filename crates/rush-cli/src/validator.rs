@@ -1,7 +1,7 @@
 //! Multi-line input validator for reedline.
 //! Detects incomplete Rush blocks (if/def/class/for/while without matching end).
 
-use reedline::{ValidationResult, Validator};
+use rushline::{ValidationResult, Validator};
 
 /// Checks if input is a complete Rush expression or needs more lines.
 pub struct RushValidator;

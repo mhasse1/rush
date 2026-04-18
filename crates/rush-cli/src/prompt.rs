@@ -1,4 +1,4 @@
-use reedline::{Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode};
+use rushline::{Prompt, PromptEditMode, PromptHistorySearch, PromptHistorySearchStatus, PromptViMode};
 use rush_core::theme::Theme;
 use std::borrow::Cow;
 

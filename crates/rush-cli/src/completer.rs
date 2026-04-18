@@ -1,4 +1,4 @@
-use reedline::{Completer, Span, Suggestion};
+use rushline::{Completer, Span, Suggestion};
 
 /// Tab completer for Rush — context-aware completions.
 pub struct RushCompleter {

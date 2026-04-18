@@ -972,25 +972,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "reedline"
-version = "0.46.0"
-source = "git+https://github.com/mhasse1/reedline.git?branch=main#fbefc5b3f91a3a8ccb56ebf2b72dc9f222c8984a"
-dependencies = [
- "chrono",
- "crossterm",
- "fd-lock",
- "itertools",
- "nu-ansi-term",
- "serde",
- "strip-ansi-escapes",
- "strum",
- "thiserror",
- "unicase",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "regex"
 version = "1.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1094,8 +1075,8 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "nu-ansi-term",
- "reedline",
  "rush-core",
+ "rushline",
  "serde_json",
 ]
 
@@ -1122,6 +1103,25 @@ dependencies = [
  "rush-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rushline"
+version = "0.46.0-rush.1"
+source = "git+https://github.com/mhasse1/rushline.git?branch=main#5ac91c14c6b7383971760fd2b0f29e9387c4d7e3"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "fd-lock",
+ "itertools",
+ "nu-ansi-term",
+ "serde",
+ "strip-ansi-escapes",
+ "strum",
+ "thiserror",
+ "unicase",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

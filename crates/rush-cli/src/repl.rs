@@ -1,4 +1,4 @@
-use reedline::{
+use rushline::{
     default_emacs_keybindings, default_vi_insert_keybindings, default_vi_normal_keybindings,
     DefaultHinter, Emacs, FileBackedHistory, IdeMenu, KeyCode, KeyModifiers, MenuBuilder,
     Reedline, ReedlineEvent, ReedlineMenu, Signal, Vi,
@@ -84,7 +84,7 @@ pub fn run(is_login: bool) {
     );
 
     // Edit mode from config
-    let edit_mode: Box<dyn reedline::EditMode> = if config.edit_mode == "emacs" {
+    let edit_mode: Box<dyn rushline::EditMode> = if config.edit_mode == "emacs" {
         let mut emacs_bindings = default_emacs_keybindings();
         // default_emacs_keybindings doesn't wire up Tab, so completion
         // was inert in emacs mode. Mirror the vi insert-mode bindings.

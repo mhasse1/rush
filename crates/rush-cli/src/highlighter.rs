@@ -1,5 +1,5 @@
 use nu_ansi_term::{Color, Style};
-use reedline::{Highlighter, StyledText};
+use rushline::{Highlighter, StyledText};
 use rush_core::triage;
 
 /// Syntax highlighter for Rush — handles both Rush syntax and shell commands.
