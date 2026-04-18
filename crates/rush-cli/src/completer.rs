@@ -369,8 +369,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn complete_path_is_case_insensitive() {
         // /E should match /etc (and everything else starting with 'e').
+        // Unix-only because the tests assume a /etc directory on disk.
         let span = Span::new(0, 2);
         let hits = complete_path("/E", span);
         let names: Vec<&str> = hits.iter().map(|s| s.value.as_str()).collect();
@@ -381,6 +383,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn complete_path_keeps_case_sensitive_match_too() {
         // Exact-case /e should also find /etc (regression guard).
         let span = Span::new(0, 2);
