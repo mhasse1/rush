@@ -184,18 +184,17 @@ pub fn run(is_login: bool) {
         .with_validator(Box::new(RushValidator))
         .with_buffer_editor(buffer_editor_cmd, temp_file)
         .with_quick_completions(false)
-        // Partial completions were inserting the longest common prefix
-        // on Tab *and* opening the menu at the same time — the side
-        // effect of the insert prevented subsequent Tabs from cycling
-        // through the menu cleanly. Users can still see the full list
-        // in the IdeMenu and pick one with Tab / Shift+Tab / Enter.
         .with_partial_completions(false)
-        // Immediate completions: as the user Tabs through the menu,
-        // the buffer shows the currently-highlighted suggestion so the
-        // eventual Enter commits what they can already see. Without
-        // this the menu displays candidates but the buffer sits at
-        // the partial until Enter.
-        .with_immediate_completions(true)
+        // Immediate completions off: buffer stays at the typed partial
+        // while the IdeMenu shows candidates below. Tab/Shift+Tab
+        // navigate the highlight; Enter commits the selection into the
+        // buffer. This is the well-tested, rock-solid reedline flow —
+        // we had a version with `with_immediate_completions(true)` but
+        // it interacted badly with the IdeMenu paint cycle (phantom
+        // trailing text after the completion). If/when we bring that
+        // feature back, it needs a scoped menu/painter rewrite first
+        // (see #193 discussion).
+        .with_immediate_completions(false)
         .with_ansi_colors(true);
 
     let show_timing = config.show_timing;
