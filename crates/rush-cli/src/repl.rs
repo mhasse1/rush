@@ -79,8 +79,17 @@ pub fn run(is_login: bool) {
     // keeps the cwd / git branch / PID visible while navigating
     // completions (#186). Explicit `.with_name("completion_menu")` so
     // the keybinding references below are unambiguous.
+    //
+    // `with_default_border` draws a visible box around the menu so it
+    // doesn't visually bleed into the prompt or subsequent output. The
+    // extra row of padding it adds also helps when reedline's
+    // menu_start_row calculation lands on the last line of a multi-line
+    // prompt — the border top-edge occupies that row instead of menu
+    // text colliding with the input.
     let completion_menu = Box::new(
-        IdeMenu::default().with_name("completion_menu"),
+        IdeMenu::default()
+            .with_name("completion_menu")
+            .with_default_border(),
     );
 
     // Edit mode from config
