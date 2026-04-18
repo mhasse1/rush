@@ -2026,8 +2026,14 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             continue;
         }
 
-        // Shell builtins
-        if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source" | "clear") {
+        // Shell builtins — but only when the line is a *plain* invocation.
+        // A line like `alias | grep foo` must go through run_line →
+        // dispatch so the pipeline path (and LHS-builtin routing in #236)
+        // can take over; otherwise `handle()` treats `| grep foo` as a
+        // literal argument to `handle_alias` and reports "not found".
+        if matches!(first_word, "path" | "export" | "unset" | "alias" | "cd" | "source" | "clear")
+            && !crate::contains_unquoted_pipe(trimmed)
+        {
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
             handle(evaluator, trimmed);

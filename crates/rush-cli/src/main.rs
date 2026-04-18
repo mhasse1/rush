@@ -236,6 +236,30 @@ fn main() {
     repl::run(is_login);
 }
 
+/// True if `line` contains a `|` outside of single- or double-quoted
+/// text. Used to keep pipelines out of the builtin short-circuit below
+/// so dispatch's pipeline routing (including LHS-builtin capture) can
+/// run. A bare `|` between matching quotes is data, not a pipe.
+pub fn contains_unquoted_pipe(line: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !in_single => { chars.next(); }
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '|' if !in_single && !in_double => {
+                // `||` is the OR chain op, already handled by the caller.
+                if chars.peek() == Some(&'|') { chars.next(); continue; }
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Execute a line through the unified dispatch system.
 /// Checks builtins first (in-process), then delegates to dispatch for
 /// chain operators, triage, Rush eval, and shell execution.
@@ -250,10 +274,17 @@ pub fn run_line(evaluator: &mut Evaluator, line: &str) {
     let expanded = builtins::expand_alias(raw);
     let trimmed = expanded.as_deref().unwrap_or(raw);
 
-    // Only check builtins for simple commands (no chain operators).
-    // This ensures "set -e; cmd" goes through dispatch for proper
-    // chain splitting.
-    if !trimmed.contains("&&") && !trimmed.contains("||") && !trimmed.contains(';') {
+    // Only check builtins for simple commands (no chain operators,
+    // no pipelines). This ensures `set -e; cmd` goes through dispatch
+    // for chain splitting, and `alias | grep foo` goes through the
+    // pipeline path so LHS-builtin routing (#236) can take over — the
+    // short-circuit below would otherwise hand the whole string to
+    // `handle_alias` with `| grep foo` as a literal argument.
+    if !trimmed.contains("&&")
+        && !trimmed.contains("||")
+        && !trimmed.contains(';')
+        && !contains_unquoted_pipe(trimmed)
+    {
         // Strip any inline `VAR=val` prefixes and apply them for the
         // duration of the builtin call, so `RUSH_AI_DEBUG=1 ai "..."`
         // and similar work with in-process builtins (which otherwise
