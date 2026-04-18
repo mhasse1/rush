@@ -22,6 +22,23 @@ pub struct DispatchResult {
 /// Shell builtins that must run in-process. Returns Some(exit_code) if handled.
 pub type BuiltinHandler = dyn FnMut(&str, &str) -> Option<i32>;
 
+/// Callbacks the higher layer (rush-cli) supplies so pipelines can route
+/// their RHS into in-process builtins instead of execve'ing them (which
+/// fails with 127 for names that aren't on PATH). The two callbacks are:
+///
+/// - `is_builtin(name)` — cheap predicate: is `name` something the host
+///   layer owns? Used by dispatch to distinguish "unknown command" (fall
+///   through to the native pipe chain) from "builtin that didn't want
+///   this input" (emit a clear error).
+/// - `handle_pipe(name, args, stdin)` — attempt to run `name args` as a
+///   pipeline RHS with the upstream output as stdin. Return `Some(code)`
+///   if the builtin consumed/handled the stdin, or `None` if it didn't
+///   (e.g. `cd`, `exit` — builtins that have no stdin semantics).
+pub struct PipelineBuiltins<'a> {
+    pub is_builtin: &'a dyn Fn(&str) -> bool,
+    pub handle_pipe: &'a mut dyn FnMut(&str, &str, &[u8]) -> Option<i32>,
+}
+
 /// Dispatch a command line through the full pipeline.
 /// This is the single entry point for all command execution.
 /// Builtins (cd, export, alias) should be checked by the caller before dispatch.
@@ -37,7 +54,20 @@ pub fn dispatch(
 pub fn dispatch_with_jobs(
     line: &str,
     evaluator: &mut Evaluator,
+    job_table: Option<&mut JobTable>,
+) -> DispatchResult {
+    dispatch_with_jobs_and_builtins(line, evaluator, job_table, None)
+}
+
+/// Dispatch with optional job table AND rush-cli builtin callbacks for
+/// pipeline-RHS routing. Called from the rush-cli main loop; other
+/// callers (llm/mcp, tests, eval-invoked-dispatch) use `dispatch_with_jobs`
+/// and get the no-pipeline-builtin behavior.
+pub fn dispatch_with_jobs_and_builtins(
+    line: &str,
+    evaluator: &mut Evaluator,
     mut job_table: Option<&mut JobTable>,
+    mut pipeline_builtins: Option<&mut PipelineBuiltins>,
 ) -> DispatchResult {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -329,6 +359,47 @@ pub fn dispatch_with_jobs(
                     last_exit = exit;
                     last_failed = exit != 0;
                     evaluator.exit_code = exit;
+                    for (key, prev) in saved_vars {
+                        match prev {
+                            Some(val) => unsafe { std::env::set_var(&key, &val) },
+                            None => unsafe { std::env::remove_var(&key) },
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Pipeline RHS that's a rush-cli builtin: the native pipe chain
+        // below can only execve names on PATH, so things like
+        // `echo hi | alias` fail with 127. If the host supplied the
+        // builtin callbacks, capture upstream output and route it into
+        // the builtin. When the builtin doesn't consume stdin we emit
+        // a clear message instead of masquerading as an exec failure.
+        if pipe_segments.len() > 1 {
+            let last = pipe_segments.last().expect("checked len > 1");
+            let last_first = last.split_whitespace().next().unwrap_or("");
+            if let Some(builtins) = pipeline_builtins.as_deref_mut() {
+                if !last_first.is_empty() && (builtins.is_builtin)(last_first) {
+                    let upstream_cmd = pipe_segments[..pipe_segments.len() - 1].join(" | ");
+                    let upstream = process::run_native_capture(&upstream_cmd);
+                    if !upstream.stderr.is_empty() {
+                        eprintln!("{}", upstream.stderr);
+                    }
+                    let args = last.trim_start()
+                        .strip_prefix(last_first)
+                        .unwrap_or("")
+                        .trim_start();
+                    let code = match (builtins.handle_pipe)(last_first, args, upstream.stdout.as_bytes()) {
+                        Some(code) => code,
+                        None => {
+                            eprintln!("rush: {last_first}: builtin does not consume stdin");
+                            1
+                        }
+                    };
+                    last_exit = code;
+                    last_failed = code != 0;
+                    evaluator.exit_code = code;
                     for (key, prev) in saved_vars {
                         match prev {
                             Some(val) => unsafe { std::env::set_var(&key, &val) },
@@ -1038,5 +1109,87 @@ mod tests {
             );
         }
         std::env::set_current_dir(saved).ok();
+    }
+
+    // ── PipelineBuiltins plumbing (#224-A) ───────────────────────────
+
+    /// Helper: dispatch a line with a test PipelineBuiltins that records
+    /// invocations. Returns (exit_code, invocations). Acquires the
+    /// shared RUSH_LAST_EXIT mutex because dispatch writes the env var
+    /// on every call and would otherwise race parallel tests that assert
+    /// on `$?`.
+    fn run_with_pipeline_builtins(
+        line: &str,
+        names: &[&str],
+        results: std::collections::HashMap<String, Option<i32>>,
+    ) -> (i32, Vec<(String, String, Vec<u8>)>) {
+        use std::cell::RefCell;
+        let _guard = crate::process::RUSH_LAST_EXIT_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let calls: RefCell<Vec<(String, String, Vec<u8>)>> = RefCell::new(Vec::new());
+        let names_owned: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+
+        let mut output = TestOutput::new();
+        let exit = {
+            let mut eval = Evaluator::new(&mut output);
+            let is_builtin = |n: &str| names_owned.iter().any(|x| x == n);
+            let mut handle_pipe = |name: &str, args: &str, stdin: &[u8]| -> Option<i32> {
+                calls.borrow_mut().push((name.to_string(), args.to_string(), stdin.to_vec()));
+                results.get(name).copied().flatten()
+            };
+            let mut pb = PipelineBuiltins {
+                is_builtin: &is_builtin,
+                handle_pipe: &mut handle_pipe,
+            };
+            dispatch_with_jobs_and_builtins(line, &mut eval, None, Some(&mut pb)).exit_code
+        };
+        (exit, calls.into_inner())
+    }
+
+    #[test]
+    fn pipe_rhs_builtin_receives_stdin() {
+        let mut results = std::collections::HashMap::new();
+        results.insert("fakebuiltin".to_string(), Some(0));
+        let (code, calls) = run_with_pipeline_builtins(
+            "echo hello | fakebuiltin --flag arg",
+            &["fakebuiltin"],
+            results,
+        );
+        assert_eq!(code, 0);
+        assert_eq!(calls.len(), 1);
+        let (name, args, stdin) = &calls[0];
+        assert_eq!(name, "fakebuiltin");
+        assert_eq!(args, "--flag arg");
+        // echo outputs "hello\n"
+        assert_eq!(std::str::from_utf8(stdin).unwrap().trim(), "hello");
+    }
+
+    #[test]
+    fn pipe_rhs_builtin_that_rejects_stdin_gets_clear_error() {
+        // handle_pipe returns None → dispatch should report exit 1 and
+        // emit "does not consume stdin" (stderr isn't captured here,
+        // but we can confirm the non-127 exit code).
+        let mut results = std::collections::HashMap::new();
+        results.insert("readonlybuiltin".to_string(), None);
+        let (code, calls) = run_with_pipeline_builtins(
+            "echo x | readonlybuiltin",
+            &["readonlybuiltin"],
+            results,
+        );
+        assert_eq!(code, 1);
+        assert_eq!(calls.len(), 1);
+    }
+
+    #[test]
+    fn pipe_rhs_non_builtin_falls_through_to_native() {
+        // is_builtin returns false → no handle_pipe call, native pipeline
+        // runs and succeeds (cat exists on PATH).
+        let (_code, calls) = run_with_pipeline_builtins(
+            "echo x | cat",
+            &[],
+            std::collections::HashMap::new(),
+        );
+        assert!(calls.is_empty(), "handle_pipe should not be called for non-builtins");
     }
 }

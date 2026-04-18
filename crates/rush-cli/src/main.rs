@@ -286,7 +286,22 @@ pub fn run_line(evaluator: &mut Evaluator, line: &str) {
     }
 
     builtins::JOB_TABLE.with(|jt| {
-        dispatch::dispatch_with_jobs(trimmed, evaluator, Some(&mut jt.borrow_mut()));
+        // Supply the rush-cli builtin callbacks so pipelines whose RHS
+        // is an in-process builtin (e.g. `echo hi | alias`) route via
+        // the handler instead of falling through to execve — which fails
+        // with 127 for names that aren't on PATH.
+        let is_builtin: &dyn Fn(&str) -> bool = &builtins::is_builtin;
+        let mut handle_pipe_fn = builtins::handle_pipe;
+        let mut pipeline_builtins = dispatch::PipelineBuiltins {
+            is_builtin,
+            handle_pipe: &mut handle_pipe_fn,
+        };
+        dispatch::dispatch_with_jobs_and_builtins(
+            trimmed,
+            evaluator,
+            Some(&mut jt.borrow_mut()),
+            Some(&mut pipeline_builtins),
+        );
     });
 }
 

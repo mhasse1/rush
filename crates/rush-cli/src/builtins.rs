@@ -88,6 +88,48 @@ fn apply_bg_silent(hex: &str) {
     }
 }
 
+/// The static list of names this module intercepts in `handle()`. Used
+/// by `is_builtin` to answer dispatch's "is this name a rush-cli builtin?"
+/// question when deciding how to route a pipeline RHS. Keep in sync with
+/// the match arms below.
+const BUILTIN_NAMES: &[&str] = &[
+    "cd", "export", "unset", "source", ".", "clear", "exit", "quit",
+    "pwd", "alias", "unalias", "pushd", "popd", "dirs", "history",
+    "path", "help", "set", "setbg", "..", "...", "....",
+    "which", "type", "o", "open", "reload", "sync", "ai", "sql",
+    "init", "printf", "mark", "---", ":", "true", "false",
+    "command", "read", "exec", "eval", "trap", "umask", "hash",
+    "readonly", "shift", "getopts", "ulimit", "times", "fc",
+    "jobs", "fg", "bg", "kill", "wait",
+];
+
+/// True if `name` is handled as an in-process rush-cli builtin. Given to
+/// dispatch so pipelines can route their RHS into the in-process path
+/// instead of execve'ing names that aren't on PATH (which would 127).
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_NAMES.contains(&name)
+}
+
+/// Attempt to run `name args` as a pipeline RHS with upstream bytes as
+/// stdin. Returns `Some(code)` if the builtin consumed the bytes (or if
+/// it's a no-op like `true`/`false` where stdin is irrelevant), or `None`
+/// if the builtin has no stdin semantics — in which case dispatch will
+/// emit "builtin does not consume stdin".
+///
+/// Most rush-cli builtins return `None` here today. Slice B (data-
+/// producer builtins) and slice C (puts/print/warn sinks) in #224 will
+/// flip more names to `Some`.
+pub fn handle_pipe(_name: &str, _args: &str, _stdin: &[u8]) -> Option<i32> {
+    // Slice A: only the trivial shims consume stdin transparently so
+    // `cmd | true` and `cmd | false` don't regress into a "does not
+    // consume stdin" error. Real data-producer/sink wiring lands later.
+    match _name {
+        "true" | ":" => Some(0),
+        "false" => Some(1),
+        _ => None,
+    }
+}
+
 /// Try to handle a line as a shell builtin. Returns true if handled.
 pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
     let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
