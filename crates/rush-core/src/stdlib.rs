@@ -278,7 +278,16 @@ fn collect_dir_entries(
         if dirs_only && !is_dir {
             continue;
         }
-        entries.push(Value::String(name.clone()));
+        // Non-recursive mode returns basenames (the caller knows the dir);
+        // recursive mode returns full joined paths so each entry carries
+        // its parent chain and scripts can reconstruct the file's location
+        // without a parallel bookkeeping pass (#257).
+        let display = if recurse {
+            entry.path().to_string_lossy().to_string()
+        } else {
+            name.clone()
+        };
+        entries.push(Value::String(display));
         if recurse && is_dir {
             collect_dir_entries(
                 &entry.path().to_string_lossy(),

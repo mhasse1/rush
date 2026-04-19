@@ -848,7 +848,11 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::CommandSub { command } => {
-                let result = process::run_native_capture(command);
+                // Expand Rush-side interpolation (#{...}) before handing the
+                // command to the shell — otherwise `$(echo "#{msg}")` passed
+                // literal #{msg} to echo (#255).
+                let expanded = self.expand_interpolation(command);
+                let result = process::run_native_capture(&expanded);
                 self.exit_code = result.exit_code;
                 Ok(Value::String(result.stdout.trim_end().to_string()))
             }
@@ -2030,6 +2034,76 @@ impl<'a> Evaluator<'a> {
             }
         }
         result
+    }
+
+    /// Expand `#{expr}` interpolation inside an arbitrary string using the
+    /// current evaluator context. Mirrors what `InterpolatedString` does at
+    /// eval time, but works on runtime strings (command substitution bodies,
+    /// export values, etc.) where the parser stored raw text.
+    ///
+    /// Nested `{}` inside the expression are handled by depth counting, so
+    /// `"#{h.each { |k, v| ... }}"` — silly but legal — doesn't terminate
+    /// early. Unterminated `#{` is left as-is so we don't swallow text.
+    pub(crate) fn expand_interpolation(&mut self, s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out = String::with_capacity(s.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            if i + 1 < bytes.len() && bytes[i] == b'#' && bytes[i + 1] == b'{' {
+                // Find matching `}` with depth tracking.
+                let expr_start = i + 2;
+                let mut depth = 1;
+                let mut j = expr_start;
+                while j < bytes.len() {
+                    match bytes[j] {
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth != 0 {
+                    // Unterminated — leave the #{ as literal text, don't drop anything.
+                    out.push('#');
+                    out.push('{');
+                    i += 2;
+                    continue;
+                }
+                let expr_src = &s[expr_start..j];
+                match self.eval_interpolated_expr(expr_src) {
+                    Ok(val) => out.push_str(&val.to_rush_string()),
+                    Err(_) => {
+                        // Leave the #{...} intact so errors are diagnosable
+                        // rather than silently swallowing the whole chunk.
+                        out.push_str("#{");
+                        out.push_str(expr_src);
+                        out.push('}');
+                    }
+                }
+                i = j + 1;
+            } else {
+                // Advance by one char boundary to keep UTF-8 safe.
+                let ch_len = s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                out.push_str(&s[i..i + ch_len]);
+                i += ch_len;
+            }
+        }
+        out
+    }
+
+    /// Parse + evaluate a Rush expression source. Used by the interpolation
+    /// helper; factored out so dispatch-side callers (export=) can reuse it.
+    fn eval_interpolated_expr(&mut self, src: &str) -> Result<Value, String> {
+        let nodes = crate::parser::parse(src).map_err(|e| format!("parse error: {e:?}"))?;
+        if nodes.is_empty() {
+            return Ok(Value::Nil);
+        }
+        self.eval_node(&nodes[0]).map_err(|_| "eval signal".to_string())
     }
 
     fn call_block(&mut self, block: &BlockLiteral, args: &[Value]) -> Value {

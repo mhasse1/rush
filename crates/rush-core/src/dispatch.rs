@@ -257,7 +257,11 @@ pub fn dispatch_with_jobs_and_builtins(
             if let Some((key, value)) = args.split_once('=') {
                 let key = key.trim();
                 let value = value.trim().trim_matches('"').trim_matches('\'');
-                unsafe { std::env::set_var(key, value) };
+                // Expand Rush-side #{expr} interpolation before the value
+                // reaches the environment — `export T="#{target}"` used to
+                // store the literal text `#{target}` (#255).
+                let expanded = evaluator.expand_interpolation(value);
+                unsafe { std::env::set_var(key, expanded) };
             }
             last_exit = 0;
             last_failed = false;
