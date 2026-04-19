@@ -776,6 +776,9 @@ fn execute_command(input: &str, session: &mut LlmSession) -> LlmResult {
         };
         #[cfg(not(windows))]
         let parse_input: &str = input;
+        // .as_ref() is load-bearing on Windows where parse_input is Cow<str>;
+        // clippy only sees the non-Windows branch where it's a no-op on &str.
+        #[allow(clippy::useless_asref)]
         let parts = crate::process::parse_command_line(parse_input.as_ref());
         let target = parts.get(1).map(String::as_str).unwrap_or("");
         let path = if target.is_empty() || target == "~" {

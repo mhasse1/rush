@@ -379,7 +379,10 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
     };
     #[cfg(not(windows))]
     let parse_input: &str = target;
-    let tokens = rush_core::process::parse_command_line(parse_input);
+    // .as_ref() is load-bearing on Windows where parse_input is Cow<str>;
+    // clippy only sees the non-Windows branch where it's a no-op on &str.
+    #[allow(clippy::useless_asref)]
+    let tokens = rush_core::process::parse_command_line(parse_input.as_ref());
     let unquoted = tokens.first().map(String::as_str).unwrap_or("").to_string();
     let target = unquoted.as_str();
 

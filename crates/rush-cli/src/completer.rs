@@ -264,6 +264,22 @@ fn is_backup_file(name: &str) -> bool {
     name.ends_with('~') || name.ends_with(".swp") || name.ends_with(".swo")
 }
 
+/// Backslash-escape characters the shell would word-split on.
+/// Covers the common cases — a file called `foo bar.txt` becomes `foo\ bar.txt`
+/// so it stays a single argument when inserted at the cursor (#247). Other
+/// shell-special characters (`$`, `*`, `?`, etc.) are left alone for now —
+/// file an issue if a real workflow needs them.
+fn shell_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        if matches!(ch, ' ' | '\t') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
     let mut suggestions = Vec::new();
 
@@ -286,6 +302,17 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
         (".", expanded.as_str())
     };
 
+    // Narrow the span to just the part after the last separator in the
+    // *original* typed partial, so menu entries show only the new
+    // component (not the whole path the user already typed) and
+    // reedline only replaces that trailing component on accept (#246).
+    // rfind on the normalized partial is safe: the separators are single
+    // bytes at the same positions as in the original typed text.
+    let narrow_span = match partial.rfind('/') {
+        Some(pos) => Span::new(span.start + pos + 1, span.end),
+        None => span,
+    };
+
     if let Ok(entries) = std::fs::read_dir(dir) {
         let prefix_lc = prefix.to_lowercase();
         for entry in entries.flatten() {
@@ -297,13 +324,11 @@ fn complete_path(partial: &str, span: Span) -> Vec<Suggestion> {
             if matches {
                 // Use entry.path().is_dir() to follow symlinks (e.g., /home@ → directory)
                 let is_dir = entry.path().is_dir();
-                let full = if partial.contains('/') {
-                    let base = &partial[..partial.rfind('/').unwrap() + 1];
-                    format!("{base}{name}{}", if is_dir { "/" } else { "" })
-                } else {
-                    format!("{name}{}", if is_dir { "/" } else { "" })
-                };
-                suggestions.push(suggestion(full, span, !is_dir));
+                let trailing = if is_dir { "/" } else { "" };
+                // Escape shell-meaningful whitespace so the shell doesn't
+                // word-split a filename like "1-3-1 Foo Bar.txt" on accept (#247).
+                let value = format!("{}{}", shell_escape(&name), trailing);
+                suggestions.push(suggestion(value, narrow_span, !is_dir));
             }
         }
     }
@@ -371,21 +396,56 @@ mod tests {
     fn complete_path_is_case_insensitive() {
         // /E should match /etc (and everything else starting with 'e').
         // Unix-only because the tests assume a /etc directory on disk.
+        // Suggestion value is just the last component (#246) — rushline
+        // uses the narrowed span to replace only the part after the
+        // last separator, so the previously-typed prefix stays put.
         let span = Span::new(0, 2);
         let hits = complete_path("/E", span);
         let names: Vec<&str> = hits.iter().map(|s| s.value.as_str()).collect();
         assert!(
-            names.contains(&"/etc/"),
-            "expected /etc/ in case-insensitive hits for /E, got {names:?}"
+            names.contains(&"etc/"),
+            "expected 'etc/' in case-insensitive hits for /E, got {names:?}"
         );
     }
 
     #[test]
     #[cfg(unix)]
     fn complete_path_keeps_case_sensitive_match_too() {
-        // Exact-case /e should also find /etc (regression guard).
+        // Exact-case /e should also find etc/ (regression guard).
         let span = Span::new(0, 2);
         let hits = complete_path("/e", span);
-        assert!(hits.iter().any(|s| s.value == "/etc/"));
+        assert!(hits.iter().any(|s| s.value == "etc/"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn complete_path_narrows_span_to_last_component() {
+        // Span should cover only the part after the last '/', so the
+        // menu entries are short and reedline only replaces the new
+        // piece (#246). `/et` has the last '/' at byte 0, so the
+        // narrowed span starts at byte 1.
+        let span = Span::new(0, 3);
+        let hits = complete_path("/et", span);
+        let etc = hits.iter().find(|s| s.value == "etc/").unwrap();
+        assert_eq!(etc.span.start, 1);
+        assert_eq!(etc.span.end, 3);
+    }
+
+    #[test]
+    fn shell_escape_leaves_plain_names_alone() {
+        assert_eq!(shell_escape("README.md"), "README.md");
+    }
+
+    #[test]
+    fn shell_escape_escapes_spaces() {
+        assert_eq!(
+            shell_escape("Detailed View of System Architecture.mmd"),
+            "Detailed\\ View\\ of\\ System\\ Architecture.mmd"
+        );
+    }
+
+    #[test]
+    fn shell_escape_escapes_tabs() {
+        assert_eq!(shell_escape("a\tb"), "a\\\tb");
     }
 }
