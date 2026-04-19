@@ -22,12 +22,15 @@ jobs:
           - os: macos-latest
             rid: osx-arm64
             artifact: rush
-          - os: windows-latest
-            rid: win-x64
-            artifact: rush.exe
-          - os: windows-latest
-            rid: win-arm64
-            artifact: rush.exe
+          # Windows jobs paused to unblock iteration speed while the user
+          # is still running the .NET stack at the Windows client (#251).
+          # Re-enable when Rust Windows is the primary target again.
+          # - os: windows-latest
+          #   rid: win-x64
+          #   artifact: rush.exe
+          # - os: windows-latest
+          #   rid: win-arm64
+          #   artifact: rush.exe
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
@@ -77,8 +80,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          # Paused alongside build-and-test (#251). Re-enable when Windows
+          # is a priority target again.
+          # - os: windows-latest
+          #   target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
