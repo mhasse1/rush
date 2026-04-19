@@ -82,6 +82,36 @@ fn dash_c_arithmetic() {
     assert_eq!(stdout.trim(), "5");
 }
 
+#[test]
+fn dash_c_multi_line_array_literal() {
+    // ISSUE #252 — `run_script` used to flush the buffered Rush expression
+    // at every line, so a multi-line array literal tripped the parser on
+    // `roots = [` with no closing bracket. The binary-level fix tracks
+    // bracket/brace/paren depth across lines.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "roots = [\n\"a\",\n\"b\"\n]\nputs roots.length\n",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "2");
+}
+
+#[test]
+fn script_multi_line_array_literal() {
+    // Same as the -c test, but exercising the file-execution path so we
+    // catch a regression in either invocation mode.
+    let dir = scratch_dir("multi_array");
+    let script = write_script(
+        &dir,
+        "arr.rush",
+        "#!/usr/bin/env rush\nroots = [\n  \"a\",\n  \"b\"\n]\nputs roots.length\n",
+    );
+    let (code, stdout, _) = run(Command::new(RUSH).arg(&script));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "2");
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Script file, invoked via explicit path
 // ═══════════════════════════════════════════════════════════════════

@@ -1991,9 +1991,49 @@ pub fn load_init(evaluator: &mut Evaluator) {
 /// and batching Rush syntax for the parser.
 /// Run a script with per-line dispatch: builtins, Rush syntax, shell commands.
 /// Public so script files and init.rush use the same path.
+/// Update bracket/brace/paren depth counters based on the characters in
+/// one script line, respecting single/double quote state. Shared between
+/// run_script and anywhere else that needs line-level delimiter tracking.
+fn update_delimiter_depth(
+    line: &str,
+    bracket: &mut i32,
+    brace: &mut i32,
+    paren: &mut i32,
+) {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev_esc = false;
+    for ch in line.chars() {
+        let escaped = prev_esc;
+        prev_esc = false;
+        if escaped {
+            continue;
+        }
+        match ch {
+            '\\' if !in_single => prev_esc = true,
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '[' if !in_single && !in_double => *bracket += 1,
+            ']' if !in_single && !in_double => *bracket = (*bracket - 1).max(0),
+            '{' if !in_single && !in_double => *brace += 1,
+            '}' if !in_single && !in_double => *brace = (*brace - 1).max(0),
+            '(' if !in_single && !in_double => *paren += 1,
+            ')' if !in_single && !in_double => *paren = (*paren - 1).max(0),
+            _ => {}
+        }
+    }
+}
+
 pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
     let mut rush_buf = String::new();
     let mut block_depth: i32 = 0; // track def/if/for/while...end nesting
+    // Bracket/brace/paren depth tracked across lines — a multi-line array
+    // (`roots = [\n "a",\n "b"\n]`) or hash literal needs to stay buffered
+    // until the closing bracket, otherwise the first line (`roots = [`)
+    // gets flushed as a standalone parse and fails (#252).
+    let mut bracket_depth: i32 = 0; // [ ]
+    let mut brace_depth: i32 = 0;   // { } outside strings
+    let mut paren_depth: i32 = 0;   // ( )
     let mut path_block: Option<Vec<String>> = None; // path add...end accumulator
 
     let block_openers = [
@@ -2057,6 +2097,20 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             continue;
         }
 
+        // Capture delimiter state as it stood at the start of this line —
+        // a line like `]` that closes a multi-line array is still
+        // "inside the expression" from the caller's perspective and must
+        // be accumulated, not dispatched as a shell command. Update
+        // counters after we decide what to do with the line.
+        let was_inside_delimiter =
+            bracket_depth > 0 || brace_depth > 0 || paren_depth > 0;
+        update_delimiter_depth(
+            line,
+            &mut bracket_depth,
+            &mut brace_depth,
+            &mut paren_depth,
+        );
+
         // Track block depth from keywords
         let first_word = trimmed.split_whitespace().next().unwrap_or("");
         // Strip parenthesized options: parallel(4, 10) → parallel
@@ -2087,13 +2141,29 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             block_depth -= 1;
         }
 
-        // Inside a block — accumulate everything (even shell commands)
-        if block_depth > 0 || (first_word.eq_ignore_ascii_case("end") && rush_buf.contains("def ")) {
+        // Inside a block OR inside an unclosed bracket/brace/paren
+        // expression (including the closing line itself) — accumulate
+        // everything. This is how multi-line array/hash/paren literals
+        // stay buffered until they actually close (#252).
+        let still_inside_delimiter =
+            bracket_depth > 0 || brace_depth > 0 || paren_depth > 0;
+        if block_depth > 0
+            || was_inside_delimiter
+            || still_inside_delimiter
+            || (first_word.eq_ignore_ascii_case("end") && rush_buf.contains("def "))
+        {
             rush_buf.push_str(line);
             rush_buf.push('\n');
 
-            // If we just closed the last block, flush
-            if block_depth == 0 && first_word.eq_ignore_ascii_case("end") {
+            // If we just closed everything, flush. Block-based closure
+            // happens on `end`; delimiter-based closure happens when all
+            // three depths return to zero.
+            let closed_block =
+                block_depth == 0 && first_word.eq_ignore_ascii_case("end");
+            let closed_delimiter = was_inside_delimiter && !still_inside_delimiter;
+            if closed_block
+                || (block_depth == 0 && closed_delimiter)
+            {
                 flush_rush_buf(evaluator, &rush_buf, source_name);
                 rush_buf.clear();
             }
