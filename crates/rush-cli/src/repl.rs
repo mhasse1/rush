@@ -94,7 +94,12 @@ pub fn run(is_login: bool) {
             // with the prompt's 2-space indent instead of being
             // cursor-anchored (which put it arbitrarily far right
             // depending on how much the user had typed).
-            .with_cursor_offset(-3),
+            .with_cursor_offset(-3)
+            // Default cap is 50 cols, which truncates long filenames
+            // even when the terminal has room. Raise to 120 so the box
+            // grows with the longest entry; rushline's painter clamps
+            // to the right terminal edge automatically (#246).
+            .with_max_completion_width(120),
     );
 
     // Edit mode from config
