@@ -37,7 +37,11 @@ impl Output for CaptureOutput {
 }
 
 /// Run a rush program through dispatch; returns (exit_code, stdout_lines).
+/// Forces NO_COLOR so tests don't have to thread the ANSI escape codes
+/// through every assertion — `.green.length` stays 5, etc. Idempotent
+/// across parallel tests (same value every time).
 fn run(program: &str) -> (i32, Vec<String>) {
+    unsafe { std::env::set_var("NO_COLOR", "1") };
     let mut output = CaptureOutput::new();
     let result = {
         let mut eval = Evaluator::new(&mut output);

@@ -1304,7 +1304,8 @@ impl<'a> Evaluator<'a> {
                 let suffix = args.first().map(|v| v.to_rush_string()).unwrap_or_default();
                 Value::Bool(s.ends_with(&suffix))
             }
-            "replace" | "gsub" => {
+            "replace" => {
+                // Literal string replacement (all occurrences).
                 if args.len() >= 2 {
                     let from = args[0].to_rush_string();
                     let to = args[1].to_rush_string();
@@ -1312,6 +1313,46 @@ impl<'a> Evaluator<'a> {
                 } else {
                     Value::String(s.to_string())
                 }
+            }
+            "gsub" => {
+                // Regex-aware when the first arg is a regex pattern from a
+                // `/.../` literal (which evaluates to a String containing the
+                // pattern source). Previous behavior treated the pattern as
+                // literal text and inserted the replacement between every
+                // character of the input — silently wrong for any script
+                // using gsub with a regex (#256).
+                if args.len() >= 2 {
+                    let pat = args[0].to_rush_string();
+                    let rep = args[1].to_rush_string();
+                    match regex::Regex::new(&pat) {
+                        Ok(re) => Value::String(re.replace_all(s, rep.as_str()).to_string()),
+                        Err(_) => Value::String(s.replace(&pat, &rep)),
+                    }
+                } else {
+                    Value::String(s.to_string())
+                }
+            }
+            "sub" => {
+                // First-match regex replacement. Previously missing entirely —
+                // `.sub(/regex/, repl)` returned empty (#256). Falls back to
+                // literal `replacen(pat, rep, 1)` if the pattern doesn't
+                // compile as a regex, so scripts don't silently lose data.
+                if args.len() >= 2 {
+                    let pat = args[0].to_rush_string();
+                    let rep = args[1].to_rush_string();
+                    match regex::Regex::new(&pat) {
+                        Ok(re) => Value::String(re.replacen(s, 1, rep.as_str()).to_string()),
+                        Err(_) => Value::String(s.replacen(&pat, &rep, 1)),
+                    }
+                } else {
+                    Value::String(s.to_string())
+                }
+            }
+            // ANSI color wrappers. Return uncolored text under NO_COLOR so
+            // pipelines and tests see the raw content; the escape codes are
+            // additive, not replacement, so .length etc. still work.
+            "red" | "green" | "yellow" | "blue" | "magenta" | "cyan" | "white" | "gray" | "grey" => {
+                Value::String(ansi_wrap(s, method))
             }
             "split" => {
                 let sep = args
@@ -2018,6 +2059,26 @@ impl<'a> Evaluator<'a> {
             _ => vec![value.clone()],
         }
     }
+}
+
+/// Wrap `s` in an ANSI SGR color code unless NO_COLOR is set. The method
+/// name picks the color; unknown names return the input unchanged.
+fn ansi_wrap(s: &str, method: &str) -> String {
+    if std::env::var("NO_COLOR").is_ok() {
+        return s.to_string();
+    }
+    let code: u8 = match method {
+        "red" => 31,
+        "green" => 32,
+        "yellow" => 33,
+        "blue" => 34,
+        "magenta" => 35,
+        "cyan" => 36,
+        "white" => 37,
+        "gray" | "grey" => 90,
+        _ => return s.to_string(),
+    };
+    format!("\x1b[{code}m{s}\x1b[0m")
 }
 
 #[cfg(test)]
