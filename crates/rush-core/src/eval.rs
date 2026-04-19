@@ -735,7 +735,13 @@ impl<'a> Evaluator<'a> {
                 for (key, val) in entries {
                     let k = self.eval_node(key)?;
                     let v = self.eval_node(val)?;
-                    map.insert(k.to_rush_string(), v);
+                    // Symbol-literal keys ({name: ...}) parse as ":name".
+                    // Store without the leading ':' so `h["name"]` and `h.name`
+                    // find them, and so JSON interop sees standard keys.
+                    // String-literal keys pass through unchanged.
+                    let key_str = k.to_rush_string();
+                    let normalized = key_str.strip_prefix(':').unwrap_or(&key_str).to_string();
+                    map.insert(normalized, v);
                 }
                 Ok(Value::Hash(map))
             }
@@ -1143,6 +1149,12 @@ impl<'a> Evaluator<'a> {
     }
 
     fn eval_variable_ref(&self, name: &str) -> Value {
+        // $? reads the thread-local last exit code, not the environment.
+        // The env-backed read returned Nil, which made `puts $?` silently
+        // print nothing.
+        if name == "$?" {
+            return Value::Int(crate::process::last_exit_code() as i64);
+        }
         self.env
             .get(name)
             .cloned()
@@ -1603,6 +1615,9 @@ impl<'a> Evaluator<'a> {
                 }
             }
             Value::Int(n) => self.int_method_no_block(*n, property),
+            Value::Range(start, end, exclusive) => {
+                self.range_method(*start, *end, *exclusive, property, &[])
+            }
             _ => Value::Nil,
         }
     }

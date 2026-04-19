@@ -164,7 +164,11 @@ fn hash_dot_access() {
 
 #[test]
 fn hash_length() {
-    expect_output("puts {a: 1, b: 2, c: 3}.length", "3");
+    // Using a variable to avoid the `puts {...}.method` parser quirk where
+    // `{` right after an identifier looks like a block literal to the
+    // parser, not a hash argument. That's a separate issue worth its own
+    // test — see `puts_hash_literal_directly_without_parens_is_ambiguous`.
+    expect_output("h = {a: 1, b: 2, c: 3}; puts h.length", "3");
 }
 
 // ═══════════════════════════════════════════════════════════════════
