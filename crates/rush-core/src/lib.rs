@@ -31,3 +31,5 @@ pub mod lang_spec;
 mod posix_tests;
 #[cfg(test)]
 mod integration_tests;
+#[cfg(test)]
+mod script_surface_tests;
