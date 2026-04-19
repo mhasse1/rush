@@ -55,9 +55,16 @@ pub fn call_tool(server: &str, tool: &str, args: JsonValue) -> Result<Value, Str
             }
         }
 
-        let config = load_registry()?
-            .remove(server)
-            .ok_or_else(|| format!("mcp: no server '{server}' in ~/.config/rush/mcp-servers.json"))?;
+        let (registry, source) = load_registry_with_source()?;
+        let config = registry.into_iter().find(|(k, _)| k == server).map(|(_, v)| v)
+            .ok_or_else(|| {
+                let mut names: Vec<String> = list_servers();
+                names.sort();
+                format!(
+                    "mcp: no server '{server}' in {source} (available: {})",
+                    if names.is_empty() { "none".to_string() } else { names.join(", ") }
+                )
+            })?;
 
         let mut client = McpClient::spawn(server, &config)?;
         let result = client.call_tool(tool, args)?;
@@ -102,6 +109,11 @@ pub struct McpServerConfig {
 /// Rush-specific file lets users register extra servers just for rush;
 /// Claude Code and Claude Desktop configs make rush work out-of-the-box
 /// if either is already set up. They share the `mcpServers` shape.
+///
+/// `~/.claude.json` (top-level) is Claude Code's full config — bigger file
+/// with per-project entries too. We read its top-level `mcpServers` key
+/// and ignore project scopes; if an entry is project-only and the user
+/// wants it in rush, they should copy to `~/.config/rush/mcp-servers.json`.
 fn registry_candidates() -> Vec<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -110,26 +122,35 @@ fn registry_candidates() -> Vec<PathBuf> {
     vec![
         h.join(".config").join("rush").join("mcp-servers.json"),
         h.join(".claude").join("mcp.json"),
+        h.join(".claude.json"),
         h.join(".config").join("Claude").join("claude_desktop_config.json"),
         h.join("Library").join("Application Support").join("Claude").join("claude_desktop_config.json"),
     ]
 }
 
 fn load_registry() -> Result<HashMap<String, McpServerConfig>, String> {
+    load_registry_with_source().map(|(m, _)| m)
+}
+
+fn load_registry_with_source() -> Result<(HashMap<String, McpServerConfig>, String), String> {
     let candidates = registry_candidates();
-    let mut attempts = Vec::new();
+    let mut attempts: Vec<String> = Vec::new();
     let (path, text) = candidates
         .into_iter()
-        .find_map(|p| match std::fs::read_to_string(&p) {
-            Ok(text) => Some((p, text)),
-            Err(_) => {
-                attempts.push(p.display().to_string());
-                None
+        .find_map(|p| {
+            let exists = p.exists();
+            match std::fs::read_to_string(&p) {
+                Ok(text) => Some((p, text)),
+                Err(_) => {
+                    let tag = if exists { "unreadable" } else { "missing" };
+                    attempts.push(format!("{} [{tag}]", p.display()));
+                    None
+                }
             }
         })
         .ok_or_else(|| {
             format!(
-                "mcp: no server registry found. Tried: {}",
+                "mcp: no server registry found. Checked: {}",
                 attempts.join(", ")
             )
         })?;
@@ -167,7 +188,7 @@ fn load_registry() -> Result<HashMap<String, McpServerConfig>, String> {
             .unwrap_or_default();
         out.insert(name.clone(), McpServerConfig { command, args, env });
     }
-    Ok(out)
+    Ok((out, path.display().to_string()))
 }
 
 // ── Client session ─────────────────────────────────────────────────
