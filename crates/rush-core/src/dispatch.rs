@@ -297,7 +297,7 @@ pub fn dispatch_with_jobs_and_builtins(
             };
             #[cfg(not(windows))]
             let parse_input: &str = segment;
-            let parts = process::parse_command_line(parse_input);
+            let parts = process::parse_command_line(parse_input.as_ref());
             let target = parts.get(1).map(String::as_str).unwrap_or("");
             let path = if target.is_empty() || target == "~" {
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
