@@ -53,7 +53,7 @@ pub fn is_rush_syntax(input: &str) -> bool {
     }
 
     // Built-in functions (can be called without parens)
-    let builtins = ["puts", "print", "warn", "die", "ask", "sleep", "exit", "ai"];
+    let builtins = ["puts", "print", "warn", "die", "ask", "sleep", "exit", "ai", "mcp", "mcp_servers"];
     if builtins.iter().any(|b| b.eq_ignore_ascii_case(first_word)) {
         return true;
     }

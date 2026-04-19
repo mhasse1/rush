@@ -694,6 +694,12 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::FunctionCall { name, args } => {
+                // Builtins that accept named args (mcp(server, tool, key: val))
+                // need the names preserved; fold them into a trailing hash so
+                // the generic value-call path stays uniform.
+                if name == "mcp" {
+                    return self.call_mcp_builtin(args);
+                }
                 let arg_vals: Vec<Value> = args
                     .iter()
                     .map(|a| self.eval_node(a))
@@ -1678,6 +1684,59 @@ impl<'a> Evaluator<'a> {
 
     // ── Function Calls ──────────────────────────────────────────────
 
+    /// `mcp(server, tool, key: val, ...)` — call an MCP tool.
+    /// Handled off the generic call path so NamedArg nodes keep their
+    /// key association; NamedArg evaluates to Nil in the generic eval.
+    fn call_mcp_builtin(&mut self, args: &[Node]) -> Result<Value, Signal> {
+        let mut positional: Vec<Value> = Vec::new();
+        let mut named = std::collections::HashMap::new();
+        for arg in args {
+            if let Node::NamedArg { name, value } = arg {
+                let v = self.eval_node(value)?;
+                named.insert(name.clone(), v);
+            } else {
+                positional.push(self.eval_node(arg)?);
+            }
+        }
+
+        let server = match positional.first() {
+            Some(Value::String(s)) => s.clone(),
+            Some(other) => other.to_rush_string(),
+            None => {
+                self.output.warn("mcp: missing server name");
+                return Ok(Value::Nil);
+            }
+        };
+        let tool = match positional.get(1) {
+            Some(Value::String(s)) => s.clone(),
+            Some(other) => other.to_rush_string(),
+            None => {
+                self.output.warn("mcp: missing tool name");
+                return Ok(Value::Nil);
+            }
+        };
+
+        // If a 3rd positional Hash is given and no named args, use it as the
+        // args object. Otherwise build the args object from the named args.
+        let args_json = if named.is_empty() {
+            match positional.get(2) {
+                Some(Value::Hash(h)) => crate::mcp_client::value_hash_to_json(h),
+                Some(other) => crate::mcp_client::value_to_json(other),
+                None => serde_json::json!({}),
+            }
+        } else {
+            crate::mcp_client::value_hash_to_json(&named)
+        };
+
+        match crate::mcp_client::call_tool(&server, &tool, args_json) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.output.warn(&e);
+                Ok(Value::Nil)
+            }
+        }
+    }
+
     fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Value, Signal> {
         // Builtins
         match name.to_ascii_lowercase().as_str() {
@@ -1735,6 +1794,13 @@ impl<'a> Evaluator<'a> {
                         return Ok(Value::Nil);
                     }
                 }
+            }
+            "mcp_servers" => {
+                // Diagnostic: list configured MCP servers.
+                let servers = crate::mcp_client::list_servers();
+                return Ok(Value::Array(
+                    servers.into_iter().map(Value::String).collect(),
+                ));
             }
             _ => {}
         }

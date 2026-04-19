@@ -23,6 +23,7 @@ pub mod hints;
 pub mod sync;
 pub mod mcp_ssh;
 pub mod mcp_install;
+pub mod mcp_client;
 pub mod plugin;
 pub mod objectify_config;
 pub mod lang_spec;

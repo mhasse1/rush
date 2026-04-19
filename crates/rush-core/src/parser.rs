@@ -3,7 +3,7 @@ use crate::lexer::Lexer;
 use crate::token::{Token, TokenType};
 
 /// Known builtin function names that can be called without parentheses.
-const BUILTIN_FUNCTIONS: &[&str] = &["puts", "print", "warn", "die", "ask", "sleep", "exit", "ai"];
+const BUILTIN_FUNCTIONS: &[&str] = &["puts", "print", "warn", "die", "ask", "sleep", "exit", "ai", "mcp", "mcp_servers"];
 
 fn is_builtin(name: &str) -> bool {
     BUILTIN_FUNCTIONS
