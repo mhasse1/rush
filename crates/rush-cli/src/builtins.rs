@@ -34,11 +34,10 @@ pub fn set_baseline_bg(hex: &str) {
     BASELINE_BG.with(|b| *b.borrow_mut() = Some(hex.to_string()));
     // If the session already started inside a `.rushbg` dir, seed
     // ACTIVE_RUSHBG so the first cd-away correctly reverts to baseline.
-    if let Some(rushbg) = rush_core::theme::load_rushbg() {
-        if rushbg != hex {
+    if let Some(rushbg) = rush_core::theme::load_rushbg()
+        && rushbg != hex {
             ACTIVE_RUSHBG.with(|a| *a.borrow_mut() = Some(rushbg));
         }
-    }
 }
 
 /// Reload `.rushbg` from the current working directory and apply its bg,
@@ -380,7 +379,7 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
     };
     #[cfg(not(windows))]
     let parse_input: &str = target;
-    let tokens = rush_core::process::parse_command_line(&parse_input);
+    let tokens = rush_core::process::parse_command_line(parse_input);
     let unquoted = tokens.first().map(String::as_str).unwrap_or("").to_string();
     let target = unquoted.as_str();
 
@@ -1102,8 +1101,8 @@ fn handle_set(args: &str) {
     }
 
     // set --secret KEY "value" — save to secrets.rush
-    if args.starts_with("--secret ") {
-        let rest = args[9..].trim();
+    if let Some(after) = args.strip_prefix("--secret ") {
+        let rest = after.trim();
         let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
         if parts.len() == 2 {
             let key = parts[0];
@@ -1155,11 +1154,10 @@ fn handle_set(args: &str) {
     }
 
     // vi/emacs always save (mode is fundamental). Others require --save.
-    if save || args == "vi" || args == "emacs" {
-        if let Err(e) = config.save() {
+    if (save || args == "vi" || args == "emacs")
+        && let Err(e) = config.save() {
             eprintln!("set: failed to save config: {e}");
         }
-    }
 }
 
 // ── setbg ───────────────────────────────────────────────────────────
@@ -1720,8 +1718,8 @@ fn handle_open(args: &str) {
 
     // Open each argument separately
     for target in args.split_whitespace() {
-        let target = if target.starts_with("~/") {
-            format!("{}/{}", std::env::var("HOME").unwrap_or_default(), &target[2..])
+        let target = if let Some(rest) = target.strip_prefix("~/") {
+            format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest)
         } else {
             target.to_string()
         };
@@ -1798,9 +1796,9 @@ fn handle_fc(evaluator: &mut Evaluator, args: &str) {
         return;
     }
 
-    if args.starts_with("-l ") {
+    if let Some(rest) = args.strip_prefix("-l ") {
         // fc -l first [last]
-        let parts: Vec<&str> = args[3..].split_whitespace().collect();
+        let parts: Vec<&str> = rest.split_whitespace().collect();
         let first: usize = parts.first().and_then(|s| s.parse().ok()).unwrap_or(lines.len().saturating_sub(16));
         let last: usize = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(lines.len());
         let first = first.saturating_sub(1).min(lines.len());
@@ -1882,8 +1880,8 @@ fn handle_getopts(evaluator: &mut Evaluator, args: &str) {
     evaluator.env.set(name, rush_core::value::Value::String(opt.to_string()));
 
     // Check if option takes an argument
-    if let Some(pos) = optstring.find(opt) {
-        if optstring.get(pos + 1..pos + 2) == Some(":") {
+    if let Some(pos) = optstring.find(opt)
+        && optstring.get(pos + 1..pos + 2) == Some(":") {
             // Option takes argument
             if arg.len() > 2 {
                 evaluator.env.set("OPTARG", rush_core::value::Value::String(arg[2..].to_string()));
@@ -1894,7 +1892,6 @@ fn handle_getopts(evaluator: &mut Evaluator, args: &str) {
                 return;
             }
         }
-    }
 
     evaluator.env.set("OPTIND", rush_core::value::Value::Int(optind as i64 + 1));
     evaluator.exit_code = 0;
@@ -1981,11 +1978,10 @@ fn handle_times() {
 
 pub fn load_init(evaluator: &mut Evaluator) {
     let init_path = config_dir().join("init.rush");
-    if init_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&init_path) {
+    if init_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&init_path) {
             run_script(evaluator, &content, "init.rush");
         }
-    }
 }
 
 /// Run a script handling shell builtins (path, export, alias) line-by-line,
@@ -2030,10 +2026,12 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             && !trimmed.contains("--save")
         {
             // Check if this is the start of a block (next lines until "end")
-            let rest = if trimmed.starts_with("path add") {
-                trimmed[8..].trim()
+            let rest = if let Some(r) = trimmed.strip_prefix("path add") {
+                r.trim()
+            } else if let Some(r) = trimmed.strip_prefix("path rm") {
+                r.trim()
             } else {
-                trimmed[7..].trim()
+                ""
             };
             // If there are inline arguments, execute normally
             if !rest.is_empty() {
@@ -2160,8 +2158,8 @@ fn flush_rush_buf(evaluator: &mut Evaluator, buf: &str, source_name: &str) {
 
 pub fn load_secrets(_evaluator: &mut Evaluator) {
     let secrets_path = config_dir().join("secrets.rush");
-    if secrets_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&secrets_path) {
+    if secrets_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&secrets_path) {
             for line in content.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with('#') {
@@ -2175,15 +2173,14 @@ pub fn load_secrets(_evaluator: &mut Evaluator) {
                 }
             }
         }
-    }
 }
 
 /// Load aliases from config.json
 pub fn load_aliases_from_config() {
     let config_path = config_dir().join("config.json");
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(aliases) = config.get("aliases").and_then(|a| a.as_object()) {
+    if let Ok(content) = std::fs::read_to_string(&config_path)
+        && let Ok(config) = serde_json::from_str::<serde_json::Value>(&content)
+            && let Some(aliases) = config.get("aliases").and_then(|a| a.as_object()) {
                 ALIASES.with(|a| {
                     let mut map = a.borrow_mut();
                     for (name, expansion) in aliases {
@@ -2193,8 +2190,6 @@ pub fn load_aliases_from_config() {
                     }
                 });
             }
-        }
-    }
 }
 
 // ── Inject built-in variables ───────────────────────────────────────
@@ -2275,11 +2270,10 @@ fn config_dir() -> std::path::PathBuf {
     // exists primarily so tests that exercise the --save persistence
     // paths (save_alias_to_config, save_path_to_init, etc.) can point
     // at a tempdir instead of clobbering the developer's real config.
-    if let Ok(dir) = std::env::var("RUSH_CONFIG_DIR") {
-        if !dir.is_empty() {
+    if let Ok(dir) = std::env::var("RUSH_CONFIG_DIR")
+        && !dir.is_empty() {
             return std::path::PathBuf::from(dir);
         }
-    }
     std::path::PathBuf::from(home_dir()).join(".config").join("rush")
 }
 

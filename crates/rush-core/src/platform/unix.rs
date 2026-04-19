@@ -9,6 +9,12 @@ pub struct UnixPlatform {
     shell_pgid: u32,
 }
 
+impl Default for UnixPlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UnixPlatform {
     pub fn new() -> Self {
         let pgid = unsafe { libc::getpgrp() } as u32;

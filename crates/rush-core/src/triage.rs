@@ -140,7 +140,7 @@ pub fn is_rush_syntax(input: &str) -> bool {
     // `{a:1}`. Shell `[ -f path ]` (the `test` bracket form) has a
     // mandatory space after the opener, so we exclude that.
     if trimmed.starts_with('[')
-        && trimmed.chars().nth(1).map_or(false, |c| !c.is_whitespace())
+        && trimmed.chars().nth(1).is_some_and(|c| !c.is_whitespace())
     {
         return true;
     }

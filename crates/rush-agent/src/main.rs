@@ -265,29 +265,25 @@ fn extract_command(response: &str) -> Option<String> {
 fn format_result(result: &LlmResult) -> String {
     let mut parts = vec![format!("[{}]", result.status)];
 
-    if let Some(ref stdout) = result.stdout {
-        if !stdout.is_empty() {
+    if let Some(ref stdout) = result.stdout
+        && !stdout.is_empty() {
             parts.push(stdout.clone());
         }
-    }
-    if let Some(ref stderr) = result.stderr {
-        if !stderr.is_empty() {
+    if let Some(ref stderr) = result.stderr
+        && !stderr.is_empty() {
             parts.push(format!("STDERR: {stderr}"));
         }
-    }
     if let Some(ref hint) = result.hint {
         parts.push(format!("HINT: {hint}"));
     }
-    if let Some(ref file) = result.file {
-        if let Some(ref content) = result.content {
+    if let Some(ref file) = result.file
+        && let Some(ref content) = result.content {
             parts.push(format!("FILE {file}:\n{content}"));
         }
-    }
-    if let Some(ref errors) = result.errors {
-        if !errors.is_empty() {
+    if let Some(ref errors) = result.errors
+        && !errors.is_empty() {
             parts.push(format!("ERRORS: {}", errors.join("; ")));
         }
-    }
     if let Some(ref et) = result.error_type {
         parts.push(format!("ERROR_TYPE: {et}"));
     }

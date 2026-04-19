@@ -41,11 +41,10 @@ fn main() {
     unsafe { std::env::set_var("RUSH_START_TIME", start_secs.to_string()) };
 
     // Set RUSHPATH for child processes (MCP-SSH uses this to find Rush)
-    if let Ok(exe) = std::env::current_exe() {
-        if let Ok(resolved) = std::fs::canonicalize(&exe) {
+    if let Ok(exe) = std::env::current_exe()
+        && let Ok(resolved) = std::fs::canonicalize(&exe) {
             unsafe { std::env::set_var("RUSHPATH", resolved.to_string_lossy().as_ref()) };
         }
-    }
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -176,8 +175,8 @@ fn main() {
     }
 
     // rush <file> [args...]: run a script
-    if let Some(file) = args.get(1) {
-        if !file.starts_with('-') {
+    if let Some(file) = args.get(1)
+        && !file.starts_with('-') {
             let input = std::fs::read_to_string(file).unwrap_or_else(|e| {
                 eprintln!("rush: cannot read {file}: {e}");
                 std::process::exit(1);
@@ -213,7 +212,6 @@ fn main() {
             builtins::run_script(&mut evaluator, &input, file);
             std::process::exit(evaluator.exit_code);
         }
-    }
 
     // Non-interactive stdin (pipe, heredoc): read and execute as a script.
     // Avoids leaking the REPL banner and the "Device not configured" error

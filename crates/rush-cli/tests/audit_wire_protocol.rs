@@ -473,7 +473,7 @@ fn llm__reset_clears_variables() {
     // Order: set-x, puts-x-before, reset, puts-x-after.
     assert_eq!(results[1]["stdout"], "42", "x should be 42 before reset");
     let after = results[3]["stdout"].as_str().unwrap_or("<missing>");
-    assert!(after.is_empty() || after == "" , "x should be cleared by reset, got {after:?}");
+    assert!(after.is_empty() || after.is_empty() , "x should be cleared by reset, got {after:?}");
 }
 
 /// Session reset: `reset` preserves session_id (identity) and cwd.

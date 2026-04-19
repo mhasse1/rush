@@ -485,6 +485,12 @@ pub struct CaptureOutput {
     pub stderr_buf: String,
 }
 
+impl Default for CaptureOutput {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CaptureOutput {
     pub fn new() -> Self {
         Self {
@@ -770,7 +776,7 @@ fn execute_command(input: &str, session: &mut LlmSession) -> LlmResult {
         };
         #[cfg(not(windows))]
         let parse_input: &str = input;
-        let parts = crate::process::parse_command_line(&parse_input);
+        let parts = crate::process::parse_command_line(parse_input);
         let target = parts.get(1).map(String::as_str).unwrap_or("");
         let path = if target.is_empty() || target == "~" {
             std::env::var("HOME").unwrap_or_else(|_| ".".into())

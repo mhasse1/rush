@@ -36,6 +36,7 @@ pub type BuiltinHandler = dyn FnMut(&str, &str) -> Option<i32>;
 ///   (e.g. `cd`, `exit` — builtins that have no stdin semantics).
 pub struct PipelineBuiltins<'a> {
     pub is_builtin: &'a dyn Fn(&str) -> bool,
+    #[allow(clippy::type_complexity)]
     pub handle_pipe: &'a mut dyn FnMut(&str, &str, &[u8]) -> Option<i32>,
 }
 
@@ -160,8 +161,8 @@ pub fn dispatch_with_jobs_and_builtins(
         }
 
         // Step 2c: Check for ! negation
-        let (negate, segment) = if segment.starts_with("! ") {
-            (true, &segment[2..])
+        let (negate, segment) = if let Some(rest) = segment.strip_prefix("! ") {
+            (true, rest)
         } else {
             (false, segment)
         };
@@ -296,7 +297,7 @@ pub fn dispatch_with_jobs_and_builtins(
             };
             #[cfg(not(windows))]
             let parse_input: &str = segment;
-            let parts = process::parse_command_line(&parse_input);
+            let parts = process::parse_command_line(parse_input);
             let target = parts.get(1).map(String::as_str).unwrap_or("");
             let path = if target.is_empty() || target == "~" {
                 std::env::var("HOME").unwrap_or_else(|_| ".".into())
@@ -653,7 +654,7 @@ pub fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String)
                 let left = &word[..eq_pos];
                 // Left side must be a valid identifier
                 if left.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && left.chars().next().map_or(false, |c| c.is_ascii_alphabetic() || c == '_')
+                    && left.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
                 {
                     let val = &word[eq_pos + 1..];
                     let val = val.trim_matches('"').trim_matches('\'');

@@ -398,11 +398,10 @@ pub fn run(is_login: bool) {
     }
 
     // Fire EXIT trap if set
-    if let Some(action) = rush_core::trap::get_exit_trap() {
-        if !action.is_empty() {
+    if let Some(action) = rush_core::trap::get_exit_trap()
+        && !action.is_empty() {
             crate::run_line(&mut evaluator, &action);
         }
-    }
 
     // Send SIGHUP to all background jobs (POSIX requirement)
     crate::builtins::JOB_TABLE.with(|jt| jt.borrow_mut().shutdown());

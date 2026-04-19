@@ -115,7 +115,7 @@ impl Completer for RushCompleter {
         let mut suggestions = Vec::new();
 
         let is_first_word = !line_to_pos[..word_start].contains(|c: char| !c.is_whitespace());
-        let after_pipe = line_to_pos.rfind('|').map_or(false, |p| p > line_to_pos.rfind(|c: char| !c.is_whitespace() && c != '|').unwrap_or(0));
+        let after_pipe = line_to_pos.rfind('|').is_some_and(|p| p > line_to_pos.rfind(|c: char| !c.is_whitespace() && c != '|').unwrap_or(0));
         let after_dot = word_start > 0 && line_to_pos.as_bytes().get(word_start - 1) == Some(&b'.');
         let looks_like_path = partial.contains('/') || partial.contains('\\') || partial.starts_with('~') || partial.starts_with('.');
 
@@ -148,8 +148,7 @@ impl Completer for RushCompleter {
         }
 
         // 3. Environment variable: $VAR
-        if partial.starts_with('$') {
-            let var_prefix = &partial[1..];
+        if let Some(var_prefix) = partial.strip_prefix('$') {
             for (key, _) in std::env::vars() {
                 if key.starts_with(var_prefix) || key.to_lowercase().starts_with(&var_prefix.to_lowercase()) {
                     suggestions.push(suggestion(format!("${key}"), span, true));
@@ -347,11 +346,10 @@ fn complete_commands(partial: &str, span: Span) -> Vec<Suggestion> {
                     #[cfg(unix)]
                     {
                         use std::os::unix::fs::PermissionsExt;
-                        if let Ok(meta) = entry.metadata() {
-                            if meta.permissions().mode() & 0o111 == 0 {
+                        if let Ok(meta) = entry.metadata()
+                            && meta.permissions().mode() & 0o111 == 0 {
                                 continue;
                             }
-                        }
                     }
                     seen.insert(name.clone());
                     suggestions.push(suggestion(name, span, true));
@@ -377,7 +375,7 @@ mod tests {
         let hits = complete_path("/E", span);
         let names: Vec<&str> = hits.iter().map(|s| s.value.as_str()).collect();
         assert!(
-            names.iter().any(|n| *n == "/etc/"),
+            names.contains(&"/etc/"),
             "expected /etc/ in case-insensitive hits for /E, got {names:?}"
         );
     }

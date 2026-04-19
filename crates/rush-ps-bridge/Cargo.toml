@@ -9,3 +9,6 @@ description = "PowerShell plugin bridge — routes ps...end blocks to PS7/PS5 vi
 rush-core = { path = "../rush-core" }
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

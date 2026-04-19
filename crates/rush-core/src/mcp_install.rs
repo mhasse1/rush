@@ -9,7 +9,7 @@
 //!   ~/.claude/settings.json                                 — Claude Code permissions
 
 use serde_json::{json, Value as JsonValue};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const LOCAL_SERVER: &str = "rush-local";
 const SSH_SERVER: &str = "rush-ssh";
@@ -82,7 +82,7 @@ fn home_path(relative: &str) -> PathBuf {
     home_dir().join(relative)
 }
 
-fn ensure_parent(path: &PathBuf) {
+fn ensure_parent(path: &Path) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }

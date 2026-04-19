@@ -1,8 +1,5 @@
 use crate::token::TokenType;
 
-/// Base trait for AST visitors (future use).
-/// All AST nodes are variants of the `Node` enum.
-
 /// A Rush AST node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Node {

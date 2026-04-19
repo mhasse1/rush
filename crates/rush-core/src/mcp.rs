@@ -406,7 +406,7 @@ mod tests {
         let content = result["content"][0]["text"].as_str().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content).unwrap();
         assert_eq!(parsed["shell"], "rush");
-        assert!(parsed["cwd"].as_str().unwrap().len() > 0);
+        assert!(!parsed["cwd"].as_str().unwrap().is_empty());
     }
 
     #[test]

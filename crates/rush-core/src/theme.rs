@@ -87,7 +87,7 @@ fn oklab_to_srgb(lab_l: f64, lab_a: f64, lab_b: f64) -> Option<(f64, f64, f64)> 
     let b = linear_to_srgb(b);
 
     // Check gamut
-    if r < -0.001 || r > 1.001 || g < -0.001 || g > 1.001 || b < -0.001 || b > 1.001 {
+    if !(-0.001..=1.001).contains(&r) || !(-0.001..=1.001).contains(&g) || !(-0.001..=1.001).contains(&b) {
         return None;
     }
 
@@ -1100,6 +1100,7 @@ pub fn load_rushbg() -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
 
@@ -1157,9 +1158,9 @@ mod tests {
     fn oklch_gamut_clamp() {
         // Very high chroma should be clamped to gamut
         let (r, g, b) = oklch_to_srgb(0.7, 0.4, 120.0);
-        assert!(r >= 0.0 && r <= 1.0);
-        assert!(g >= 0.0 && g <= 1.0);
-        assert!(b >= 0.0 && b <= 1.0);
+        assert!((0.0..=1.0).contains(&r));
+        assert!((0.0..=1.0).contains(&g));
+        assert!((0.0..=1.0).contains(&b));
     }
 
     #[test]
@@ -1228,9 +1229,9 @@ mod tests {
     fn palette_rgb_bounds() {
         for i in 0..=255u8 {
             let (r, g, b) = palette_rgb(i);
-            assert!(r >= 0.0 && r <= 1.0, "idx {i}: r={r}");
-            assert!(g >= 0.0 && g <= 1.0, "idx {i}: g={g}");
-            assert!(b >= 0.0 && b <= 1.0, "idx {i}: b={b}");
+            assert!((0.0..=1.0).contains(&r), "idx {i}: r={r}");
+            assert!((0.0..=1.0).contains(&g), "idx {i}: g={g}");
+            assert!((0.0..=1.0).contains(&b), "idx {i}: b={b}");
         }
     }
 
@@ -1744,7 +1745,7 @@ mod tests {
             let is_dark = bg_lum <= 0.179;
 
             println!("\n  bg: {bg_name} (lum={bg_lum:.3}, {})", if is_dark { "DARK" } else { "LIGHT" });
-            println!("  {:<18} {:>4} {:>8} {:>8}  {}", "role", "idx", "hex", "cr", "status");
+            println!("  {:<18} {:>4} {:>8} {:>8}  status", "role", "idx", "hex", "cr");
             println!("  {:-<60}", "");
 
             let mut used = Vec::new();

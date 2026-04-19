@@ -1379,7 +1379,7 @@ impl<'a> Evaluator<'a> {
             }
             "include?" | "contains" => {
                 let search = args.first().cloned().unwrap_or(Value::Nil);
-                Value::Bool(arr.iter().any(|v| *v == search))
+                Value::Bool(arr.contains(&search))
             }
             "push" | "append" => {
                 let mut new_arr = arr.to_vec();
@@ -1392,7 +1392,7 @@ impl<'a> Evaluator<'a> {
                 if let Some(block) = block {
                     let mut result = Vec::new();
                     for item in arr {
-                        let val = self.call_block(block, &[item.clone()]);
+                        let val = self.call_block(block, std::slice::from_ref(item));
                         result.push(val);
                     }
                     Value::Array(result)
@@ -1404,7 +1404,7 @@ impl<'a> Evaluator<'a> {
                 if let Some(block) = block {
                     let mut result = Vec::new();
                     for item in arr {
-                        let val = self.call_block(block, &[item.clone()]);
+                        let val = self.call_block(block, std::slice::from_ref(item));
                         if val.is_truthy() {
                             result.push(item.clone());
                         }
@@ -1418,7 +1418,7 @@ impl<'a> Evaluator<'a> {
                 if let Some(block) = block {
                     let mut result = Vec::new();
                     for item in arr {
-                        let val = self.call_block(block, &[item.clone()]);
+                        let val = self.call_block(block, std::slice::from_ref(item));
                         if !val.is_truthy() {
                             result.push(item.clone());
                         }
@@ -1431,7 +1431,7 @@ impl<'a> Evaluator<'a> {
             "each" => {
                 if let Some(block) = block {
                     for item in arr {
-                        self.call_block(block, &[item.clone()]);
+                        self.call_block(block, std::slice::from_ref(item));
                     }
                 }
                 Value::Array(arr.to_vec())
@@ -1915,6 +1915,7 @@ impl<'a> Evaluator<'a> {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
     use crate::parser;

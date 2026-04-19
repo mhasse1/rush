@@ -11,3 +11,13 @@ repository = "https://github.com/mhasse1/rush"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[workspace.lints.clippy]
+# Stylistic lints that tangle with Rust 2024 let-chains (and sometimes suggest
+# combinations that don't typecheck). We prefer the nested form in those spots.
+collapsible_if = "allow"
+collapsible_match = "allow"
+# cmp_owned fires on `string > other.to_string()` where the `.to_string()` is
+# load-bearing because `String` doesn't implement `PartialOrd<&str>` (only
+# `PartialEq<&str>`). Clippy's autofix produces code that doesn't compile.
+cmp_owned = "allow"

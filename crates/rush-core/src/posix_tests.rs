@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn posix_inline_env_var() {
-        let result = process::run_native_capture("_POSIX_TEST=hello echo $_POSIX_TEST");
+        let _result = process::run_native_capture("_POSIX_TEST=hello echo $_POSIX_TEST");
         // Note: in POSIX, inline vars only affect the command env, not expansion.
         // Our implementation expands vars first, so this tests the current behavior.
     }
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn posix_builtin_false() {
-        let (code, _) = dispatch_cmd("false");
+        let (_code, _) = dispatch_cmd("false");
         // Rush keyword false evaluates to Bool(false), exit code stays 0
         // This is correct for Rush — false is a value, not a command
     }
@@ -1186,7 +1186,7 @@ mod tests {
             crate::value::Value::String("-a".into()),
         ]));
         eval.env.set("OPTIND", crate::value::Value::Int(1));
-        let argv = vec!["-a"];
+        let argv = ["-a"];
         let opt = &argv[0][1..2];
         assert_eq!(opt, "a");
         assert!("ab".contains(opt));
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn posix_getopts_with_argument() {
         let optstring = "f:";
-        let argv = vec!["-f", "myfile"];
+        let argv = ["-f", "myfile"];
         let opt = &argv[0][1..2];
         assert_eq!(opt, "f");
         if let Some(pos) = optstring.find(opt) {

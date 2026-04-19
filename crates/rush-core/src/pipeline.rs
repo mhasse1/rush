@@ -434,7 +434,7 @@ fn apply_from(input: Value, args: &[String]) -> Value {
 fn apply_objectify(input: Value) -> Value {
     // If already objectified (array of hashes), pass through
     if let Value::Array(ref arr) = input {
-        if arr.first().map_or(false, |v| matches!(v, Value::Hash(_))) {
+        if arr.first().is_some_and(|v| matches!(v, Value::Hash(_))) {
             return input;
         }
     }
@@ -787,6 +787,7 @@ fn shell_split(s: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
 

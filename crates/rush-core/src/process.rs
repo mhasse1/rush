@@ -493,11 +493,10 @@ fn extract_redirections(parts: Vec<String>) -> (Vec<String>, Vec<Redirect>) {
             i += 2;
         }
         // 2>/dev/null or 2>file (no space)
-        else if parts[i].starts_with("2>") && parts[i].len() > 2 && !parts[i].starts_with("2>&") {
-            let rest = &parts[i][2..];
-            if rest.starts_with('>') {
+        else if let Some(rest) = parts[i].strip_prefix("2>") && !rest.is_empty() && !rest.starts_with('&') {
+            if let Some(file) = rest.strip_prefix('>') {
                 // 2>>file
-                redirects.push(Redirect::StderrAppend(rest[1..].to_string()));
+                redirects.push(Redirect::StderrAppend(file.to_string()));
             } else {
                 redirects.push(Redirect::StderrWrite(rest.to_string()));
             }
@@ -602,7 +601,8 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
                 stderr_cfg = Stdio::inherit(); // simplified — both to terminal
             }
             Redirect::ReadWrite(path) => {
-                match std::fs::OpenOptions::new().read(true).write(true).create(true).open(path) {
+                // <> means read+write without destroying existing content — do not truncate.
+                match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path) {
                     Ok(f) => {
                         // For <>, we'd need to dup the fd for both stdin and stdout.
                         // Simplified: open for stdin (most common use case for lock files)
@@ -1292,8 +1292,7 @@ fn expand_env_vars(arg: &str) -> String {
 /// Expand ${parameter} with modifiers.
 fn expand_parameter(content: &str) -> String {
     // ${#var} — string length
-    if content.starts_with('#') {
-        let var = &content[1..];
+    if let Some(var) = content.strip_prefix('#') {
         return std::env::var(var).map(|v| v.len().to_string()).unwrap_or("0".into());
     }
 
@@ -2233,7 +2232,6 @@ mod tests {
         unsafe { std::env::remove_var("_TEST_FILE") };
     }
 
-    #[test]
     // ── ANSI-C quoting ────────────────────────────────────────────
 
     #[test]

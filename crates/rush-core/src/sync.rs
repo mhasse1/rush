@@ -9,6 +9,7 @@ const SYNC_FILES: &[&str] = &["config.json", "init.rush"];
 
 /// Sync metadata stored in ~/.config/rush/sync.json
 #[derive(Debug, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SyncMeta {
     pub initialized: bool,
     pub transport: String,
@@ -17,17 +18,6 @@ pub struct SyncMeta {
     pub last_pull: Option<String>,
 }
 
-impl Default for SyncMeta {
-    fn default() -> Self {
-        Self {
-            initialized: false,
-            transport: String::new(),
-            target: String::new(),
-            last_push: None,
-            last_pull: None,
-        }
-    }
-}
 
 fn config_dir() -> PathBuf {
     let home = std::env::var("HOME")

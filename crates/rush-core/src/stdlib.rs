@@ -385,13 +385,13 @@ fn format_unix_timestamp(epoch_secs: i64, _local: bool) -> String {
     // Get local time via libc on Unix, or fallback to UTC
     #[cfg(unix)]
     {
-        use std::ffi::CStr;
+        
         unsafe {
             let t = epoch_secs as libc::time_t;
             let mut tm: libc::tm = std::mem::zeroed();
             libc::localtime_r(&t, &mut tm);
             let mut buf = [0u8; 64];
-            let fmt = CStr::from_bytes_with_nul_unchecked(b"%Y-%m-%d %H:%M:%S\0");
+            let fmt = c"%Y-%m-%d %H:%M:%S";
             let len = libc::strftime(
                 buf.as_mut_ptr() as *mut libc::c_char,
                 buf.len(),
@@ -626,7 +626,7 @@ pub fn ssh_method(method: &str, args: &[Value]) -> Value {
             };
             let command = arg_str(args, 1);
             if command.is_empty() {
-                stdlib_err(format!("Ssh.run: requires host(s) and command"));
+                stdlib_err("Ssh.run: requires host(s) and command".to_string());
                 return Value::Nil;
             }
             ssh_execute(&chain, &command)
@@ -785,8 +785,8 @@ mod tests {
     #[test]
     fn file_basename_dirname_ext() {
         let p = Value::String("/usr/local/bin/rush.exe".to_string());
-        assert_eq!(file_method("basename", &[p.clone()]), Value::String("rush.exe".to_string()));
-        assert_eq!(file_method("dirname", &[p.clone()]), Value::String("/usr/local/bin".to_string()));
+        assert_eq!(file_method("basename", std::slice::from_ref(&p)), Value::String("rush.exe".to_string()));
+        assert_eq!(file_method("dirname", std::slice::from_ref(&p)), Value::String("/usr/local/bin".to_string()));
         assert_eq!(file_method("ext", &[p]), Value::String("exe".to_string()));
     }
 
