@@ -2322,6 +2322,7 @@ mod tests {
         assert!(expanded.starts_with('/'));
     }
 
+    #[test]
     fn param_prefix_strip() {
         unsafe { std::env::set_var("_TEST_PATH", "/usr/local/bin") };
         assert_eq!(expand_parameter("_TEST_PATH#*/"), "usr/local/bin"); // shortest: just "/"

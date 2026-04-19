@@ -31,10 +31,6 @@ mod tests {
         process::run_native_capture(cmd).stdout.trim_end().to_string()
     }
 
-    fn expand(input: &str) -> String {
-        process::run_native_capture(&format!("echo {input}")).stdout.trim_end().to_string()
-    }
-
     // ═══════════════════════════════════════════════════════════════
     // §2.2 Quoting
     // ═══════════════════════════════════════════════════════════════
