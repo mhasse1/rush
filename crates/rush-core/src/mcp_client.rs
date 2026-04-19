@@ -55,14 +55,12 @@ pub fn call_tool(server: &str, tool: &str, args: JsonValue) -> Result<Value, Str
             }
         }
 
-        let (registry, source) = load_registry_with_source()?;
+        let (registry, trail) = load_registry_with_trail()?;
         let config = registry.into_iter().find(|(k, _)| k == server).map(|(_, v)| v)
             .ok_or_else(|| {
-                let mut names: Vec<String> = list_servers();
-                names.sort();
                 format!(
-                    "mcp: no server '{server}' in {source} (available: {})",
-                    if names.is_empty() { "none".to_string() } else { names.join(", ") }
+                    "mcp: no server '{server}' found. Checked: {}",
+                    trail.join("; ")
                 )
             })?;
 
@@ -104,16 +102,21 @@ pub struct McpServerConfig {
     pub env: HashMap<String, String>,
 }
 
-/// Candidate registry paths, in priority order. First one that exists wins.
+/// Candidate registry paths, in priority order (highest first).
+/// We union all readable files so legacy configs keep working; on duplicate
+/// server names, the higher-priority file wins.
 ///
-/// Rush-specific file lets users register extra servers just for rush;
-/// Claude Code and Claude Desktop configs make rush work out-of-the-box
-/// if either is already set up. They share the `mcpServers` shape.
+/// Order rationale:
+/// 1. `~/.config/rush/mcp-servers.json` — rush-native, explicit opt-in.
+/// 2. `~/.claude.json` — what `claude mcp add -s user` writes on current CLI.
+/// 3. `~/.claude/mcp.json` — legacy Claude Code path; older versions wrote
+///    here. Still read so legacy setups work, but current CLI doesn't update
+///    it so it may be stale — hence lower priority than ~/.claude.json.
+///    4-5. Claude Desktop configs (Linux / macOS) if that's what the user has.
 ///
-/// `~/.claude.json` (top-level) is Claude Code's full config — bigger file
-/// with per-project entries too. We read its top-level `mcpServers` key
-/// and ignore project scopes; if an entry is project-only and the user
-/// wants it in rush, they should copy to `~/.config/rush/mcp-servers.json`.
+/// We only read top-level `mcpServers`; project-scoped entries in
+/// `~/.claude.json` (`projects.*.mcpServers`) are ignored — if an entry
+/// is project-only and rush needs to call it, copy to the rush-native file.
 fn registry_candidates() -> Vec<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -121,53 +124,67 @@ fn registry_candidates() -> Vec<PathBuf> {
     let h = PathBuf::from(home);
     vec![
         h.join(".config").join("rush").join("mcp-servers.json"),
-        h.join(".claude").join("mcp.json"),
         h.join(".claude.json"),
+        h.join(".claude").join("mcp.json"),
         h.join(".config").join("Claude").join("claude_desktop_config.json"),
         h.join("Library").join("Application Support").join("Claude").join("claude_desktop_config.json"),
     ]
 }
 
-fn load_registry() -> Result<HashMap<String, McpServerConfig>, String> {
-    load_registry_with_source().map(|(m, _)| m)
+/// One source file's contribution to the merged registry, plus a trail
+/// entry describing what we found there (for error messages).
+struct SourceResult {
+    servers: HashMap<String, McpServerConfig>,
+    trail: String,
 }
 
-fn load_registry_with_source() -> Result<(HashMap<String, McpServerConfig>, String), String> {
-    let candidates = registry_candidates();
-    let mut attempts: Vec<String> = Vec::new();
-    let (path, text) = candidates
-        .into_iter()
-        .find_map(|p| {
-            let exists = p.exists();
-            match std::fs::read_to_string(&p) {
-                Ok(text) => Some((p, text)),
-                Err(_) => {
-                    let tag = if exists { "unreadable" } else { "missing" };
-                    attempts.push(format!("{} [{tag}]", p.display()));
-                    None
-                }
-            }
-        })
-        .ok_or_else(|| {
-            format!(
-                "mcp: no server registry found. Checked: {}",
-                attempts.join(", ")
-            )
-        })?;
-    let root: JsonValue = serde_json::from_str(&text)
-        .map_err(|e| format!("mcp: {} is not valid JSON: {e}", path.display()))?;
-    let servers = root
-        .get("mcpServers")
-        .and_then(|v| v.as_object())
-        .ok_or_else(|| "mcp: registry missing 'mcpServers' object".to_string())?;
+fn load_source(path: &std::path::Path) -> SourceResult {
+    let display = path.display().to_string();
 
-    let mut out = HashMap::new();
-    for (name, cfg) in servers {
-        let command = cfg
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| format!("mcp: server '{name}' missing 'command' field"))?
-            .to_string();
+    if !path.exists() {
+        return SourceResult {
+            servers: HashMap::new(),
+            trail: format!("{display} [missing]"),
+        };
+    }
+
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            return SourceResult {
+                servers: HashMap::new(),
+                trail: format!("{display} [unreadable: {e}]"),
+            };
+        }
+    };
+
+    let root: JsonValue = match serde_json::from_str(&text) {
+        Ok(v) => v,
+        Err(e) => {
+            return SourceResult {
+                servers: HashMap::new(),
+                trail: format!("{display} [invalid JSON: {e}]"),
+            };
+        }
+    };
+
+    let Some(obj) = root.get("mcpServers").and_then(|v| v.as_object()) else {
+        return SourceResult {
+            servers: HashMap::new(),
+            trail: format!("{display} [no mcpServers key]"),
+        };
+    };
+
+    let mut servers = HashMap::new();
+    let mut skipped = Vec::new();
+    for (name, cfg) in obj {
+        let command = match cfg.get("command").and_then(|v| v.as_str()) {
+            Some(c) => c.to_string(),
+            None => {
+                skipped.push(format!("{name} [no command]"));
+                continue;
+            }
+        };
         let args = cfg
             .get("args")
             .and_then(|v| v.as_array())
@@ -186,9 +203,58 @@ fn load_registry_with_source() -> Result<(HashMap<String, McpServerConfig>, Stri
                     .collect()
             })
             .unwrap_or_default();
-        out.insert(name.clone(), McpServerConfig { command, args, env });
+        servers.insert(name.clone(), McpServerConfig { command, args, env });
     }
-    Ok((out, path.display().to_string()))
+
+    let mut names: Vec<String> = servers.keys().cloned().collect();
+    names.sort();
+    let summary = if names.is_empty() {
+        "0 servers".to_string()
+    } else {
+        format!("{} servers: {}", names.len(), names.join(", "))
+    };
+    let suffix = if skipped.is_empty() {
+        String::new()
+    } else {
+        format!(", skipped: {}", skipped.join(", "))
+    };
+
+    SourceResult {
+        servers,
+        trail: format!("{display} [{summary}{suffix}]"),
+    }
+}
+
+fn load_registry() -> Result<HashMap<String, McpServerConfig>, String> {
+    load_registry_with_trail().map(|(m, _)| m)
+}
+
+/// Load every readable candidate file, union the results with priority to
+/// earlier files on duplicate keys. Returns `(merged, trail)` where `trail`
+/// is a human-readable chain of what was found where.
+fn load_registry_with_trail() -> Result<(HashMap<String, McpServerConfig>, Vec<String>), String> {
+    let candidates = registry_candidates();
+    let mut merged: HashMap<String, McpServerConfig> = HashMap::new();
+    let mut trail: Vec<String> = Vec::new();
+
+    for p in candidates {
+        let r = load_source(&p);
+        trail.push(r.trail);
+        for (name, cfg) in r.servers {
+            // Higher-priority sources come first, so preserve the first one
+            // we see for any given name.
+            merged.entry(name).or_insert(cfg);
+        }
+    }
+
+    if merged.is_empty() {
+        return Err(format!(
+            "mcp: no server registry found. Checked: {}",
+            trail.join("; ")
+        ));
+    }
+
+    Ok((merged, trail))
 }
 
 // ── Client session ─────────────────────────────────────────────────
@@ -545,5 +611,61 @@ mod tests {
             ]
         });
         assert_eq!(first_text_content(&result).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn load_source_missing_file_has_missing_tag() {
+        let p = std::path::Path::new("/tmp/rush_mcp_client_definitely_missing_xyz.json");
+        let r = load_source(p);
+        assert!(r.servers.is_empty());
+        assert!(r.trail.contains("[missing]"), "trail: {}", r.trail);
+    }
+
+    #[test]
+    fn load_source_parses_mcp_servers_and_summarizes() {
+        let tmp = std::env::temp_dir().join(format!(
+            "rush_mcp_test_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(
+            &tmp,
+            r#"{
+                "mcpServers": {
+                    "alpha": {"command": "true", "args": []},
+                    "beta": {"command": "true"}
+                }
+            }"#,
+        )
+        .unwrap();
+        let r = load_source(&tmp);
+        assert_eq!(r.servers.len(), 2);
+        assert!(r.trail.contains("2 servers: alpha, beta"), "trail: {}", r.trail);
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn load_source_reports_invalid_json() {
+        let tmp = std::env::temp_dir().join(format!(
+            "rush_mcp_invalid_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, "{ not json").unwrap();
+        let r = load_source(&tmp);
+        assert!(r.servers.is_empty());
+        assert!(r.trail.contains("[invalid JSON"), "trail: {}", r.trail);
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn load_source_reports_missing_mcpservers_key() {
+        let tmp = std::env::temp_dir().join(format!(
+            "rush_mcp_nokey_{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, r#"{"other": 42}"#).unwrap();
+        let r = load_source(&tmp);
+        assert!(r.servers.is_empty());
+        assert!(r.trail.contains("[no mcpServers key]"), "trail: {}", r.trail);
+        std::fs::remove_file(&tmp).ok();
     }
 }
