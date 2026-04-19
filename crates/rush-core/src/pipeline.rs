@@ -43,12 +43,30 @@ pub fn split_pipeline(line: &str) -> Vec<String> {
     let mut current = String::new();
     let mut in_single = false;
     let mut in_double = false;
+    // Track brace/bracket/paren depth so `|` inside `{ |x| x * 2 }`,
+    // `[1, 2, 3]`, or `(expr | expr)` isn't mistaken for a pipe.
+    // Without this, a.map { |x| x * 2 } gets split at the block-param
+    // pipes and dispatch tries to exec `x` as a shell command.
+    let mut brace_depth: i32 = 0;
+    let mut bracket_depth: i32 = 0;
+    let mut paren_depth: i32 = 0;
 
     for ch in line.chars() {
         match ch {
             '\'' if !in_double => in_single = !in_single,
             '"' if !in_single => in_double = !in_double,
-            '|' if !in_single && !in_double => {
+            '{' if !in_single && !in_double => brace_depth += 1,
+            '}' if !in_single && !in_double => brace_depth = brace_depth.saturating_sub(1).max(0),
+            '[' if !in_single && !in_double => bracket_depth += 1,
+            ']' if !in_single && !in_double => bracket_depth = bracket_depth.saturating_sub(1).max(0),
+            '(' if !in_single && !in_double => paren_depth += 1,
+            ')' if !in_single && !in_double => paren_depth = paren_depth.saturating_sub(1).max(0),
+            '|' if !in_single
+                && !in_double
+                && brace_depth == 0
+                && bracket_depth == 0
+                && paren_depth == 0 =>
+            {
                 segments.push(current.trim().to_string());
                 current.clear();
                 continue;
