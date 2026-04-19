@@ -1008,9 +1008,16 @@ impl<'a> Evaluator<'a> {
                 Ok(Value::Nil)
             }
 
-            Node::RegexLiteral { .. } => {
-                // Regex values stored as strings for now
-                Ok(Value::Nil)
+            Node::RegexLiteral { pattern, flags } => {
+                // Regex values are carried as strings. Flags are encoded inline
+                // with regex's `(?flags)` syntax so regex_match can just compile
+                // whatever string falls out.
+                let encoded = if flags.is_empty() {
+                    pattern.clone()
+                } else {
+                    format!("(?{flags}){pattern}")
+                };
+                Ok(Value::String(encoded))
             }
 
             Node::PluginBlock { plugin_name, raw_body } => {
@@ -1215,9 +1222,17 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn regex_match(&self, _left: &Value, _right: &Value) -> Value {
-        // TODO: implement regex matching
-        Value::Bool(false)
+    fn regex_match(&self, left: &Value, right: &Value) -> Value {
+        let haystack = left.to_rush_string();
+        let pattern = right.to_rush_string();
+        match regex::Regex::new(&pattern) {
+            Ok(re) => Value::Bool(re.is_match(&haystack)),
+            // A malformed pattern — treat as "no match" rather than crashing
+            // the whole evaluation. This preserves the current behavior of
+            // returning false for unusable inputs, while correctly matching
+            // when the pattern is valid.
+            Err(_) => Value::Bool(false),
+        }
     }
 
     // ── Method Calls ────────────────────────────────────────────────
@@ -1235,7 +1250,7 @@ impl<'a> Evaluator<'a> {
             Value::Hash(map) => self.hash_method(map, method, args),
             Value::Int(n) => self.int_method(*n, method, args, block),
             Value::Range(start, end, exclusive) => {
-                self.range_method(*start, *end, *exclusive, method)
+                self.range_method(*start, *end, *exclusive, method, args)
             }
             _ => {
                 // Index access
@@ -1512,7 +1527,18 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn range_method(&self, start: i64, end: i64, exclusive: bool, method: &str) -> Value {
+    fn range_method(&self, start: i64, end: i64, exclusive: bool, method: &str, args: &[Value]) -> Value {
+        // include?/contains are answered without materializing the range.
+        if matches!(method, "include?" | "contains") {
+            let n = match args.first() {
+                Some(Value::Int(n)) => *n,
+                Some(Value::Float(f)) => *f as i64,
+                _ => return Value::Bool(false),
+            };
+            let hit = if exclusive { n >= start && n < end } else { n >= start && n <= end };
+            return Value::Bool(hit);
+        }
+
         let items: Vec<Value> = if exclusive {
             (start..end).map(Value::Int).collect()
         } else {
@@ -1523,7 +1549,6 @@ impl<'a> Evaluator<'a> {
             "size" | "length" | "count" => Value::Int(items.len() as i64),
             "first" => items.first().cloned().unwrap_or(Value::Nil),
             "last" => items.last().cloned().unwrap_or(Value::Nil),
-            "include?" | "contains" => Value::Bool(true), // TODO: check args
             _ => Value::Nil,
         }
     }
@@ -2713,5 +2738,83 @@ mod tests {
     fn sleep_builtin() {
         // Just verify it doesn't crash (sleep 0 is instant)
         let _ = eval_val("sleep(0)");
+    }
+
+    // ── Regex matching ───────────────────────────────────────────────
+
+    #[test]
+    fn regex_match_hit() {
+        assert_eq!(eval_val(r#""hello world" =~ /world/"#), Value::Bool(true));
+    }
+
+    #[test]
+    fn regex_match_miss() {
+        assert_eq!(eval_val(r#""hello" =~ /goodbye/"#), Value::Bool(false));
+    }
+
+    #[test]
+    fn regex_not_match_hit() {
+        assert_eq!(eval_val(r#""hello" !~ /world/"#), Value::Bool(true));
+    }
+
+    #[test]
+    fn regex_not_match_miss() {
+        assert_eq!(eval_val(r#""hello" !~ /hello/"#), Value::Bool(false));
+    }
+
+    #[test]
+    fn regex_with_case_insensitive_flag() {
+        assert_eq!(eval_val(r#""HELLO" =~ /hello/i"#), Value::Bool(true));
+    }
+
+    #[test]
+    fn regex_anchored() {
+        assert_eq!(eval_val(r#""foo.log" =~ /\.log$/"#), Value::Bool(true));
+        assert_eq!(eval_val(r#""log.foo" =~ /\.log$/"#), Value::Bool(false));
+    }
+
+    #[test]
+    fn regex_invalid_pattern_returns_false() {
+        // Malformed pattern (unclosed bracket) should be treated as no match,
+        // not a runtime panic.
+        assert_eq!(eval_val(r#""hello" =~ /[unclosed/"#), Value::Bool(false));
+    }
+
+    // ── Range .include? / .contains ─────────────────────────────────
+
+    #[test]
+    fn range_include_inclusive_hit() {
+        assert_eq!(eval_val("(1..10).include?(5)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn range_include_inclusive_endpoints() {
+        assert_eq!(eval_val("(1..10).include?(1)"), Value::Bool(true));
+        assert_eq!(eval_val("(1..10).include?(10)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn range_include_inclusive_miss() {
+        assert_eq!(eval_val("(1..10).include?(0)"), Value::Bool(false));
+        assert_eq!(eval_val("(1..10).include?(11)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn range_include_exclusive_endpoints() {
+        // 1...10 is 1..9 inclusive; 10 is NOT in
+        assert_eq!(eval_val("(1...10).include?(1)"), Value::Bool(true));
+        assert_eq!(eval_val("(1...10).include?(9)"), Value::Bool(true));
+        assert_eq!(eval_val("(1...10).include?(10)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn range_contains_alias() {
+        assert_eq!(eval_val("(1..10).contains(5)"), Value::Bool(true));
+        assert_eq!(eval_val("(1..10).contains(99)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn range_include_non_numeric_arg_false() {
+        assert_eq!(eval_val(r#"(1..10).include?("foo")"#), Value::Bool(false));
     }
 }
