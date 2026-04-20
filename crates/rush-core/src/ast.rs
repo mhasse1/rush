@@ -29,6 +29,13 @@ pub enum Node {
         value: Box<Node>,
     },
 
+    /// Indexed assignment: `receiver[index] = expr` (hashes, arrays)
+    IndexAssignment {
+        receiver: Box<Node>,
+        index: Box<Node>,
+        value: Box<Node>,
+    },
+
     /// `if / elsif / else / end`
     If {
         condition: Box<Node>,

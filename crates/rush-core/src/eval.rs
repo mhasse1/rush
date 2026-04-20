@@ -145,18 +145,65 @@ impl<'a> Evaluator<'a> {
                 property,
                 value,
             } => {
-                // For self.x = val, we store as "self.x" or handle instance vars
-                // Simplified: store as flat variable for now
-                let recv = self.eval_node(receiver)?;
                 let val = self.eval_node(value)?;
-                if let Value::String(ref name) = recv {
-                    if name == "self" {
+                match receiver.as_ref() {
+                    // self.x = val — object property set (class methods).
+                    Node::VariableRef { name } if name == "self" => {
                         self.env.set(property, val.clone());
                     }
+                    // h.key = val — mutate the hash bound to `h` in place.
+                    // Previously fell through and was silently dropped (#261).
+                    Node::VariableRef { name } => {
+                        if let Some(Value::Hash(map)) = self.env.get(name).cloned() {
+                            let mut new_map = map;
+                            new_map.insert(
+                                property.trim_start_matches(':').to_string(),
+                                val.clone(),
+                            );
+                            self.env.set(name, Value::Hash(new_map));
+                        }
+                    }
+                    _ => {
+                        // Non-variable receiver (e.g. chained expressions) —
+                        // rvalue assignment target not supported.
+                    }
                 }
-                // If receiver is VariableRef("self"), set the property
-                if matches!(receiver.as_ref(), Node::VariableRef { name } if name == "self") {
-                    self.env.set(property, val.clone());
+                Ok(val)
+            }
+
+            Node::IndexAssignment {
+                receiver,
+                index,
+                value,
+            } => {
+                // h[k] = v / arr[i] = v — mutate the bound collection (#261).
+                let val = self.eval_node(value)?;
+                let idx = self.eval_node(index)?;
+                if let Node::VariableRef { name } = receiver.as_ref() {
+                    match self.env.get(name).cloned() {
+                        Some(Value::Hash(map)) => {
+                            let mut new_map = map;
+                            let key = idx.to_rush_string();
+                            // Strip leading `:` to match hash-literal normalization.
+                            let key = key.trim_start_matches(':').to_string();
+                            new_map.insert(key, val.clone());
+                            self.env.set(name, Value::Hash(new_map));
+                        }
+                        Some(Value::Array(arr)) => {
+                            if let Some(i) = idx.to_int() {
+                                let mut new_arr = arr;
+                                let n = new_arr.len() as i64;
+                                let i = if i < 0 { n + i } else { i };
+                                if i >= 0 && (i as usize) < new_arr.len() {
+                                    new_arr[i as usize] = val.clone();
+                                }
+                                self.env.set(name, Value::Array(new_arr));
+                            }
+                        }
+                        _ => {
+                            // Unbound or unsupported receiver type — no-op.
+                        }
+                    }
                 }
                 Ok(val)
             }
@@ -1651,12 +1698,20 @@ impl<'a> Evaluator<'a> {
             Value::String(s) => self.string_method(s, property, &[]),
             Value::Array(arr) => self.array_method_no_block(arr, property),
             Value::Hash(map) => {
-                // Try method first, then key access
+                // Key lookup wins over method dispatch when both exist —
+                // otherwise `{count: 99}.count` returned 1 (hash length)
+                // instead of 99 (the stored value). The Counter idiom from
+                // #261 (counts[x] = (counts[x] || 0) + 1) frequently uses
+                // "count" as a literal key, so key-first is the
+                // less-surprising rule.
+                if let Some(v) = map.get(property) {
+                    return v.clone();
+                }
                 match property {
                     "keys" | "values" | "length" | "size" | "count" | "empty?" => {
                         self.hash_method(map, property, &[])
                     }
-                    _ => map.get(property).cloned().unwrap_or(Value::Nil),
+                    _ => Value::Nil,
                 }
             }
             Value::Int(n) => self.int_method_no_block(*n, property),

@@ -112,6 +112,51 @@ fn script_multi_line_array_literal() {
     assert_eq!(stdout.trim(), "2");
 }
 
+#[test]
+fn script_multi_line_function_call() {
+    // #260: splitting a function call across lines at trailing commas
+    // inside unmatched parens must not terminate the statement. Same
+    // depth-tracking as multi-line arrays — different shape.
+    let dir = scratch_dir("multi_call");
+    let body = "\
+        #!/usr/bin/env rush\n\
+        def add3(a, b, c)\n\
+          a + b + c\n\
+        end\n\
+        x = add3(1,\n\
+                 2,\n\
+                 3)\n\
+        puts x\n";
+    let script = write_script(&dir, "call.rush", body);
+    let (code, stdout, _) = run(Command::new(RUSH).arg(&script));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "6");
+}
+
+#[test]
+fn script_counter_idiom_multi_line() {
+    // #261: indexed hash assignment inside a multi-line each block.
+    // Exercises parser + triage (for h[k] = v) + run_script's depth
+    // tracking simultaneously.
+    let dir = scratch_dir("counter");
+    let body = "\
+        #!/usr/bin/env rush\n\
+        counts = {}\n\
+        [\"a\", \"b\", \"a\", \"c\", \"a\", \"b\"].each do |x|\n\
+          counts[x] = (counts[x] || 0) + 1\n\
+        end\n\
+        puts counts[\"a\"]\n\
+        puts counts[\"b\"]\n\
+        puts counts[\"c\"]\n";
+    let script = write_script(&dir, "counter.rush", body);
+    let (code, stdout, _) = run(Command::new(RUSH).arg(&script));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines, vec!["3", "2", "1"]);
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Script file, invoked via explicit path
 // ═══════════════════════════════════════════════════════════════════

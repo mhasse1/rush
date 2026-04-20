@@ -91,6 +91,12 @@ pub fn is_rush_syntax(input: &str) -> bool {
                             let p = part.trim();
                             !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.' || c == '$')
                         });
+                    // Indexed assignment: h[k] = v, h.nested[k] = v, arr[i] = v
+                    // Shape: alphanumeric identifier (possibly dotted) then
+                    // a balanced [...] chunk, end of LHS. Real shell commands
+                    // rarely match this shape; Rush scripts do all the time
+                    // (#261 Counter idiom, etc.).
+                    let is_indexed = looks_like_indexed_assignment(before_eq);
                     // Inline env var prefix (POSIX 'VAR=val cmd args...'):
                     // first word has '=' with no space around it AND there's
                     // at least one more whitespace-separated word after.
@@ -102,7 +108,7 @@ pub fn is_rush_syntax(input: &str) -> bool {
                             .trim_start()
                             .chars().next()
                             .is_some();
-                    if is_ident && !is_inline_env_prefix {
+                    if (is_ident || is_indexed) && !is_inline_env_prefix {
                         return true;
                     }
                 }
@@ -119,6 +125,75 @@ pub fn is_rush_syntax(input: &str) -> bool {
     let stdlib = ["file", "dir", "time", "env", "path"];
     if stdlib.iter().any(|s| first_word.eq_ignore_ascii_case(s)) && first_word.contains('.') || trimmed.starts_with("File.") || trimmed.starts_with("Dir.") || trimmed.starts_with("Time.") || trimmed.starts_with("Path.") || trimmed.starts_with("env.") {
         return true;
+    }
+
+    // LHS pattern for indexed assignment: `ident([.ident]*)(\[…\])+`
+    // Cheap recognizer — no full parse, just shape. Returns true for
+    // h[k], counts[f.signal], data.items[0], h["nested key"], etc.
+    fn looks_like_indexed_assignment(lhs: &str) -> bool {
+        let s = lhs.trim();
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        // Identifier head: letters/digits/underscore, must not start digit.
+        if i >= bytes.len() || !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+            return false;
+        }
+        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+            i += 1;
+        }
+        // Optional dotted suffix: .ident.ident...
+        while i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            if i >= bytes.len() || !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+                return false;
+            }
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        }
+        // Must see at least one balanced [...] chunk. String contents allowed.
+        if i >= bytes.len() || bytes[i] != b'[' {
+            return false;
+        }
+        while i < bytes.len() && bytes[i] == b'[' {
+            let mut depth = 1;
+            let mut in_str: Option<u8> = None;
+            i += 1;
+            while i < bytes.len() && depth > 0 {
+                let c = bytes[i];
+                match (in_str, c) {
+                    (Some(q), b'\\') => {
+                        // Skip escaped char inside string.
+                        i += 2;
+                        let _ = q;
+                        continue;
+                    }
+                    (Some(q), c) if c == q => in_str = None,
+                    (None, b'"') => in_str = Some(b'"'),
+                    (None, b'\'') => in_str = Some(b'\''),
+                    (None, b'[') => depth += 1,
+                    (None, b']') => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return false;
+            }
+        }
+        // Accept a trailing dotted method suffix too: h[k].name (rare, but
+        // harmless to allow — parser handles the chain).
+        while i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            if i >= bytes.len() || !(bytes[i].is_ascii_alphabetic() || bytes[i] == b'_') {
+                return false;
+            }
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+        }
+        // Must have consumed all of LHS.
+        i == bytes.len()
     }
 
     // Method call on first word: word.method( — only if first_word itself contains a dot

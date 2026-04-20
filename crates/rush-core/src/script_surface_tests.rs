@@ -105,6 +105,10 @@ fn array_literal_single_line() {
     expect_output("arr = [1, 2, 3]; puts arr.length", "3");
 }
 
+// #260 — multi-line function calls require the binary's line-by-line
+// depth tracking; dispatch-level execution gets a single flat string.
+// Binary coverage in script_execution.rs::multi_line_function_call_*.
+
 #[test]
 fn array_multi_line_literal() {
     // ISSUE #252: multi-line array literals fail parse ("Expected RBracket, got Eof").
@@ -173,6 +177,39 @@ fn hash_length() {
     // parser, not a hash argument. That's a separate issue worth its own
     // test — see `puts_hash_literal_directly_without_parens_is_ambiguous`.
     expect_output("h = {a: 1, b: 2, c: 3}; puts h.length", "3");
+}
+
+#[test]
+fn hash_bracket_assignment() {
+    // #261: `h[k] = v` must mutate the bound hash.
+    expect_output(
+        r#"h = {}; h["a"] = 1; h["b"] = 2; puts h.length"#,
+        "2",
+    );
+}
+
+#[test]
+fn hash_dot_assignment() {
+    // #261: `h.key = v` must mutate (was silently no-op).
+    expect_output("h = {count: 0}; h.count = 5; puts h.count", "5");
+}
+
+#[test]
+fn hash_counter_idiom() {
+    // #261: the Counter/group-by idiom the bug report called out as
+    // the common use case for indexed hash assignment. Single-line
+    // form here because dispatch-level tests (this module) don't do
+    // the line-by-line bracket tracking that run_script does — the
+    // multi-line form is covered by script_execution.rs.
+    let program =
+        r#"counts = {}; ["a","b","a","c","a","b"].each { |x| counts[x] = (counts[x] || 0) + 1 }; puts counts["a"]; puts counts["b"]; puts counts["c"]"#;
+    expect_output(program, "3\n2\n1");
+}
+
+#[test]
+fn array_index_assignment() {
+    // #261 side-effect: same machinery covers array index mutation.
+    expect_output("a = [1, 2, 3]; a[0] = 99; puts a[0]", "99");
 }
 
 // ═══════════════════════════════════════════════════════════════════

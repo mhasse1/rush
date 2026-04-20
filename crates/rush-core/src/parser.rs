@@ -947,6 +947,32 @@ impl Parser {
             }
         }
 
+        // Indexed assignment: expr[index] = value — bracket-access parses as
+        // a MethodCall with method "[]", so we reach in and rewrap as an
+        // IndexAssignment when followed by `=`. Covers h["k"] = v and
+        // arr[i] = v.
+        if let Node::MethodCall {
+            ref receiver,
+            ref method,
+            ref args,
+            block: None,
+        } = expr
+        {
+            if method == "[]"
+                && args.len() == 1
+                && self.check(TokenType::Assign)
+                && self.peek(1).token_type != TokenType::Assign
+            {
+                self.pos += 1; // skip =
+                let value = self.parse_expression()?;
+                return self.wrap_postfix(Node::IndexAssignment {
+                    receiver: receiver.clone(),
+                    index: Box::new(args[0].clone()),
+                    value: Box::new(value),
+                });
+            }
+        }
+
         self.wrap_postfix(expr)
     }
 
