@@ -87,6 +87,65 @@ fn apply_bg_silent(hex: &str) {
     }
 }
 
+/// Reset the background to its config-driven baseline, picking up any
+/// `.rushbg` override in the current directory. Used by `reload` to
+/// undo a transient in-session `setbg` so the terminal reflects the
+/// current project's intended theme again (#264).
+///
+/// Clears the RUSH_BG / RUSH_FLAVOR / RUSH_ACCENT env vars first so
+/// config values take precedence over whatever `setbg` last wrote,
+/// re-seeds the baseline tracker, then applies the right color.
+fn reset_bg_from_config() {
+    let config = rush_core::config::RushConfig::load();
+
+    unsafe {
+        std::env::remove_var("RUSH_BG");
+        std::env::remove_var("RUSH_FLAVOR");
+        std::env::remove_var("RUSH_ACCENT");
+    }
+    if !config.flavor.is_empty() {
+        unsafe { std::env::set_var("RUSH_FLAVOR", &config.flavor) };
+    }
+    if !config.accent.is_empty() {
+        unsafe { std::env::set_var("RUSH_ACCENT", &config.accent) };
+    }
+
+    // .rushbg in cwd takes precedence over config baseline.
+    let desired = rush_core::theme::load_rushbg()
+        .or_else(|| {
+            if config.bg.is_empty() {
+                None
+            } else {
+                Some(config.bg.clone())
+            }
+        });
+
+    // Reset the session baseline + active tracking so future cd's
+    // revert correctly.
+    BASELINE_BG.with(|b| *b.borrow_mut() = Some(config.bg.clone()));
+    ACTIVE_RUSHBG.with(|a| {
+        *a.borrow_mut() = if let Some(ref hex) = desired {
+            if hex != &config.bg {
+                Some(hex.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+
+    match desired {
+        Some(hex) => apply_bg_silent(&hex),
+        None => {
+            // No bg configured anywhere — reset terminal to its default.
+            print!("\x1b]111\x07");
+            use std::io::Write;
+            std::io::stdout().flush().ok();
+        }
+    }
+}
+
 /// The static list of names this module intercepts in `handle()`. Used
 /// by `is_builtin` to answer dispatch's "is this name a rush-cli builtin?"
 /// question when deciding how to route a pipeline RHS. Keep in sync with
@@ -1753,6 +1812,18 @@ fn handle_reload(evaluator: &mut Evaluator, args: &str) {
             Some(p) => std::path::PathBuf::from(p),
             None => exe.clone(),
         };
+
+        // Clear the theme env vars so the exec'd process derives bg /
+        // flavor / accent fresh from config + .rushbg instead of
+        // inheriting whatever setbg last wrote (#264). Without this,
+        // the new process's `RUSH_BG.is_none()` check in repl::run
+        // fails and the transient color becomes the new "baseline."
+        unsafe {
+            std::env::remove_var("RUSH_BG");
+            std::env::remove_var("RUSH_FLAVOR");
+            std::env::remove_var("RUSH_ACCENT");
+        }
+
         eprintln!("Reloading rush...");
 
         #[cfg(unix)]
@@ -1768,10 +1839,14 @@ fn handle_reload(evaluator: &mut Evaluator, args: &str) {
         return;
     }
 
-    // Soft reload: re-run init.rush and re-detect theme
+    // Soft reload: re-run init.rush and re-apply theme from config + cwd.
     eprintln!("Reloading config...");
 
-    // Re-detect theme
+    // Reset the background to its config-driven baseline (or cwd .rushbg),
+    // undoing any transient in-session setbg (#264).
+    reset_bg_from_config();
+
+    // Re-detect theme (picks up the freshly-applied RUSH_BG).
     let _theme = rush_core::theme::initialize();
 
     // Re-load aliases
