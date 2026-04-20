@@ -1182,14 +1182,17 @@ fn handle_setbg(args: &str) {
         let save = args.contains("--save");
         let local = args.contains("--local");
         if let Some(hex) = run_color_selector() {
-            // Apply the selected color
-            let apply_args = if save {
-                format!("{hex} --save")
-            } else if local {
-                format!("{hex} --local")
-            } else {
-                hex
-            };
+            // Forward BOTH persistence flags when both are given; the
+            // prior if/else chain dropped `--local` whenever `--save`
+            // was also present, so `setbg --save --selector --local`
+            // silently skipped writing the .rushbg file (#262).
+            let mut apply_args = hex;
+            if save {
+                apply_args.push_str(" --save");
+            }
+            if local {
+                apply_args.push_str(" --local");
+            }
             handle_setbg(&apply_args);
         }
         return;
