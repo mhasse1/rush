@@ -1084,7 +1084,15 @@ impl<'a> Evaluator<'a> {
             }
 
             Node::PluginBlock { plugin_name, raw_body } => {
-                match crate::plugin::execute(plugin_name, raw_body) {
+                // Expand Rush-side #{var} interpolation before the body
+                // reaches the companion binary — otherwise
+                //   server = "host1"
+                //   plugin.ps
+                //     Get-Service -ComputerName #{server}
+                //   end
+                // passed literal #{server} to PowerShell (#176).
+                let body = self.expand_interpolation(raw_body);
+                match crate::plugin::execute(plugin_name, &body) {
                     Ok(output) => {
                         if !output.is_empty() {
                             self.output.puts(&output);

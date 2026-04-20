@@ -372,7 +372,7 @@ pub fn handle(evaluator: &mut Evaluator, line: &str) -> bool {
         "sync" => { rush_core::sync::handle_sync(args); true }
         "ai" => { handle_ai(args); true }
         "sql" => { handle_sql(args); true }
-        "init" => { handle_init(); true }
+        "init" => { handle_init(args); true }
         "printf" => { handle_printf(args); true }
         "mark" | "---" => { handle_mark(args); true }
         ":" | "true" => { evaluator.exit_code = 0; true }
@@ -1749,25 +1749,55 @@ fn handle_mark(args: &str) {
 
 // ── init — open init.rush in $EDITOR ─────────────────────────────────
 
-fn handle_init() {
+fn handle_init(args: &str) {
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| {
         if cfg!(windows) { "notepad".into() } else { "vi".into() }
     });
-    let init_path = config_dir().join("init.rush");
 
-    // Create if doesn't exist
-    if !init_path.exists() {
-        std::fs::create_dir_all(init_path.parent().unwrap()).ok();
-        std::fs::write(&init_path, "# ~/.config/rush/init.rush\n# Startup script — runs on every shell launch.\n").ok();
+    // `init` (no args)    → init.rush (startup script)
+    // `init config`       → config.json (#263)
+    // `init secrets`      → secrets.rush
+    // Anything else is treated as a file name under ~/.config/rush/.
+    let target = args.trim();
+    let (filename, template) = match target {
+        "" | "init" | "init.rush" => (
+            "init.rush",
+            "# ~/.config/rush/init.rush\n# Startup script — runs on every shell launch.\n",
+        ),
+        "config" | "config.json" => (
+            "config.json",
+            "{\n  // ~/.config/rush/config.json — shell settings (JSONC)\n  \"flavor\": \"\",\n  \"accent\": \"\",\n  \"bg\": \"\"\n}\n",
+        ),
+        "secrets" | "secrets.rush" => (
+            "secrets.rush",
+            "# ~/.config/rush/secrets.rush\n# API keys and other credentials — loaded after init.rush.\n# Example:\n#   env.ANTHROPIC_API_KEY = \"sk-...\"\n",
+        ),
+        other => {
+            eprintln!("init: unknown target '{other}'. Try: init, init config, init secrets");
+            return;
+        }
+    };
+
+    let path = config_dir().join(filename);
+    if !path.exists() {
+        std::fs::create_dir_all(path.parent().unwrap()).ok();
+        std::fs::write(&path, template).ok();
     }
 
-    let path_str = init_path.to_string_lossy().to_string();
+    let path_str = path.to_string_lossy().to_string();
     std::process::Command::new(&editor)
         .arg(&path_str)
         .status()
         .ok();
 
-    eprintln!("Tip: run 'reload' to apply changes.");
+    // Only init.rush and secrets.rush are reload-able at runtime —
+    // config.json needs a re-exec because several values (prompt theme,
+    // history settings) are read once at startup.
+    let tip = match filename {
+        "config.json" => "Tip: run 'reload --hard' to pick up config.json changes.",
+        _ => "Tip: run 'reload' to apply changes.",
+    };
+    eprintln!("{tip}");
 }
 
 // ── o (open) — cross-platform open ──────────────────────────────────
