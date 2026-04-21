@@ -290,6 +290,84 @@ fn shell_then_value_op_still_works() {
     assert_eq!(stdout.trim(), "1");
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Mid-chain transitions: the value/shell/value/shell handoffs
+// (#265 Phase 3 — regression coverage, not behavior changes)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn pipeline_shell_then_shell_then_value_op() {
+    // shell → shell → value-op. Text flows through grep then lands in
+    // `count` which sees line-text (one match = one line).
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "echo -e 'a\\nb\\nc' | grep b | count",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn pipeline_shell_shell_value_op_shell() {
+    // shell → shell → value-op → shell. The value-op's output gets
+    // serialized via format_value_for_stdin for the trailing shell stage.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "echo -e 'a\\nb\\nc' | grep b | first 1 | tr a-z A-Z",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "B");
+}
+
+#[test]
+fn pipeline_value_shell_value_op() {
+    // value → shell → value-op. Array-of-strings serializes as
+    // newline-joined, grep filters, count reads line-text.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        r#"["a","b","c"] | grep b | count"#,
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn pipeline_value_value_op_shell() {
+    // value → value-op → shell. `first 2` stays Value::Array,
+    // serialized to newline-joined text for cat.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "[1, 2, 3, 4] | first 2 | /bin/cat",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim().lines().collect::<Vec<_>>(), vec!["1", "2"]);
+}
+
+#[test]
+fn pipeline_shell_value_op_value_op_shell() {
+    // shell → value-op → value-op → shell. Two value-ops in a row
+    // keep the Value threaded; the trailing shell serializes once at
+    // the boundary.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "echo -e '1\\n2\\n3\\n4' | first 3 | count | /bin/cat",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn pipeline_value_hash_to_shell_to_value_op() {
+    // value (hash) → shell (pass-through) → value-op. Hash serializes
+    // as one-line JSON; cat passes it through; count sees one line.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        r#"{a: 1, b: 2} | /bin/cat | count"#,
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
 #[test]
 fn script_counter_idiom_multi_line() {
     // #261: indexed hash assignment inside a multi-line each block.
