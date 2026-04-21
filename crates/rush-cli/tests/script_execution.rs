@@ -134,6 +134,96 @@ fn script_multi_line_function_call() {
     assert_eq!(stdout.trim(), "6");
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Unified pipelines: value sources feeding `|` (#265 Phase 1)
+// ═══════════════════════════════════════════════════════════════════
+
+#[test]
+fn value_pipe_array_literal_to_count() {
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", "[1, 2, 3] | count"]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn value_pipe_array_literal_to_first() {
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", "[10, 20, 30] | first 2"]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "[10, 20]");
+}
+
+#[test]
+fn value_pipe_bare_variable_to_count() {
+    // Bare variable that's a Rush value should route into the value
+    // pipeline instead of being dispatched as a shell command (used to
+    // error with "rush: arr: command not found").
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "arr = [1, 2, 3]; arr | count",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "3");
+}
+
+#[test]
+fn value_pipe_string_literal_to_count() {
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", r#""hello" | count"#]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn value_pipe_command_substitution_to_count() {
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", "$(echo hello) | count"]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
+fn value_pipe_function_call_to_first() {
+    // A user-fn call returning a value feeds straight into a value op.
+    // `first 2` instead of `first 1` because `first 1` unwraps to the
+    // scalar (quirk of apply_first), which would obscure the fact the
+    // array flowed through the pipeline.
+    let dir = scratch_dir("fn_pipe");
+    let body = "\
+        #!/usr/bin/env rush\n\
+        def ret_arr()\n\
+          [10, 20, 30]\n\
+        end\n\
+        ret_arr() | first 2\n";
+    let script = write_script(&dir, "fn_pipe.rush", body);
+    let (code, stdout, _) = run(Command::new(RUSH).arg(&script));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "[10, 20]");
+}
+
+#[test]
+fn value_pipe_unbound_name_still_runs_as_shell() {
+    // Regression guard: an unbound identifier must NOT be treated as a
+    // value source — it still falls through to shell dispatch. This
+    // invocation should exit non-zero because the command doesn't exist.
+    let (code, _, _) = run(Command::new(RUSH).args([
+        "-c",
+        "definitelynotacommand_zxq | head -1",
+    ]));
+    assert_ne!(code, 0, "unbound name should error at shell dispatch");
+}
+
+#[test]
+fn shell_then_value_op_still_works() {
+    // Regression guard: the classic shell-to-value-op handoff (text
+    // output parsed into records) keeps working alongside the new
+    // value-source path.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "echo hello | count",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
 #[test]
 fn script_counter_idiom_multi_line() {
     // #261: indexed hash assignment inside a multi-line each block.

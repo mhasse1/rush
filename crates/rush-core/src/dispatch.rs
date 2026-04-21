@@ -857,15 +857,26 @@ fn run_pipeline(
             text_val
         }
     } else if !triage::is_rush_syntax(first) {
-        let result = process::run_native_capture(first);
-        if !result.stderr.is_empty() {
-            eprintln!("{}", result.stderr);
-        }
-        let text_val = pipeline::text_to_array(&result.stdout);
-        if auto_obj {
-            pipeline::apply_pipe_op(text_val, &pipeline::parse_pipe_op("objectify"))
+        // Before routing to shell, check whether the first segment is
+        // actually a Rush value expression that triage conservatively
+        // classified as "shell." Covers bare Rush variable refs
+        // (`arr | where …`), string literals (`"text" | count`),
+        // command substitutions (`$(…) | op`), and any expression-shape
+        // the parser recognizes. Unlocks the #249 sketch form — value
+        // sources can now start a pipeline. (#265 Phase 1.)
+        if let Some(val) = try_eval_as_value_source(first, evaluator) {
+            val
         } else {
-            text_val
+            let result = process::run_native_capture(first);
+            if !result.stderr.is_empty() {
+                eprintln!("{}", result.stderr);
+            }
+            let text_val = pipeline::text_to_array(&result.stdout);
+            if auto_obj {
+                pipeline::apply_pipe_op(text_val, &pipeline::parse_pipe_op("objectify"))
+            } else {
+                text_val
+            }
         }
     } else {
         match parser::parse(first) {
@@ -883,6 +894,70 @@ fn run_pipeline(
     };
 
     run_pipeline_from_value(evaluator, value, &segments[1..], builtins)
+}
+
+/// If `segment` parses as a single Rush expression that yields a value,
+/// evaluate it and return the value. Used to route things like
+/// `arr | where …`, `"hello" | count`, or `$(cmd) | op` into the
+/// value-pipeline path even though `triage::is_rush_syntax` returns
+/// false for those shapes (the heuristic is deliberately conservative).
+///
+/// Returns `None` when:
+///   - the segment doesn't parse
+///   - it parses to zero or multiple top-level nodes
+///   - the single node is a bare variable reference to a name that
+///     isn't currently bound in the Rush scope (falling through to
+///     shell dispatch matches prior behavior for unknown names)
+///   - the node is a shape that could be a command (function calls
+///     with no parens, etc.) — we stay conservative here; the parser
+///     has specific patterns it accepts for call shapes, so recognized
+///     expression nodes are the green-path set below.
+fn try_eval_as_value_source(
+    segment: &str,
+    evaluator: &mut Evaluator,
+) -> Option<Value> {
+    use crate::ast::Node;
+
+    let nodes = parser::parse(segment).ok()?;
+    if nodes.len() != 1 {
+        return None;
+    }
+
+    // Unambiguous value-expression shapes. BinaryOp / UnaryOp / Ternary
+    // are deliberately excluded — `df -h` parses as `df - h` (BinaryOp)
+    // and `!file` as UnaryOp, both of which are shell-command shapes the
+    // parser just happens to accept. Users who genuinely want arithmetic
+    // LHS can assign to a variable first: `x = 1 + 2; x | op`.
+    let is_value_expr = matches!(
+        &nodes[0],
+        Node::Array { .. }
+            | Node::Hash { .. }
+            | Node::Literal { .. }           // numbers, strings, true/false, nil
+            | Node::InterpolatedString { .. }
+            | Node::Range { .. }
+            | Node::Symbol { .. }
+            | Node::RegexLiteral { .. }
+            | Node::CommandSub { .. }
+            | Node::MethodCall { .. }
+            | Node::FunctionCall { .. }
+            | Node::PropertyAccess { .. }
+            | Node::SafeNav { .. }
+    );
+
+    if is_value_expr {
+        return evaluator.exec_toplevel(&nodes).ok();
+    }
+
+    // Bare variable reference — only route as value if the name is
+    // currently bound. An unbound identifier should fall through to
+    // shell dispatch so `foo | bar` still runs `foo` on PATH.
+    if let Node::VariableRef { name } = &nodes[0] {
+        if evaluator.env.get(name).is_some() {
+            return evaluator.exec_toplevel(&nodes).ok();
+        }
+    }
+
+    None
 }
 
 /// Render a Value as the text that will be written to a child process's

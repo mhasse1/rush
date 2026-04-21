@@ -2099,6 +2099,74 @@ pub fn load_init(evaluator: &mut Evaluator) {
 /// and batching Rush syntax for the parser.
 /// Run a script with per-line dispatch: builtins, Rush syntax, shell commands.
 /// Public so script files and init.rush use the same path.
+/// Check whether a trimmed script line opens a Ruby-style `do ... end`
+/// block — either `... do` at end-of-line or `... do |params|` form.
+/// Used by run_script to bump block_depth for these blocks, which
+/// aren't caught by the first-word block_openers list.
+fn line_ends_with_block_do(trimmed: &str) -> bool {
+    // Strip trailing `|params|` if present. Conservatively: if the line
+    // ends with `|`, walk backward to the matching `|`.
+    let s = trimmed.trim_end();
+    let stripped: &str = if let Some(head) = s.strip_suffix('|') {
+        match head.rfind('|') {
+            Some(open) => s[..open].trim_end(),
+            None => s,
+        }
+    } else {
+        s
+    };
+    // Must end with the word "do" as a standalone token.
+    if !stripped.ends_with("do") {
+        return false;
+    }
+    let before = &stripped[..stripped.len() - 2];
+    before.is_empty() || before.chars().last().is_some_and(|c| c.is_whitespace())
+}
+
+/// Check whether a single line contains a pipe character `|` at the
+/// top level — i.e., outside all string quotes, brackets, braces, and
+/// parens. Used by run_script to route pipeline-shaped lines through
+/// dispatch rather than the Rush parser, even when the first word
+/// looks like Rush syntax (e.g., `ret_arr() | first 1`).
+fn line_has_top_level_pipe(line: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut bracket = 0i32;
+    let mut brace = 0i32;
+    let mut paren = 0i32;
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if !in_single => {
+                chars.next();
+            }
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '[' if !in_single && !in_double => bracket += 1,
+            ']' if !in_single && !in_double => bracket = (bracket - 1).max(0),
+            '{' if !in_single && !in_double => brace += 1,
+            '}' if !in_single && !in_double => brace = (brace - 1).max(0),
+            '(' if !in_single && !in_double => paren += 1,
+            ')' if !in_single && !in_double => paren = (paren - 1).max(0),
+            '|' if !in_single
+                && !in_double
+                && bracket == 0
+                && brace == 0
+                && paren == 0 =>
+            {
+                // `||` is a chain operator; swallow the pair.
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                    continue;
+                }
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Update bracket/brace/paren depth counters based on the characters in
 /// one script line, respecting single/double quote state. Shared between
 /// run_script and anywhere else that needs line-level delimiter tracking.
@@ -2242,7 +2310,12 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
         } else {
             false
         };
-        if effective_opener {
+        // `do` is a suffix-style opener on method-call-with-block lines
+        // (`arr.each do |x|`, `5.times do`, etc.). Detect it so those
+        // lines accumulate into rush_buf as part of the block body
+        // rather than being flushed or dispatched individually.
+        let trailing_do = line_ends_with_block_do(trimmed);
+        if effective_opener || trailing_do {
             block_depth += 1;
         }
         if first_word.eq_ignore_ascii_case("end") && block_depth > 0 {
@@ -2296,6 +2369,17 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
             flush_rush_buf(evaluator, &rush_buf, source_name);
             rush_buf.clear();
             handle(evaluator, trimmed);
+        }
+        // Pipeline-shaped line → dispatch directly (even if the LHS
+        // looks like Rush syntax). The parser doesn't model `|` as an
+        // infix, so `ret_arr() | first 1` inside rush_buf would blow
+        // up at flush. Dispatch handles the pipe-split correctly and
+        // the new value-source classifier (#265 Phase 1) eval's the
+        // LHS as a Value before threading into the pipeline.
+        else if line_has_top_level_pipe(trimmed) {
+            flush_rush_buf(evaluator, &rush_buf, source_name);
+            rush_buf.clear();
+            crate::run_line(evaluator, trimmed);
         }
         // Rush syntax → accumulate
         else if rush_core::triage::is_rush_syntax(trimmed) {

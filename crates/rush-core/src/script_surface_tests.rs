@@ -212,6 +212,12 @@ fn array_index_assignment() {
     expect_output("a = [1, 2, 3]; a[0] = 99; puts a[0]", "99");
 }
 
+// Unified pipelines: value sources feeding `|` (#265 Phase 1) — the
+// pipeline output path in dispatch uses direct `println!`, bypassing
+// the Output trait this module captures. Binary-level coverage lives
+// in `crates/rush-cli/tests/script_execution.rs::value_pipe_*` so the
+// tests read from the actual process's stdout.
+
 // ═══════════════════════════════════════════════════════════════════
 // Strings
 // ═══════════════════════════════════════════════════════════════════
