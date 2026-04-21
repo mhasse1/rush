@@ -437,6 +437,35 @@ pub fn dispatch_with_jobs_and_builtins(
         }
 
         if pipe_segments.len() > 1 {
+            // Value-source entry: if the first segment evaluates as a
+            // Rush value (literal, bound variable, method call, $()),
+            // thread the evaluated Value straight into the pipeline's
+            // value-flow path. Covers shell terminal stages ("x" | cat),
+            // pipe-op stages ([1,2,3] | count), and value-first mixed
+            // chains (#265 Phase 2). Done here — before the pipe-op /
+            // builtin check below — so the Value is evaluated exactly
+            // once regardless of downstream routing.
+            if let Some(val) =
+                try_eval_as_value_source(&pipe_segments[0], evaluator)
+            {
+                let code = run_pipeline_from_value(
+                    evaluator,
+                    val,
+                    &pipe_segments[1..],
+                    pipeline_builtins.as_deref_mut(),
+                );
+                last_exit = code;
+                last_failed = code != 0;
+                evaluator.exit_code = code;
+                for (key, prev) in saved_vars {
+                    match prev {
+                        Some(val) => unsafe { std::env::set_var(&key, &val) },
+                        None => unsafe { std::env::remove_var(&key) },
+                    }
+                }
+                continue;
+            }
+
             // Route through Rush's value-flow pipeline when any segment
             // is a Rush pipe op or a rush-cli builtin in a middle/terminal
             // position (#224 RHS, #238 middle). The LHS-builtin case is
@@ -961,16 +990,50 @@ fn try_eval_as_value_source(
 }
 
 /// Render a Value as the text that will be written to a child process's
-/// stdin (or passed to a builtin's `handle_pipe`). Arrays are joined
-/// with newlines so shell stages see one record per line; scalars use
-/// their normal rush_string form. This matches what `puts` prints.
+/// stdin (or passed to a builtin's `handle_pipe`). The rules are
+/// deliberately shell-friendly so tools like `jq`, `grep`, `awk`, and
+/// `sort` can consume the upstream Value without extra conversion:
+///
+///   * Scalars (nil, bool, int, float, string, symbol) → the same text
+///     `puts` would print. Strings are not JSON-quoted; callers who
+///     want quoting should bridge with `| as json`.
+///   * Ranges → `start..end` / `start...end` text form.
+///   * Arrays of scalars → one element per line (newline-joined). The
+///     classic Unix line-per-record shape.
+///   * Arrays of hashes or arrays → one JSON document per line (JSONL /
+///     NDJSON). Tools like `jq -c` consume this directly; `awk` can
+///     still see per-record lines.
+///   * Hashes → single-line JSON. Consumers get valid JSON for `jq`.
+///
+/// Pre-#265-Phase-2 behavior stringified hashes via Rush's inspect form
+/// (`{a: 1, b: "hi"}`) which looked like JSON but wasn't — no quoted
+/// keys, symbols rendered as `:name`. Shell tools rejected it. The new
+/// rules keep scalar and scalar-array behavior identical (those were
+/// already right) and switch structured data to real JSON.
 fn format_value_for_stdin(value: &Value) -> String {
     match value {
-        Value::Array(items) => items
-            .iter()
-            .map(|v| v.to_rush_string())
-            .collect::<Vec<_>>()
-            .join("\n"),
+        Value::Array(items) => {
+            // JSON lines when any element is structured; newline-joined
+            // rush_string otherwise. Avoids surprising mixed cases by
+            // falling to JSON for the whole array if one element needs it.
+            let needs_json = items
+                .iter()
+                .any(|v| matches!(v, Value::Hash(_) | Value::Array(_)));
+            if needs_json {
+                items
+                    .iter()
+                    .map(|v| crate::mcp_client::value_to_json(v).to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                items
+                    .iter()
+                    .map(|v| v.to_rush_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+        }
+        Value::Hash(_) => crate::mcp_client::value_to_json(value).to_string(),
         other => other.to_rush_string(),
     }
 }

@@ -212,6 +212,72 @@ fn value_pipe_unbound_name_still_runs_as_shell() {
 }
 
 #[test]
+fn value_pipe_string_to_shell_cat() {
+    // Scalars serialize as their printed form (no JSON quoting).
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", r#""hello" | /bin/cat"#]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "hello");
+}
+
+#[test]
+fn value_pipe_int_array_to_shell_cat() {
+    // Arrays of scalars → one element per line (classic Unix shape).
+    let (code, stdout, _) = run(Command::new(RUSH).args(["-c", "[1, 2, 3] | /bin/cat"]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim().lines().collect::<Vec<_>>(), vec!["1", "2", "3"]);
+}
+
+#[test]
+fn value_pipe_hash_to_shell_cat_is_json() {
+    // Hashes serialize as single-line JSON — valid for jq, awk, etc.
+    let (code, stdout, _) =
+        run(Command::new(RUSH).args(["-c", r#"{a: 1, b: "hi"} | /bin/cat"#]));
+    assert_eq!(code, 0);
+    let trimmed = stdout.trim();
+    // Parse the output as JSON and verify content (key order varies).
+    let parsed: serde_json::Value =
+        serde_json::from_str(trimmed).expect("hash stdin must be valid JSON");
+    assert_eq!(parsed["a"], serde_json::json!(1));
+    assert_eq!(parsed["b"], serde_json::json!("hi"));
+}
+
+#[test]
+fn value_pipe_array_of_hashes_to_shell_cat_is_jsonl() {
+    // Arrays of hashes serialize as JSON Lines (one JSON doc per line)
+    // so jq / awk / grep can consume them record-by-record.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        r#"[{a: 1}, {a: 2}, {a: 3}] | /bin/cat"#,
+    ]));
+    assert_eq!(code, 0);
+    let lines: Vec<&str> = stdout.trim().lines().collect();
+    assert_eq!(lines.len(), 3);
+    for (i, line) in lines.iter().enumerate() {
+        let parsed: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("line {i} must be valid JSON: {e}: {line:?}"));
+        assert_eq!(parsed["a"], serde_json::json!(i + 1));
+    }
+}
+
+#[test]
+fn value_pipe_hash_to_jq_extracts_field() {
+    // End-to-end: serialization is real JSON that jq can query.
+    if std::process::Command::new("/usr/bin/jq")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return; // jq not installed; skip
+    }
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        r#"{a: 1, b: 2} | /usr/bin/jq ".a""#,
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "1");
+}
+
+#[test]
 fn shell_then_value_op_still_works() {
     // Regression guard: the classic shell-to-value-op handoff (text
     // output parsed into records) keeps working alongside the new
