@@ -424,12 +424,57 @@ Partial acceptance with `Alt+Right` lets you incrementally accept a suggestion w
 
 ### Pipelines
 
-Chain commands with `|`. Objects flow through the pipeline:
+Rush has one pipeline operator — `|` — and it works uniformly on both shell command output and Rush values. Each stage declares what it consumes (text or structured data); the pipeline converts at the boundary automatically.
+
+**Shell → shell (classic Unix)**
 
 ```rush
 ls /var/log | grep ".log" | head 5
-ps | where CPU > 10 | select ProcessName, CPU | as table
+ps aux | grep rush
 ```
+
+**Shell → value op** — the pipe-op side (`where`, `select`, `sort`, `count`, `first`, `objectify`, …) consumes upstream stdout as lines or records:
+
+```rush
+ls /var/log | where name =~ /\.log$/ | first 10
+ps | where CPU > 10 | select ProcessName, CPU
+```
+
+**Value source → pipeline** — any Rush expression can start a pipeline. The value flows directly into value ops, or serializes to stdin when a shell command is next:
+
+```rush
+[1, 2, 3] | first 2                          # → [1, 2]
+findings | where severity == "FAIL"           # bound variable
+mcp("auditor", "scan_repo", path: ".") | first 10
+$(git log --oneline) | count                  # subshell output
+"hello world" | /bin/cat                      # scalar → shell stdin
+```
+
+**Mixed chains** — value → shell → value-op works too. Structured data serializes to JSON at Value→Shell boundaries so tools like `jq` see real JSON:
+
+```rush
+{a: 1, b: 2} | jq ".a"                        # → 1
+[{n: 1}, {n: 2}] | jq -c ".n"                 # JSON Lines → jq
+mcp("auditor","list_findings").findings | jq '.[].severity' | sort -u
+```
+
+**Serialization rules at the Value→Shell boundary**
+
+| Value shape | Becomes |
+|---|---|
+| scalar (nil / bool / int / float / string / symbol) | `to_rush_string` form — same as `puts` |
+| range | `start..end` / `start...end` |
+| array of scalars | newline-joined, one element per line |
+| array of hashes or arrays | JSONL (one JSON doc per line) |
+| hash | single-line JSON |
+
+Shell-side conversion (Shell → value op) parses stdout as lines by default. Use explicit `| objectify` when you want records mid-chain:
+
+```rush
+ls -la | objectify | where size > 1mb         # explicit record shape
+```
+
+**Classifier rule** (when `foo | op` is ambiguous): if `foo` is a currently-bound Rush variable, it's a value source; otherwise Rush dispatches it as a shell command. So `ls | head` still runs `ls`, but `ls = [1, 2, 3]; ls | head` uses the variable.
 
 ### Redirections
 

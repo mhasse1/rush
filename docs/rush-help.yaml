@@ -509,6 +509,42 @@ control-flow:
 
 pipelines:
   summary: "Pipeline operators for filtering and transforming data"
+  unified_model:
+    note: |
+      One `|` operator. Works on both shell commands and Rush values.
+      Value expressions can start a pipeline — array/hash literals,
+      strings, bound variables, $(...), or function calls like mcp(…).
+      Conversion at each boundary is automatic.
+    value_sources:
+      - rush: '[1, 2, 3] | first 2'
+        note: "array literal → value op"
+      - rush: 'findings | where severity == "FAIL"'
+        note: "bound variable → value op"
+      - rush: '"hello" | /bin/cat'
+        note: "string literal → shell stdin"
+      - rush: 'mcp("auditor","scan_repo",path:".") | first 10'
+        note: "mcp tool result → value op"
+      - rush: '$(git log --oneline) | count'
+        note: "subshell output → value op"
+    serialization:
+      note: "Value→Shell boundary — how each shape becomes stdin text"
+      rules:
+        - "scalar (int/float/bool/string/nil) → puts-form text"
+        - "range → start..end / start...end"
+        - "array of scalars → newline-joined, one per line"
+        - "array of hashes or arrays → JSON Lines (one doc per line)"
+        - "hash → single-line JSON"
+    mixed_examples:
+      - rush: '{a: 1, b: 2} | jq ".a"'
+        note: "hash → JSON → jq"
+      - rush: '[{n: 1}, {n: 2}] | jq -c ".n"'
+        note: "array of hashes → JSONL → jq"
+      - rush: 'ls | objectify | where size > 1mb'
+        note: "shell → explicit objectify → value op"
+    ambiguity_rule: |
+      `foo | op`: if `foo` is a currently-bound Rush variable → value
+      source. Otherwise → shell command. So `ls | head` still runs
+      ls, but after `ls = [1, 2, 3]` the variable wins.
   operators:
     - { op: "| where prop op value", note: "filter (==, !=, >, <, =~, !~)" }
     - { op: "| where /regex/", note: "match whole line" }

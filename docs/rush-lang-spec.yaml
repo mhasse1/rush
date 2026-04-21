@@ -235,7 +235,33 @@ time_stdlib:
   - "24.hours / 30.minutes / 7.days — TimeSpan durations"
   - "Time.now - 24.hours — datetime arithmetic"
 
-# ── PIPELINE OPERATORS ───────────────────────────────────────────
+# ── PIPELINES ────────────────────────────────────────────────────
+# One operator `|`, works uniformly on shell command output AND Rush
+# value expressions. Conversion at each boundary:
+#
+#   value → shell:    serialized to stdin (see format table below)
+#   shell → value-op: stdout parsed as lines; `| objectify` for records
+#
+# Value sources that can start a pipeline:
+#
+#   [1, 2, 3] | first 2                        # array literal
+#   {a: 1, b: 2} | jq ".a"                     # hash literal → JSON → jq
+#   "hello" | /bin/cat                         # string literal → stdin
+#   findings | where severity == "FAIL"         # bound Rush variable
+#   mcp("auditor","scan") | first 10           # function call
+#   $(git log --oneline) | count               # subshell capture
+#
+# Ambiguity rule — `foo | op` where `foo` is an unknown name → shell
+# command. If `foo` is a currently-bound Rush variable → value source.
+#
+# Value → Shell serialization:
+#
+#   scalar (nil/bool/int/float/str/sym) → puts-form text
+#   range                                → "start..end" / "start...end"
+#   array of scalars                     → newline-joined
+#   array of hashes / arrays             → JSON Lines (one doc per line)
+#   hash                                 → single-line JSON
+
 pipeline_ops:
   - "| where prop op value — filter (==, !=, >, <, =~, !~)"
   - "| where /regex/ — match against full line"
