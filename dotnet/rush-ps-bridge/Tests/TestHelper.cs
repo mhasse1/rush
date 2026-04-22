@@ -33,7 +33,7 @@ internal static class TestHelper
                     "Could not locate rush-ps-bridge.csproj from test output dir");
             }
 
-            var exe = OperatingSystem.IsWindows() ? "rush-ps-bridge.exe" : "rush-ps-bridge";
+            var exe = OperatingSystem.IsWindows() ? "rush-ps.exe" : "rush-ps";
             string[] rids = OperatingSystem.IsWindows()
                 ? new[] { "win-x64", "win-arm64" }
                 : OperatingSystem.IsMacOS()

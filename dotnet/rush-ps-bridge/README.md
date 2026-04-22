@@ -1,53 +1,63 @@
 # rush-ps-bridge
 
-Standalone PowerShell bridge binary. Lets any JSON-speaking client
-drive a persistent PowerShell runspace, so Rush (and anything else
-that wants to) can script Windows / Exchange / AD / Azure in PS
-without embedding PowerShell itself.
+Standalone PowerShell bridge. Ship artifact: `rush-ps`. Lets any
+JSON-speaking client drive a persistent PowerShell runspace, so
+Rush (and anything else that wants to) can script Windows /
+Exchange / AD / Azure / PowerShell modules without embedding
+PowerShell itself.
 
 Tracking issue: [#267](https://github.com/mhasse1/rush/issues/267).
-
-## Status
-
-**Phase 1 — scaffolding only.** The binary builds and has `--help`
-and `--version`. Both functional modes (`--bridge`, `--mcp`) are
-stubbed and will print a "not yet implemented" message.
-
-Phases 2–6 wire up the modes, the session semantics, packaging, and
-retirement of the legacy `dotnet/` tree. See the tracking issue for
-the plan.
 
 ## Modes
 
 ```
-rush-ps-bridge --bridge     plugin JSON-lines protocol (Rush's plugin.ps wire)
-rush-ps-bridge --mcp        MCP JSON-RPC 2.0 server (any MCP client)
-rush-ps-bridge --version
-rush-ps-bridge --help
+rush-ps --bridge     plugin JSON-lines protocol (Rush's plugin.ps wire)
+rush-ps --mcp        MCP JSON-RPC 2.0 server (any MCP client)
+rush-ps --version
+rush-ps --help
 ```
 
 Same binary, picked at startup. Both share a persistent PowerShell
 runspace (see `PsRunner.cs`), so variables and function definitions
 survive across calls within a single invocation.
 
+The ship binary is named `rush-ps` (not `rush-ps-bridge`) so Rush's
+plugin discovery — which looks for `rush-<name>` on PATH — picks it
+up for `plugin.ps ... end` blocks automatically.
+
 ## Why .NET
 
 Hosting PowerShell is what `System.Management.Automation` is for.
-Writing a PS host in Rust would mean either re-implementing the
-protocol (large surface, moving target) or pinvoke'ing into .NET
-anyway. Keeping this component in .NET and talking to everything else
-over JSON is the right split.
+Writing a PS host in Rust would mean re-implementing the protocol
+(large surface, moving target) or pinvoke'ing into .NET anyway.
+Keeping this component in .NET and talking to everything else over
+JSON is the right split.
 
 ## Build
 
 ```
-dotnet build            # requires .NET 10 SDK
-dotnet publish -c Release -r linux-x64 --self-contained
+dotnet build                              # requires .NET 10 SDK
+dotnet publish -c Release -r <rid> -p:PublishSingleFile=true --self-contained
 ```
 
-The self-contained publish produces a single-file binary
-(~25 MB) that can ship alongside rush and be invoked with no
-separate .NET runtime install.
+Or the cross-platform helper:
+
+```
+pwsh ./build.ps1                          # detect RID, build
+pwsh ./build.ps1 -Install                 # also copy to ~/bin (Win) or /usr/local/bin (Unix)
+```
+
+The self-contained publish produces a ~122 MB single-file binary
+named `rush-ps` (or `rush-ps.exe` on Windows).
+
+From the repo root, `install.sh` also auto-publishes + installs the
+bridge when .NET 10 is on PATH:
+
+```
+./install.sh                              # also installs rush-ps alongside rush
+PS_BRIDGE=0 ./install.sh                  # skip bridge even if SDK is present
+PS_BRIDGE=1 ./install.sh                  # force bridge build (hard error if SDK missing)
+```
 
 ## Test
 
@@ -74,8 +84,8 @@ to the bridge, so we start fresh rather than salvage.
 
 ### As a plugin (`plugin.ps ... end` blocks)
 
-Install the binary somewhere on PATH as `rush-ps-bridge`. Rush's
-plugin discovery picks it up automatically. Blocks like:
+Install the binary on PATH as `rush-ps`. Rush's plugin discovery
+picks it up automatically. Blocks like:
 
 ```rush
 server = "host1"
@@ -95,7 +105,7 @@ Add to `~/.config/rush/mcp-servers.json`:
   "mcpServers": {
     "ps": {
       "type": "stdio",
-      "command": "/usr/local/bin/rush-ps-bridge",
+      "command": "/usr/local/bin/rush-ps",
       "args": ["--mcp"],
       "env": {}
     }
@@ -119,11 +129,13 @@ binary with their usual registration flows.
 |---|---|
 | `Program.cs` | Entry point, CLI flag dispatch |
 | `PsRunner.cs` | Shared PowerShell-invocation layer with persistent runspace |
-| `BridgeMode.cs` | `--bridge` plugin-protocol loop (Phase 2) |
-| `McpMode.cs` | `--mcp` JSON-RPC loop (Phase 3) |
-| `rush-ps-bridge.csproj` | Project file |
+| `BridgeMode.cs` | `--bridge` plugin-protocol loop |
+| `McpMode.cs` | `--mcp` JSON-RPC loop |
+| `rush-ps-bridge.csproj` | Project file (ships `rush-ps` binary via AssemblyName) |
 | `global.json` | .NET SDK pin (10.0.100) |
+| `build.ps1` | Cross-platform pwsh build + install helper |
+| `Tests/` | xunit test project |
 
 The legacy `dotnet/` tree (Rush .NET interpreter) is still present
-for reference and will be retired in Phase 6 once this binary is
-proven in daily use.
+for reference and will be retired in Phase 6 of #267 once the bridge
+is proven in daily use.

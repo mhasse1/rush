@@ -44,7 +44,7 @@ echo "Installed: $VERSION"
 # Skipped unless the .NET 10 SDK is on PATH or PS_BRIDGE=1 is set.
 # PS_BRIDGE=0 forces skip even when the SDK is present.
 
-BRIDGE_BIN_LINK="/usr/local/bin/rush-ps-bridge"
+BRIDGE_BIN_LINK="/usr/local/bin/rush-ps"
 BRIDGE_DIR="$SCRIPT_DIR/dotnet/rush-ps-bridge"
 
 build_bridge=0
@@ -72,7 +72,7 @@ if [[ "$build_bridge" == "1" && -d "$BRIDGE_DIR" ]]; then
                 --self-contained -v quiet 2>&1 | tail -5
         )
 
-        BRIDGE_BUILT="$BRIDGE_DIR/bin/Release/net10.0/$RID/publish/rush-ps-bridge"
+        BRIDGE_BUILT="$BRIDGE_DIR/bin/Release/net10.0/$RID/publish/rush-ps"
         if [[ -f "$BRIDGE_BUILT" ]]; then
             echo "Installing bridge to $BRIDGE_BIN_LINK..."
             TMP_LINK="${BRIDGE_BIN_LINK}.new.$$"

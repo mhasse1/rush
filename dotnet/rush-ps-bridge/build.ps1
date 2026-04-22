@@ -38,7 +38,7 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$exeName = if ($IsWindows -or $Rid -like "win-*") { "rush-ps-bridge.exe" } else { "rush-ps-bridge" }
+$exeName = if ($IsWindows -or $Rid -like "win-*") { "rush-ps.exe" } else { "rush-ps" }
 $publishDir = Join-Path -Path "bin" -ChildPath "$Configuration/net10.0/$Rid/publish"
 $binary = Join-Path -Path $publishDir -ChildPath $exeName
 
