@@ -49,6 +49,49 @@ The self-contained publish produces a single-file binary
 (~25 MB) that can ship alongside rush and be invoked with no
 separate .NET runtime install.
 
+## Using from Rush
+
+### As a plugin (`plugin.ps ... end` blocks)
+
+Install the binary somewhere on PATH as `rush-ps-bridge`. Rush's
+plugin discovery picks it up automatically. Blocks like:
+
+```rush
+server = "host1"
+plugin.ps
+  Get-Service -ComputerName #{server} | Where-Object { $_.Status -eq "Running" }
+end
+```
+
+work with no additional configuration.
+
+### As an MCP server (`mcp(...)` builtin)
+
+Add to `~/.config/rush/mcp-servers.json`:
+
+```jsonc
+{
+  "mcpServers": {
+    "ps": {
+      "type": "stdio",
+      "command": "/usr/local/bin/rush-ps-bridge",
+      "args": ["--mcp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Then from Rush:
+
+```rush
+result = mcp("ps", "invoke", script: "Get-Service | Where-Object { $_.Status -eq 'Running' }")
+puts result
+```
+
+Other MCP clients (Claude Desktop, Claude Code) can use the same
+binary with their usual registration flows.
+
 ## Layout
 
 | File | Role |
