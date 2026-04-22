@@ -278,6 +278,22 @@ fn value_pipe_hash_to_jq_extracts_field() {
 }
 
 #[test]
+fn builtin_printf_forwards_to_downstream_pipe() {
+    // #268 regression: rush-cli's `printf` builtin used to write
+    // only when invoked as a terminal stage. `printf '…' | wc -l`
+    // produced 0 because handle_pipe returned None for "printf" and
+    // the capture came back empty. Fix adds `printf` to handle_pipe's
+    // data-producer match so its stdout is captured + threaded
+    // downstream.
+    let (code, stdout, _) = run(Command::new(RUSH).args([
+        "-c",
+        "printf 'a\\nb\\n' | /usr/bin/wc -l",
+    ]));
+    assert_eq!(code, 0);
+    assert_eq!(stdout.trim(), "2");
+}
+
+#[test]
 fn shell_then_value_op_still_works() {
     // Regression guard: the classic shell-to-value-op handoff (text
     // output parsed into records) keeps working alongside the new
@@ -301,8 +317,9 @@ fn pipeline_shell_then_shell_then_value_op() {
     // `count` which sees line-text (one match = one line).
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        // printf not echo -e: BSD echo (macOS) doesn't interpret \n.
-        "/usr/bin/printf 'a\\nb\\nc\\n' | grep b | count",
+        // Uses rush-cli's printf builtin (cross-platform — BSD echo -e
+        // doesn't interpret \n on macOS; rush's printf does it right).
+        "printf 'a\\nb\\nc\\n' | grep b | count",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "1");
@@ -314,7 +331,7 @@ fn pipeline_shell_shell_value_op_shell() {
     // serialized via format_value_for_stdin for the trailing shell stage.
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        "/usr/bin/printf 'a\\nb\\nc\\n' | grep b | first 1 | tr a-z A-Z",
+        "printf 'a\\nb\\nc\\n' | grep b | first 1 | tr a-z A-Z",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "B");
@@ -351,7 +368,7 @@ fn pipeline_shell_value_op_value_op_shell() {
     // the boundary.
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        "/usr/bin/printf '1\\n2\\n3\\n4\\n' | first 3 | count | /bin/cat",
+        "printf '1\\n2\\n3\\n4\\n' | first 3 | count | /bin/cat",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "3");

@@ -192,6 +192,10 @@ pub fn handle_pipe(name: &str, args: &str, _stdin: &[u8]) -> Option<i32> {
         "pwd" => Some(pwd_pipe_output()),
         "which" | "type" => Some(which_pipe_output(args)),
         "jobs" => Some(jobs_pipe_output()),
+        // `printf` is a format-producer — writes its rendered output to
+        // stdout. Same handler as the standalone invocation; capture_
+        // builtin_stdout pipes that output into downstream stages. (#268)
+        "printf" => { handle_printf(args); Some(0) }
 
         _ => None,
     }
