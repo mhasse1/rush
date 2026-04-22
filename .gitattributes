@@ -1,0 +1,21 @@
+# GitHub Linguist hints.
+#
+# Rush is a Rust project. The legacy .NET Rush interpreter under
+# dotnet/ (being retired per #267 Phase 6) is still present for
+# reference during the migration, but it's 30k+ LOC of C# that
+# drowns out the Rust code when GitHub counts bytes for "primary
+# language" detection.
+#
+# Mark the legacy tree as vendored so it's excluded from language
+# stats. The active PowerShell bridge under dotnet/rush-ps-bridge/
+# continues to count normally — it's live code.
+
+# Legacy .NET Rush — top-level .cs files directly under dotnet/.
+# Glob deliberately does NOT descend into subdirectories, so
+# dotnet/rush-ps-bridge/*.cs still counts.
+dotnet/*.cs     linguist-vendored
+dotnet/*.sh     linguist-vendored
+dotnet/*.csproj linguist-vendored
+
+# Legacy .NET test project — entire subtree.
+dotnet/Rush.Tests/** linguist-vendored
