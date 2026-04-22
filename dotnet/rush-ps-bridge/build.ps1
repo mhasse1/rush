@@ -67,7 +67,7 @@ if ($Install) {
         $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
         if ($currentPath -notlike "*$installDir*") {
             Write-Host "Note: $installDir is not on your user PATH."
-            Write-Host "      Add it with:  [Environment]::SetEnvironmentVariable('Path', \"$currentPath;$installDir\", 'User')"
+            Write-Host "      Add via: setx PATH `"$currentPath;$installDir`""
         }
     }
 }
