@@ -55,9 +55,19 @@
     </PropertyGroup>
   </Target>
 
+  <!-- Exclude the Tests/ subdirectory from this project's compilation;
+       that directory has its own csproj. -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Tests/**</DefaultItemExcludes>
+  </PropertyGroup>
+
   <ItemGroup>
     <!-- The only runtime dependency: PowerShell hosting. -->
     <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="rush-ps-bridge.Tests" />
   </ItemGroup>
 
 </Project>

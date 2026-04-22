@@ -49,6 +49,27 @@ The self-contained publish produces a single-file binary
 (~25 MB) that can ship alongside rush and be invoked with no
 separate .NET runtime install.
 
+## Test
+
+```
+dotnet test Tests/
+```
+
+Three test files in `Tests/`:
+
+- **`PsRunnerTests.cs`** — unit tests. Exercise `PsRunner` directly
+  (no subprocess) — session persistence, stream capture, exception
+  trapping, empty-script handling. Fast.
+- **`BridgeModeTests.cs`** — integration tests that spawn the built
+  binary in `--bridge` mode and drive the plugin JSON-lines protocol
+  end-to-end. Requires `dotnet build` has run first.
+- **`McpModeTests.cs`** — integration tests that spawn the binary
+  in `--mcp` mode and drive the JSON-RPC 2.0 handshake + `tools/call`.
+
+The legacy `dotnet/Rush.Tests/` tested the .NET Rush interpreter
+(Lexer, Parser, ScriptEngine, Transpiler, …) — none of that applies
+to the bridge, so we start fresh rather than salvage.
+
 ## Using from Rush
 
 ### As a plugin (`plugin.ps ... end` blocks)
