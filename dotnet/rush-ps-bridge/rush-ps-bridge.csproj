@@ -1,16 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    rush-ps-bridge — standalone PowerShell bridge binary.
+    rush-ps-bridge: standalone PowerShell bridge binary.
 
     Exposes two stdio entry modes:
-      rush-ps-bridge --bridge  → JSON-lines wire matching Rush's existing
-                                 plugin.ps protocol (drop-in for `plugin.ps`).
-      rush-ps-bridge --mcp     → MCP JSON-RPC 2.0 server. Any MCP client
-                                 (rush mcp() builtin, Claude Code, etc.)
-                                 can drive PowerShell via this binary.
+      * bridge mode: JSON-lines wire matching Rush's existing
+        plugin.ps protocol (drop-in for `plugin.ps`).
+      * mcp mode: MCP JSON-RPC 2.0 server. Any MCP client
+        (rush mcp() builtin, Claude Code, etc.) can drive
+        PowerShell via this binary.
 
-    Same binary, two modes. See #267 for architecture + migration plan.
+    Same binary, two modes. See #267 for architecture and migration plan.
   -->
 
   <PropertyGroup>
