@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    rush-ps-bridge — standalone PowerShell bridge binary.
+
+    Exposes two stdio entry modes:
+      rush-ps-bridge --bridge  → JSON-lines wire matching Rush's existing
+                                 plugin.ps protocol (drop-in for `plugin.ps`).
+      rush-ps-bridge --mcp     → MCP JSON-RPC 2.0 server. Any MCP client
+                                 (rush mcp() builtin, Claude Code, etc.)
+                                 can drive PowerShell via this binary.
+
+    Same binary, two modes. See #267 for architecture + migration plan.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>rush-ps-bridge</AssemblyName>
+    <RootNamespace>Rush.PsBridge</RootNamespace>
+    <Description>PowerShell bridge for Rush and MCP clients</Description>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>false</PublishTrimmed>
+    <!-- Required for Linux single-file: PS SDK resolves PSHOME via assembly location,
+         which is empty for single-file. This embeds all content for self-extraction. -->
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <!-- Major.Minor here; patch = git commit count. Mirrors Rush.csproj pattern. -->
+    <BridgeMajorMinor>0.1</BridgeMajorMinor>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+  <!-- ── Git-derived versioning (mirror of Rush.csproj, kept in sync manually) ── -->
+  <Target Name="GitVersion" BeforeTargets="BeforeBuild;GenerateNuspec">
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount" />
+    </Exec>
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha" />
+    </Exec>
+    <Exec Command="git status --porcelain" ConsoleToMSBuild="true" StandardOutputImportance="low" IgnoreExitCode="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitDirty" />
+    </Exec>
+
+    <PropertyGroup>
+      <GitCommitCount Condition="'$(GitCommitCount)' == ''">0</GitCommitCount>
+      <GitShortSha Condition="'$(GitShortSha)' == ''">unknown</GitShortSha>
+      <_IsDirty Condition="'$(GitDirty)' != ''">true</_IsDirty>
+      <_IsDirty Condition="'$(GitDirty)' == ''">false</_IsDirty>
+      <_DirtySuffix Condition="'$(_IsDirty)' == 'true'">-dirty</_DirtySuffix>
+      <_DirtySuffix Condition="'$(_IsDirty)' == 'false'"></_DirtySuffix>
+      <Version>$(BridgeMajorMinor).$(GitCommitCount)</Version>
+      <InformationalVersion>$(BridgeMajorMinor).$(GitCommitCount)-$(GitShortSha)$(_DirtySuffix)</InformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+  <ItemGroup>
+    <!-- The only runtime dependency: PowerShell hosting. -->
+    <PackageReference Include="Microsoft.PowerShell.SDK" Version="7.6.0" />
+  </ItemGroup>
+
+</Project>

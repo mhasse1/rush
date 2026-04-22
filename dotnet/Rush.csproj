@@ -13,7 +13,7 @@
     <!-- Required for Linux single-file: PS SDK resolves PSHOME via assembly location,
          which is empty for single-file. This embeds all content for self-extraction. -->
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Rush.Tests/**;rush-ps-bridge/**</DefaultItemExcludes>
     <!-- Major.Minor set here; patch = git commit count, set by GitVersion target -->
     <RushMajorMinor>0.9</RushMajorMinor>
     <!-- Prevent .NET from appending +commitsha to InformationalVersion -->
