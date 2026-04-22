@@ -39,3 +39,52 @@ fi
 
 VERSION=$("$BIN_LINK" --version 2>/dev/null || echo "unknown")
 echo "Installed: $VERSION"
+
+# ── Optional: build + install rush-ps-bridge ─────────────────────────
+# Skipped unless the .NET 10 SDK is on PATH or PS_BRIDGE=1 is set.
+# PS_BRIDGE=0 forces skip even when the SDK is present.
+
+BRIDGE_BIN_LINK="/usr/local/bin/rush-ps-bridge"
+BRIDGE_DIR="$SCRIPT_DIR/dotnet/rush-ps-bridge"
+
+build_bridge=0
+if [[ "${PS_BRIDGE:-}" == "1" ]]; then
+    build_bridge=1
+elif [[ "${PS_BRIDGE:-}" != "0" ]] && command -v dotnet >/dev/null 2>&1; then
+    # Opt-in on SDK 10+ availability; silent no-op otherwise.
+    if dotnet --list-sdks 2>/dev/null | grep -qE "^10\." ; then
+        build_bridge=1
+    fi
+fi
+
+if [[ "$build_bridge" == "1" && -d "$BRIDGE_DIR" ]]; then
+    RID=""
+    case "$(uname -s)" in
+        Linux)  RID="linux-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')" ;;
+        Darwin) RID="osx-$(uname -m | sed 's/x86_64/x64/;s/arm64/arm64/')" ;;
+    esac
+
+    if [[ -n "$RID" ]]; then
+        echo "rush-ps-bridge — publishing single-file binary ($RID)..."
+        (
+            cd "$BRIDGE_DIR"
+            dotnet publish -c Release -r "$RID" -p:PublishSingleFile=true \
+                --self-contained -v quiet 2>&1 | tail -5
+        )
+
+        BRIDGE_BUILT="$BRIDGE_DIR/bin/Release/net10.0/$RID/publish/rush-ps-bridge"
+        if [[ -f "$BRIDGE_BUILT" ]]; then
+            echo "Installing bridge to $BRIDGE_BIN_LINK..."
+            TMP_LINK="${BRIDGE_BIN_LINK}.new.$$"
+            sudo cp "$BRIDGE_BUILT" "$TMP_LINK"
+            sudo chmod +x "$TMP_LINK"
+            sudo mv -f "$TMP_LINK" "$BRIDGE_BIN_LINK"
+            BRIDGE_VERSION=$("$BRIDGE_BIN_LINK" --version 2>/dev/null || echo "unknown")
+            echo "Installed: $BRIDGE_VERSION"
+        else
+            echo "rush-ps-bridge publish did not produce $BRIDGE_BUILT (skipped install)"
+        fi
+    else
+        echo "rush-ps-bridge: unsupported OS for auto-publish ($(uname -s)); skipping"
+    fi
+fi
