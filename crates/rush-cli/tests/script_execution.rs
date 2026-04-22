@@ -301,7 +301,8 @@ fn pipeline_shell_then_shell_then_value_op() {
     // `count` which sees line-text (one match = one line).
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        "echo -e 'a\\nb\\nc' | grep b | count",
+        // printf not echo -e: BSD echo (macOS) doesn't interpret \n.
+        "/usr/bin/printf 'a\\nb\\nc\\n' | grep b | count",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "1");
@@ -313,7 +314,7 @@ fn pipeline_shell_shell_value_op_shell() {
     // serialized via format_value_for_stdin for the trailing shell stage.
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        "echo -e 'a\\nb\\nc' | grep b | first 1 | tr a-z A-Z",
+        "/usr/bin/printf 'a\\nb\\nc\\n' | grep b | first 1 | tr a-z A-Z",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "B");
@@ -350,7 +351,7 @@ fn pipeline_shell_value_op_value_op_shell() {
     // the boundary.
     let (code, stdout, _) = run(Command::new(RUSH).args([
         "-c",
-        "echo -e '1\\n2\\n3\\n4' | first 3 | count | /bin/cat",
+        "/usr/bin/printf '1\\n2\\n3\\n4\\n' | first 3 | count | /bin/cat",
     ]));
     assert_eq!(code, 0);
     assert_eq!(stdout.trim(), "3");
