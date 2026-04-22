@@ -415,6 +415,14 @@ fn shell_pipe_on_command_output() {
 // Stdlib
 // ═══════════════════════════════════════════════════════════════════
 
+/// Format a filesystem path for embedding in a Rush double-quoted
+/// string literal. On Windows, backslashes would be interpreted as
+/// Rush string escapes (`\r` → CR, `\U` → unicode, etc.) and mangle
+/// the path. Forward slashes work on both platforms, so just rewrite.
+fn rush_path(p: &std::path::Path) -> String {
+    p.display().to_string().replace('\\', "/")
+}
+
 #[test]
 fn dir_list_recurse_returns_structured_paths() {
     // ISSUE #257: Dir.list(:recurse) returns bare basenames with no
@@ -434,7 +442,7 @@ fn dir_list_recurse_returns_structured_paths() {
 
     let program = format!(
         r#"Dir.list("{}", :recurse).each {{ |f| puts f }}"#,
-        root.display()
+        rush_path(&root)
     );
     let (_, lines) = run(&program);
 
@@ -460,7 +468,7 @@ fn file_read_write_roundtrip() {
     ));
     let program = format!(
         r#"File.write("{0}", "hello"); puts File.read("{0}")"#,
-        path.display()
+        rush_path(&path)
     );
     expect_output(&program, "hello");
     std::fs::remove_file(&path).ok();
