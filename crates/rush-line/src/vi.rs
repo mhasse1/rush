@@ -66,6 +66,11 @@ enum Pending {
 pub struct ViKeyMap {
     mode: ViMode,
     pending: Pending,
+    /// Count accumulator for vi commands like `3w`, `5dd`. Digits
+    /// accumulate; the next non-digit action gets repeated this
+    /// many times. `0` alone (without an in-progress count) is a
+    /// motion (MoveHome), not a digit.
+    count: Option<u32>,
 }
 
 impl Default for ViKeyMap {
@@ -76,13 +81,21 @@ impl Default for ViKeyMap {
 
 impl ViKeyMap {
     pub fn new() -> Self {
-        Self { mode: ViMode::Insert, pending: Pending::None }
+        Self {
+            mode: ViMode::Insert,
+            pending: Pending::None,
+            count: None,
+        }
     }
 
     /// Construct starting in Normal mode (less common; usually you
     /// want a fresh prompt to start in Insert).
     pub fn starting_normal() -> Self {
-        Self { mode: ViMode::Normal, pending: Pending::None }
+        Self {
+            mode: ViMode::Normal,
+            pending: Pending::None,
+            count: None,
+        }
     }
 
     pub fn mode(&self) -> ViMode {
@@ -140,15 +153,52 @@ impl ViKeyMap {
         let KeyEvent { code, modifiers, .. } = event;
         let mods = modifiers - KeyModifiers::SHIFT;
 
+        // Count accumulator. A bare `0` is a motion (MoveHome) and
+        // doesn't consume a count; a `0` after another digit extends
+        // the count. Digit input never emits an action — we wait for
+        // the next non-digit key, then repeat the resulting action
+        // vec `count` times.
+        if let KeyCode::Char(c) = code {
+            if mods == KeyModifiers::NONE && c.is_ascii_digit() {
+                let d = c.to_digit(10).unwrap();
+                let starting_count = self.count.is_some() || d != 0;
+                if starting_count {
+                    self.count = Some(
+                        self.count
+                            .unwrap_or(0)
+                            .saturating_mul(10)
+                            .saturating_add(d),
+                    );
+                    return Vec::new();
+                }
+            }
+        }
+
         // Operator-pending: previous keystroke was `d` or `c`. The
         // current keystroke is interpreted as a motion or a same-key
         // trigger (`dd`, `cc`).
-        if self.pending != Pending::None {
+        let actions = if self.pending != Pending::None {
             let pending = self.pending;
             self.pending = Pending::None;
-            return self.translate_operator_motion(pending, code, mods);
-        }
+            self.translate_operator_motion(pending, code, mods)
+        } else {
+            self.translate_normal_action(code, mods)
+        };
 
+        // Only consume the count when we actually emit actions. The
+        // operator key (`d`, `c`) returns an empty vec while it sets
+        // `pending`; we want the count preserved across the operator
+        // and applied by the motion that follows.
+        let count = if actions.is_empty() {
+            1
+        } else {
+            self.count.take().unwrap_or(1)
+        };
+        repeat_actions(actions, count)
+    }
+
+    /// One-keystroke Normal-mode dispatch (no count, no pending).
+    fn translate_normal_action(&mut self, code: KeyCode, mods: KeyModifiers) -> Vec<Action> {
         let one = |a: Action| vec![a];
         match (code, mods) {
             // ---- mode transitions ----
@@ -284,6 +334,22 @@ impl ViKeyMap {
         }
         actions
     }
+}
+
+/// Repeat `actions` `count` times. `count == 1` (the default when no
+/// vi count prefix was typed) returns `actions` unchanged. Higher
+/// counts allocate a fresh vec; capped at 1000 to bound how badly a
+/// typo like `9999w` can hurt us.
+fn repeat_actions(actions: Vec<Action>, count: u32) -> Vec<Action> {
+    if count <= 1 || actions.is_empty() {
+        return actions;
+    }
+    let n = count.min(1000) as usize;
+    let mut out = Vec::with_capacity(actions.len() * n);
+    for _ in 0..n {
+        out.extend(actions.iter().cloned());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -470,5 +536,86 @@ mod tests {
     fn enter_submits_in_normal_too() {
         let mut m = ViKeyMap::starting_normal();
         assert_eq!(m.translate(ev(KeyCode::Enter)), vec![Action::Submit]);
+    }
+
+    #[test]
+    fn count_repeats_simple_motion() {
+        let mut m = ViKeyMap::starting_normal();
+        // "3w" → MoveWordRight x 3
+        assert_eq!(m.translate(ev(KeyCode::Char('3'))), Vec::<Action>::new());
+        assert_eq!(
+            m.translate(ev(KeyCode::Char('w'))),
+            vec![Action::MoveWordRight, Action::MoveWordRight, Action::MoveWordRight]
+        );
+    }
+
+    #[test]
+    fn count_resets_after_use() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('3')));
+        m.translate(ev(KeyCode::Char('w'))); // uses count
+        // Next motion is uncounted.
+        assert_eq!(m.translate(ev(KeyCode::Char('w'))), vec![Action::MoveWordRight]);
+    }
+
+    #[test]
+    fn count_with_dd_repeats_delete_line() {
+        let mut m = ViKeyMap::starting_normal();
+        // "5dd"
+        m.translate(ev(KeyCode::Char('5')));
+        m.translate(ev(KeyCode::Char('d')));
+        let actions = m.translate(ev(KeyCode::Char('d')));
+        assert_eq!(actions.len(), 5);
+        assert!(actions.iter().all(|a| *a == Action::DeleteLine));
+    }
+
+    #[test]
+    fn count_with_dw_repeats_delete_word_right() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('2')));
+        m.translate(ev(KeyCode::Char('d')));
+        let actions = m.translate(ev(KeyCode::Char('w')));
+        assert_eq!(actions, vec![Action::DeleteWordRight, Action::DeleteWordRight]);
+    }
+
+    #[test]
+    fn multidigit_count() {
+        let mut m = ViKeyMap::starting_normal();
+        // "12l" → MoveRight x 12
+        m.translate(ev(KeyCode::Char('1')));
+        m.translate(ev(KeyCode::Char('2')));
+        let actions = m.translate(ev(KeyCode::Char('l')));
+        assert_eq!(actions.len(), 12);
+        assert!(actions.iter().all(|a| *a == Action::MoveRight));
+    }
+
+    #[test]
+    fn bare_zero_is_motion_not_count() {
+        let mut m = ViKeyMap::starting_normal();
+        // "0" with no in-progress count is MoveHome.
+        assert_eq!(m.translate(ev(KeyCode::Char('0'))), vec![Action::MoveHome]);
+    }
+
+    #[test]
+    fn zero_after_digit_extends_count() {
+        let mut m = ViKeyMap::starting_normal();
+        // "10w" → MoveWordRight x 10 (the 0 is part of the count, not MoveHome).
+        m.translate(ev(KeyCode::Char('1')));
+        m.translate(ev(KeyCode::Char('0')));
+        let actions = m.translate(ev(KeyCode::Char('w')));
+        assert_eq!(actions.len(), 10);
+        assert!(actions.iter().all(|a| *a == Action::MoveWordRight));
+    }
+
+    #[test]
+    fn count_capped_at_thousand() {
+        let mut m = ViKeyMap::starting_normal();
+        // "9999l" — capped to 1000 to avoid silly memory blowup.
+        m.translate(ev(KeyCode::Char('9')));
+        m.translate(ev(KeyCode::Char('9')));
+        m.translate(ev(KeyCode::Char('9')));
+        m.translate(ev(KeyCode::Char('9')));
+        let actions = m.translate(ev(KeyCode::Char('l')));
+        assert_eq!(actions.len(), 1000);
     }
 }
