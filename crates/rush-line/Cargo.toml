@@ -1,0 +1,13 @@
+[package]
+name = "rush-line"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ground-up Rust line editor for Rush. Cursor-relative painter (readline model), zle-shaped behavior."
+
+[dependencies]
+crossterm = "0.29"
+unicode-width = "0.2"
+unicode-segmentation = "1"
+strip-ansi-escapes = "0.2"

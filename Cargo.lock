@@ -1097,6 +1097,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rush-line"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "strip-ansi-escapes",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "rush-ps-bridge"
 version = "0.1.0"
 dependencies = [
