@@ -28,4 +28,13 @@
 //! (buffer + edit operations, keymaps, history, completion, hint, read_line
 //! loop) is built up in subsequent phases on top of this primitive.
 
+pub mod buffer;
+pub mod engine;
+pub mod keymap;
+pub mod layout;
 pub mod painter;
+
+pub use buffer::LineBuffer;
+pub use engine::{LineEditor, Prompt, Signal};
+pub use keymap::{Action, EmacsKeyMap, KeyMap};
+pub use painter::Painter;
