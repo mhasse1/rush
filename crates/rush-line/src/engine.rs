@@ -37,6 +37,7 @@ use crossterm::{
 };
 
 use crate::buffer::LineBuffer;
+use crate::history::History;
 use crate::keymap::{Action, EmacsKeyMap, KeyMap};
 use crate::layout::measure;
 use crate::painter::Painter;
@@ -72,6 +73,12 @@ pub struct LineEditor {
     painter: Painter<BufWriter<Stderr>>,
     buffer: LineBuffer,
     keymap: Box<dyn KeyMap>,
+    history: Option<Box<dyn History>>,
+    /// Snapshot of the in-progress edit taken on first `HistoryPrev`,
+    /// so a subsequent `HistoryNext` past the newest entry can put
+    /// the user's typing back. None when not currently navigating
+    /// history.
+    edit_stash: Option<String>,
 }
 
 impl LineEditor {
@@ -81,12 +88,29 @@ impl LineEditor {
             painter: Painter::new(out),
             buffer: LineBuffer::new(),
             keymap: Box::new(EmacsKeyMap),
+            history: None,
+            edit_stash: None,
         }
     }
 
     pub fn with_keymap<K: KeyMap + 'static>(mut self, keymap: K) -> Self {
         self.keymap = Box::new(keymap);
         self
+    }
+
+    /// Attach a history backend. Up/Down arrows will recall entries;
+    /// submitted lines are added to it. Pass any `History`, typically
+    /// [`crate::FileBackedHistory`].
+    pub fn with_history<H: History + 'static>(mut self, history: H) -> Self {
+        self.history = Some(Box::new(history));
+        self
+    }
+
+    /// Borrow the history backend for direct manipulation (e.g.
+    /// `sync()` from the host between submissions). `None` if no
+    /// history was attached.
+    pub fn history_mut(&mut self) -> Option<&mut (dyn History + 'static)> {
+        self.history.as_deref_mut()
     }
 
     /// Read one line of input. Enables raw mode for the duration and
@@ -108,6 +132,10 @@ impl LineEditor {
         // up into anything that isn't ours.
         self.painter.invalidate();
         self.buffer.clear();
+        self.edit_stash = None;
+        if let Some(history) = self.history.as_deref_mut() {
+            history.reset_cursor();
+        }
 
         // Refresh terminal size in case it changed between read_lines.
         if let Ok((w, h)) = terminal::size() {
@@ -143,6 +171,9 @@ impl LineEditor {
                             // next host output starts on a fresh row.
                             self.move_below_paint()?;
                             let line = std::mem::take(&mut self.buffer).text().to_string();
+                            if let Some(history) = self.history.as_deref_mut() {
+                                history.add(&line);
+                            }
                             return Ok(Signal::Success(line));
                         }
                         ActionResult::Cancel => {
@@ -168,6 +199,26 @@ impl LineEditor {
     /// change). Pure buffer-state transformation; doesn't touch the
     /// terminal.
     fn apply_action(&mut self, action: Action) -> ActionResult {
+        // Any text-modifying action while the user is on a recalled
+        // history entry detaches them from history navigation: the
+        // current buffer is now their edit, not the recalled entry.
+        // The history cursor stays where it is so further Up/Down
+        // still works, but the "stashed live edit" is replaced by
+        // the current divergent buffer.
+        let modifies_text = matches!(
+            action,
+            Action::InsertChar(_)
+                | Action::DeleteLeft
+                | Action::DeleteRight
+                | Action::DeleteWordLeft
+                | Action::DeleteWordRight
+                | Action::KillToEnd
+                | Action::KillToStart
+        );
+        if modifies_text {
+            self.edit_stash = None;
+        }
+
         match action {
             Action::InsertChar(c) => {
                 self.buffer.insert_char(c);
@@ -221,8 +272,31 @@ impl LineEditor {
                 self.buffer.move_end();
                 ActionResult::Continue
             }
-            Action::HistoryPrev | Action::HistoryNext => {
-                // History support lands in a later phase; ignore for now.
+            Action::HistoryPrev => {
+                if let Some(history) = self.history.as_deref_mut() {
+                    // First Up of the navigation: stash the live edit
+                    // so a later Down past the newest entry can restore.
+                    if history.at_present() {
+                        self.edit_stash = Some(self.buffer.text().to_string());
+                    }
+                    if let Some(entry) = history.backward() {
+                        self.buffer.set_text(entry);
+                    }
+                }
+                ActionResult::Continue
+            }
+            Action::HistoryNext => {
+                if let Some(history) = self.history.as_deref_mut() {
+                    if let Some(entry) = history.forward() {
+                        self.buffer.set_text(entry);
+                    } else if let Some(stash) = self.edit_stash.take() {
+                        // We walked past the newest entry — restore
+                        // the in-progress edit we stashed on the first
+                        // Up. (history.forward already cleared its
+                        // cursor to None.)
+                        self.buffer.set_text(&stash);
+                    }
+                }
                 ActionResult::Continue
             }
             Action::Submit => ActionResult::Submit,

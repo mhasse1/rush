@@ -30,11 +30,13 @@
 
 pub mod buffer;
 pub mod engine;
+pub mod history;
 pub mod keymap;
 pub mod layout;
 pub mod painter;
 
 pub use buffer::LineBuffer;
 pub use engine::{LineEditor, Prompt, Signal};
+pub use history::{FileBackedHistory, History};
 pub use keymap::{Action, EmacsKeyMap, KeyMap};
 pub use painter::Painter;

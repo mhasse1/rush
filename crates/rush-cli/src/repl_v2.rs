@@ -19,10 +19,19 @@ use rush_core::config::RushConfig;
 use rush_core::eval::{Evaluator, StdOutput};
 use rush_core::theme;
 use rush_core::value::Value;
-use rush_line::{LineEditor, Signal};
+use rush_line::{FileBackedHistory, LineEditor, Signal};
 
 use crate::builtins;
 use crate::prompt::RushPrompt;
+
+fn history_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::PathBuf::from(home).join(".config").join("rush");
+    std::fs::create_dir_all(&dir).ok();
+    dir.join("history")
+}
 
 /// Adapt the existing `RushPrompt` (which implements `rushline::Prompt`)
 /// to `rush_line::Prompt` by concatenating left + indicator.
@@ -71,11 +80,17 @@ pub fn run(is_login: bool) {
     builtins::load_secrets(&mut evaluator);
     builtins::load_init(&mut evaluator);
 
-    let mut editor = LineEditor::new();
+    // Share rush's history file with the v1 REPL so Up/Down recalls
+    // commands from past sessions regardless of which backend the
+    // user was on. `with_file` returns Err only on parent-dir creation
+    // failure; if it does, fall back to in-memory so v2 still works.
+    let history = FileBackedHistory::with_file(config.history_size, history_path())
+        .unwrap_or_else(|_| FileBackedHistory::in_memory(config.history_size));
+    let mut editor = LineEditor::new().with_history(history);
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
     eprintln!(
-        "{}rush-line v2 (RUSH_LINE_V2=1) — emacs only, no history/completion/hint/vi yet{}",
+        "{}rush-line v2 (RUSH_LINE_V2=1) — emacs only, no completion/hint/vi yet{}",
         detected_theme.muted, detected_theme.reset
     );
     println!();
@@ -99,6 +114,12 @@ pub fn run(is_login: bool) {
                 }
                 if trimmed == "exit" || trimmed == "quit" {
                     break;
+                }
+                // Sync history to disk after each submit so kills /
+                // crashes don't lose recent commands. Matches the
+                // bash-with-histappend behavior the v1 REPL uses.
+                if let Some(history) = editor.history_mut() {
+                    let _ = history.sync();
                 }
                 crate::run_line(&mut evaluator, trimmed);
             }
