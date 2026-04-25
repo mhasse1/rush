@@ -557,6 +557,71 @@ impl LineEditor {
                 }
                 ActionResult::Continue
             }
+            Action::FindCharForward(c) => {
+                self.find_char(c, FindDir::Forward, false);
+                ActionResult::Continue
+            }
+            Action::FindCharBackward(c) => {
+                self.find_char(c, FindDir::Backward, false);
+                ActionResult::Continue
+            }
+            Action::TillCharForward(c) => {
+                self.find_char(c, FindDir::Forward, true);
+                ActionResult::Continue
+            }
+            Action::TillCharBackward(c) => {
+                self.find_char(c, FindDir::Backward, true);
+                ActionResult::Continue
+            }
+            Action::ReplaceChar(c) => {
+                self.buffer.replace_char_at_cursor(c);
+                ActionResult::Continue
+            }
+            Action::ToggleCase => {
+                self.buffer.toggle_case_at_cursor();
+                ActionResult::Continue
+            }
+            Action::YankLine => {
+                let text = self.buffer.text();
+                if !text.is_empty() {
+                    self.kill_ring = Some(text.to_string());
+                }
+                ActionResult::Continue
+            }
+            Action::YankWordRight => {
+                let cursor = self.buffer.cursor();
+                let text = self.buffer.text();
+                let end = word_boundary_after_external(text, cursor);
+                if end > cursor {
+                    self.kill_ring = Some(text[cursor..end].to_string());
+                }
+                ActionResult::Continue
+            }
+            Action::YankWordLeft => {
+                let cursor = self.buffer.cursor();
+                let text = self.buffer.text();
+                let start = word_boundary_before_external(text, cursor);
+                if start < cursor {
+                    self.kill_ring = Some(text[start..cursor].to_string());
+                }
+                ActionResult::Continue
+            }
+            Action::YankToEnd => {
+                let cursor = self.buffer.cursor();
+                let text = self.buffer.text();
+                if cursor < text.len() {
+                    self.kill_ring = Some(text[cursor..].to_string());
+                }
+                ActionResult::Continue
+            }
+            Action::YankToStart => {
+                let cursor = self.buffer.cursor();
+                let text = self.buffer.text();
+                if cursor > 0 {
+                    self.kill_ring = Some(text[..cursor].to_string());
+                }
+                ActionResult::Continue
+            }
         };
         Ok(result)
     }
@@ -786,6 +851,75 @@ impl LineEditor {
         self.buffer.cursor() == self.buffer.len()
     }
 
+    /// Implement vi `f`/`F`/`t`/`T` motions. Searches the buffer in
+    /// the given direction starting just past the current cursor for
+    /// `target` and moves the cursor to it (or one grapheme before
+    /// it, if `till`). No-op if not found. Search is bounded to the
+    /// current visual line: a `\n` between cursor and target stops
+    /// the search, matching vim's "f only operates on the current
+    /// line" semantics.
+    fn find_char(&mut self, target: char, dir: FindDir, till: bool) {
+        let text = self.buffer.text().to_string();
+        let cursor = self.buffer.cursor();
+        let new_cursor = match dir {
+            FindDir::Forward => {
+                let search_start = (cursor + target.len_utf8()).min(text.len());
+                let mut hit: Option<usize> = None;
+                let bytes = text.as_bytes();
+                let mut i = search_start;
+                while i < bytes.len() {
+                    if bytes[i] == b'\n' {
+                        break;
+                    }
+                    if text.is_char_boundary(i) {
+                        if let Some(c) = text[i..].chars().next() {
+                            if c == target {
+                                hit = Some(i);
+                                break;
+                            }
+                        }
+                    }
+                    i += 1;
+                }
+                hit.map(|h| {
+                    if till {
+                        prev_char_boundary(&text, h).unwrap_or(h)
+                    } else {
+                        h
+                    }
+                })
+            }
+            FindDir::Backward => {
+                let mut hit: Option<usize> = None;
+                let mut i = cursor;
+                while i > 0 {
+                    i -= 1;
+                    if !text.is_char_boundary(i) {
+                        continue;
+                    }
+                    let c = text[i..].chars().next();
+                    if c == Some('\n') {
+                        break;
+                    }
+                    if c == Some(target) {
+                        hit = Some(i);
+                        break;
+                    }
+                }
+                hit.map(|h| {
+                    if till {
+                        next_char_boundary(&text, h).unwrap_or(h)
+                    } else {
+                        h
+                    }
+                })
+            }
+        };
+        if let Some(pos) = new_cursor {
+            self.buffer.set_cursor(pos);
+        }
+    }
+
     fn repaint(&mut self, prompt: &dyn Prompt) -> io::Result<()> {
         // While searching history, replace the host prompt with the
         // bash-style search indicator. `failing-i-search` signals
@@ -923,6 +1057,77 @@ enum SearchResult {
     Cancel,
     /// Submit immediately (Enter pressed in search mode).
     Submit,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FindDir {
+    Forward,
+    Backward,
+}
+
+fn prev_char_boundary(text: &str, byte_idx: usize) -> Option<usize> {
+    if byte_idx == 0 {
+        return None;
+    }
+    let mut i = byte_idx - 1;
+    while i > 0 && !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    Some(i)
+}
+
+fn next_char_boundary(text: &str, byte_idx: usize) -> Option<usize> {
+    if byte_idx >= text.len() {
+        return None;
+    }
+    let mut i = byte_idx + 1;
+    while i < text.len() && !text.is_char_boundary(i) {
+        i += 1;
+    }
+    Some(i)
+}
+
+/// Same whitespace-bounded word logic as in the buffer module, but
+/// reachable from the engine for yank-without-delete. The engine
+/// could call buffer methods that returned ranges instead, but the
+/// duplication here is small and avoids changing the LineBuffer API.
+fn word_boundary_after_external(text: &str, byte_idx: usize) -> usize {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    if byte_idx >= len {
+        return len;
+    }
+    let is_ws = |b: u8| b == b' ' || b == b'\t' || b == b'\n';
+    let mut i = byte_idx;
+    while i < len && is_ws(bytes[i]) {
+        i += 1;
+    }
+    while i < len && !is_ws(bytes[i]) {
+        i += 1;
+    }
+    while i < len && !text.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
+fn word_boundary_before_external(text: &str, byte_idx: usize) -> usize {
+    if byte_idx == 0 {
+        return 0;
+    }
+    let bytes = text.as_bytes();
+    let is_ws = |b: u8| b == b' ' || b == b'\t' || b == b'\n';
+    let mut i = byte_idx;
+    while i > 0 && is_ws(bytes[i - 1]) {
+        i -= 1;
+    }
+    while i > 0 && !is_ws(bytes[i - 1]) {
+        i -= 1;
+    }
+    while i > 0 && !text.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Replace the bytes in `span` of `base` with the suggestion's value

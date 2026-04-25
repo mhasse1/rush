@@ -170,6 +170,18 @@ impl LineBuffer {
         self.cursor = self.text.len();
     }
 
+    /// Place the cursor at the byte position `pos`. Snaps to the
+    /// nearest grapheme boundary at or below `pos`, and clamps to the
+    /// buffer length. No undo snapshot — pure cursor movement.
+    pub fn set_cursor(&mut self, pos: usize) {
+        let mut p = pos.min(self.text.len());
+        // Snap down to a char boundary first (cheap).
+        while p > 0 && !self.text.is_char_boundary(p) {
+            p -= 1;
+        }
+        self.cursor = p;
+    }
+
     // ---- word-wise (whitespace-bounded, readline default) ----
 
     pub fn move_word_left(&mut self) {
@@ -253,6 +265,48 @@ impl LineBuffer {
         let killed = std::mem::take(&mut self.text);
         self.cursor = 0;
         Some(killed)
+    }
+
+    /// Replace the character at the cursor with `c`. Cursor stays put.
+    /// No-op if cursor is at end of buffer (vi `r` at EOL is a no-op
+    /// in real vim; matches that behavior).
+    pub fn replace_char_at_cursor(&mut self, c: char) {
+        let Some(end) = grapheme_boundary_after(&self.text, self.cursor) else {
+            return;
+        };
+        self.push_undo();
+        self.text.replace_range(self.cursor..end, &c.to_string());
+    }
+
+    /// Toggle the case of the character at the cursor and advance
+    /// the cursor one grapheme to the right. Vi `~` semantics. No-op
+    /// if cursor is at end of buffer.
+    pub fn toggle_case_at_cursor(&mut self) {
+        let Some(end) = grapheme_boundary_after(&self.text, self.cursor) else {
+            return;
+        };
+        let segment = &self.text[self.cursor..end];
+        let toggled: String = segment
+            .chars()
+            .map(|ch| {
+                if ch.is_uppercase() {
+                    ch.to_lowercase().collect::<String>()
+                } else if ch.is_lowercase() {
+                    ch.to_uppercase().collect::<String>()
+                } else {
+                    ch.to_string()
+                }
+            })
+            .collect();
+        if toggled != segment {
+            self.push_undo();
+            self.text.replace_range(self.cursor..end, &toggled);
+        }
+        // Advance cursor either way (matches vim — `~` always moves
+        // even on punctuation).
+        if let Some(next) = grapheme_boundary_after(&self.text, self.cursor) {
+            self.cursor = next;
+        }
     }
 }
 
@@ -609,5 +663,61 @@ mod tests {
         b.delete_left();
         // Stack still empty — neither no-op pushed.
         assert!(!b.undo());
+    }
+
+    #[test]
+    fn replace_char_at_cursor() {
+        let mut b = LineBuffer::from_str("abc");
+        b.move_home();
+        b.replace_char_at_cursor('X');
+        assert_eq!(b.text(), "Xbc");
+        assert_eq!(b.cursor(), 0); // cursor stays put
+    }
+
+    #[test]
+    fn replace_char_at_end_of_buffer_is_noop() {
+        let mut b = LineBuffer::from_str("abc");
+        // cursor at end (3)
+        b.replace_char_at_cursor('X');
+        assert_eq!(b.text(), "abc");
+    }
+
+    #[test]
+    fn toggle_case_lowercase_to_upper() {
+        let mut b = LineBuffer::from_str("abc");
+        b.move_home();
+        b.toggle_case_at_cursor();
+        assert_eq!(b.text(), "Abc");
+        assert_eq!(b.cursor(), 1); // advanced
+    }
+
+    #[test]
+    fn toggle_case_uppercase_to_lower() {
+        let mut b = LineBuffer::from_str("ABC");
+        b.move_home();
+        b.toggle_case_at_cursor();
+        assert_eq!(b.text(), "aBC");
+        assert_eq!(b.cursor(), 1);
+    }
+
+    #[test]
+    fn toggle_case_punctuation_advances_anyway() {
+        let mut b = LineBuffer::from_str("!ab");
+        b.move_home();
+        b.toggle_case_at_cursor();
+        assert_eq!(b.text(), "!ab"); // unchanged
+        assert_eq!(b.cursor(), 1);   // but cursor advanced
+    }
+
+    #[test]
+    fn set_cursor_clamps_and_snaps() {
+        let mut b = LineBuffer::from_str("café");
+        b.set_cursor(99);
+        assert_eq!(b.cursor(), b.len());
+        b.set_cursor(0);
+        assert_eq!(b.cursor(), 0);
+        // Mid-multibyte snaps down. 'é' starts at byte 3.
+        b.set_cursor(4);
+        assert_eq!(b.cursor(), 3);
     }
 }

@@ -75,6 +75,40 @@ pub enum Action {
     /// Insert the most-recently killed text at the cursor (Ctrl-Y in
     /// emacs, `p` / `P` in vi). No-op if no kill has happened yet.
     Yank,
+
+    // --- vi find-char motions (parameterized by target char) ---
+    /// Vi `f<c>` — move cursor to the next occurrence of `c` to the
+    /// right, landing on it.
+    FindCharForward(char),
+    /// Vi `F<c>` — move cursor to the previous occurrence of `c` to
+    /// the left, landing on it.
+    FindCharBackward(char),
+    /// Vi `t<c>` — move cursor to just before the next occurrence
+    /// of `c` to the right.
+    TillCharForward(char),
+    /// Vi `T<c>` — move cursor to just after the previous
+    /// occurrence of `c` to the left.
+    TillCharBackward(char),
+
+    /// Vi `r<c>` — replace the character at cursor with `c`. Cursor
+    /// stays put. No mode change.
+    ReplaceChar(char),
+
+    /// Vi `~` — toggle the case of the character at cursor and
+    /// advance one character to the right.
+    ToggleCase,
+
+    // --- vi yank-without-delete (saves to kill ring) ---
+    /// Copy the entire buffer to the kill ring (vi `yy`).
+    YankLine,
+    /// Copy from cursor to the next word-forward boundary (vi `yw`).
+    YankWordRight,
+    /// Copy from cursor back to the word-backward boundary (vi `yb`).
+    YankWordLeft,
+    /// Copy from cursor to end of buffer (vi `y$`).
+    YankToEnd,
+    /// Copy from start of buffer to cursor (vi `y0`).
+    YankToStart,
 }
 
 pub trait KeyMap {

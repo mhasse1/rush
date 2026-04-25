@@ -60,6 +60,19 @@ enum Pending {
     None,
     Delete,
     Change,
+    /// `y` operator — awaiting motion or `y` for whole-line yank.
+    Yank,
+    /// `f` motion — awaiting target character.
+    FindForward,
+    /// `F` motion — awaiting target character (search backward).
+    FindBackward,
+    /// `t` motion — awaiting target character (till, exclusive).
+    TillForward,
+    /// `T` motion — awaiting target character (till, exclusive,
+    /// search backward).
+    TillBackward,
+    /// `r` — awaiting replacement character.
+    Replace,
 }
 
 #[derive(Debug)]
@@ -251,6 +264,37 @@ impl ViKeyMap {
                 self.pending = Pending::Change;
                 Vec::new()
             }
+            (KeyCode::Char('y'), KeyModifiers::NONE) => {
+                self.pending = Pending::Yank;
+                Vec::new()
+            }
+
+            // ---- find-char (await target) ----
+            (KeyCode::Char('f'), KeyModifiers::NONE) => {
+                self.pending = Pending::FindForward;
+                Vec::new()
+            }
+            (KeyCode::Char('F'), KeyModifiers::NONE) => {
+                self.pending = Pending::FindBackward;
+                Vec::new()
+            }
+            (KeyCode::Char('t'), KeyModifiers::NONE) => {
+                self.pending = Pending::TillForward;
+                Vec::new()
+            }
+            (KeyCode::Char('T'), KeyModifiers::NONE) => {
+                self.pending = Pending::TillBackward;
+                Vec::new()
+            }
+
+            // ---- replace single char (await replacement) ----
+            (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                self.pending = Pending::Replace;
+                Vec::new()
+            }
+
+            // ---- toggle case (one-shot) ----
+            (KeyCode::Char('~'), KeyModifiers::NONE) => one(Action::ToggleCase),
 
             // ---- motions ----
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, KeyModifiers::NONE) => {
@@ -292,47 +336,118 @@ impl ViKeyMap {
         code: KeyCode,
         mods: KeyModifiers,
     ) -> Vec<Action> {
-        // Same-key double press → operate on whole line: dd, cc.
+        // Find-char / till-char / replace pendings: the next key is
+        // the target character, regardless of modifier (uppercase
+        // letters arrive as Char + SHIFT).
+        match pending {
+            Pending::FindForward => {
+                if let KeyCode::Char(c) = code {
+                    return vec![Action::FindCharForward(c)];
+                }
+                return Vec::new();
+            }
+            Pending::FindBackward => {
+                if let KeyCode::Char(c) = code {
+                    return vec![Action::FindCharBackward(c)];
+                }
+                return Vec::new();
+            }
+            Pending::TillForward => {
+                if let KeyCode::Char(c) = code {
+                    return vec![Action::TillCharForward(c)];
+                }
+                return Vec::new();
+            }
+            Pending::TillBackward => {
+                if let KeyCode::Char(c) = code {
+                    return vec![Action::TillCharBackward(c)];
+                }
+                return Vec::new();
+            }
+            Pending::Replace => {
+                if let KeyCode::Char(c) = code {
+                    return vec![Action::ReplaceChar(c)];
+                }
+                return Vec::new();
+            }
+            _ => {}
+        }
+
+        // Same-key double press → operate on whole line: dd, cc, yy.
         let same_key = match (pending, code) {
             (Pending::Delete, KeyCode::Char('d')) => true,
             (Pending::Change, KeyCode::Char('c')) => true,
+            (Pending::Yank, KeyCode::Char('y')) => true,
             _ => false,
         };
         if same_key {
-            let mut actions = vec![Action::DeleteLine];
-            if pending == Pending::Change {
-                self.mode = ViMode::Insert;
-                actions.push(Action::EnterInsertMode);
-            }
-            return actions;
+            return match pending {
+                Pending::Delete => vec![Action::DeleteLine],
+                Pending::Change => {
+                    self.mode = ViMode::Insert;
+                    vec![Action::DeleteLine, Action::EnterInsertMode]
+                }
+                Pending::Yank => vec![Action::YankLine],
+                _ => Vec::new(),
+            };
         }
 
-        // Map the motion to an edit. Word motions become word-deletes,
-        // line-end motions become kill-to-end / kill-to-start.
-        let motion_action = match (code, mods) {
-            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(Action::DeleteWordRight),
-            (KeyCode::Char('b'), KeyModifiers::NONE) => Some(Action::DeleteWordLeft),
+        // Map a motion key onto the operator's edit/yank action.
+        let motion_kind = match (code, mods) {
+            (KeyCode::Char('w'), KeyModifiers::NONE) => Some(MotionKind::WordRight),
+            (KeyCode::Char('b'), KeyModifiers::NONE) => Some(MotionKind::WordLeft),
             (KeyCode::Char('$'), KeyModifiers::NONE) | (KeyCode::End, KeyModifiers::NONE) => {
-                Some(Action::KillToEnd)
+                Some(MotionKind::ToEnd)
             }
             (KeyCode::Char('0'), KeyModifiers::NONE) | (KeyCode::Home, KeyModifiers::NONE) => {
-                Some(Action::KillToStart)
+                Some(MotionKind::ToStart)
             }
-            // Esc cancels operator-pending — return to plain Normal.
             (KeyCode::Esc, KeyModifiers::NONE) => return Vec::new(),
             _ => None,
         };
 
-        let Some(motion_action) = motion_action else {
+        let Some(motion) = motion_kind else {
             return Vec::new();
         };
 
-        let mut actions = vec![motion_action];
-        if pending == Pending::Change {
-            self.mode = ViMode::Insert;
-            actions.push(Action::EnterInsertMode);
+        match pending {
+            Pending::Delete => vec![motion.delete_action()],
+            Pending::Change => {
+                self.mode = ViMode::Insert;
+                vec![motion.delete_action(), Action::EnterInsertMode]
+            }
+            Pending::Yank => vec![motion.yank_action()],
+            _ => Vec::new(),
         }
-        actions
+    }
+}
+
+/// One of vi's range-defining motions, translated to either a
+/// delete or a yank action depending on which operator preceded it.
+#[derive(Debug, Clone, Copy)]
+enum MotionKind {
+    WordRight,
+    WordLeft,
+    ToEnd,
+    ToStart,
+}
+
+impl MotionKind {
+    fn delete_action(self) -> Action {
+        match self {
+            MotionKind::WordRight => Action::DeleteWordRight,
+            MotionKind::WordLeft => Action::DeleteWordLeft,
+            MotionKind::ToEnd => Action::KillToEnd,
+            MotionKind::ToStart => Action::KillToStart,
+        }
+    }
+    fn yank_action(self) -> Action {
+        match self {
+            MotionKind::WordRight => Action::YankWordRight,
+            MotionKind::WordLeft => Action::YankWordLeft,
+            MotionKind::ToEnd => Action::YankToEnd,
+            MotionKind::ToStart => Action::YankToStart,
+        }
     }
 }
 
@@ -605,6 +720,57 @@ mod tests {
         let actions = m.translate(ev(KeyCode::Char('w')));
         assert_eq!(actions.len(), 10);
         assert!(actions.iter().all(|a| *a == Action::MoveWordRight));
+    }
+
+    #[test]
+    fn yank_word_compound() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('y')));
+        assert_eq!(m.translate(ev(KeyCode::Char('w'))), vec![Action::YankWordRight]);
+    }
+
+    #[test]
+    fn yank_yy_yanks_whole_line() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('y')));
+        assert_eq!(m.translate(ev(KeyCode::Char('y'))), vec![Action::YankLine]);
+    }
+
+    #[test]
+    fn find_char_forward() {
+        let mut m = ViKeyMap::starting_normal();
+        // f x → FindCharForward('x')
+        assert_eq!(m.translate(ev(KeyCode::Char('f'))), Vec::<Action>::new());
+        assert_eq!(
+            m.translate(ev(KeyCode::Char('x'))),
+            vec![Action::FindCharForward('x')]
+        );
+    }
+
+    #[test]
+    fn till_char_backward() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('T')));
+        assert_eq!(
+            m.translate(ev(KeyCode::Char('a'))),
+            vec![Action::TillCharBackward('a')]
+        );
+    }
+
+    #[test]
+    fn replace_char() {
+        let mut m = ViKeyMap::starting_normal();
+        m.translate(ev(KeyCode::Char('r')));
+        assert_eq!(
+            m.translate(ev(KeyCode::Char('Z'))),
+            vec![Action::ReplaceChar('Z')]
+        );
+    }
+
+    #[test]
+    fn tilde_toggles_case() {
+        let mut m = ViKeyMap::starting_normal();
+        assert_eq!(m.translate(ev(KeyCode::Char('~'))), vec![Action::ToggleCase]);
     }
 
     #[test]
