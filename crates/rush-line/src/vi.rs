@@ -170,8 +170,14 @@ impl ViKeyMap {
             }
 
             // ---- single-key edits ----
+            (KeyCode::Char('u'), KeyModifiers::NONE) => one(Action::Undo),
             (KeyCode::Char('x'), KeyModifiers::NONE) => one(Action::DeleteRight),
             (KeyCode::Char('X'), KeyModifiers::NONE) => one(Action::DeleteLeft),
+            (KeyCode::Char('p'), KeyModifiers::NONE) => one(Action::Yank),
+            // P (paste before cursor) collapses to Yank for our
+            // single-line shell buffer — there's no "above the
+            // current line" to distinguish from "before the cursor."
+            (KeyCode::Char('P'), KeyModifiers::NONE) => one(Action::Yank),
             (KeyCode::Char('D'), KeyModifiers::NONE) => one(Action::KillToEnd),
             (KeyCode::Char('C'), KeyModifiers::NONE) => {
                 self.mode = ViMode::Insert;

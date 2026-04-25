@@ -24,7 +24,12 @@ pub struct LineBuffer {
     /// Cursor as a byte offset into `text`. Always on a grapheme
     /// boundary (asserted by every API that mutates it).
     cursor: usize,
+    /// Snapshots of (text, cursor) before each mutation. [`undo`]
+    /// pops from this and restores. Capped to keep memory bounded.
+    undo_stack: Vec<(String, usize)>,
 }
+
+const UNDO_STACK_CAP: usize = 256;
 
 impl LineBuffer {
     pub fn new() -> Self {
@@ -36,6 +41,36 @@ impl LineBuffer {
         Self {
             text: s.to_string(),
             cursor,
+            undo_stack: Vec::new(),
+        }
+    }
+
+    /// Push a (text, cursor) snapshot to the undo stack. Idempotent
+    /// when the most recent snapshot already matches current state,
+    /// so a no-op mutation (e.g. Backspace at start of buffer) doesn't
+    /// pollute history.
+    fn push_undo(&mut self) {
+        if let Some((last_text, last_cursor)) = self.undo_stack.last() {
+            if last_text == &self.text && *last_cursor == self.cursor {
+                return;
+            }
+        }
+        self.undo_stack.push((self.text.clone(), self.cursor));
+        if self.undo_stack.len() > UNDO_STACK_CAP {
+            self.undo_stack.remove(0);
+        }
+    }
+
+    /// Pop the most recent undo snapshot and restore it. Returns
+    /// `true` if a snapshot was restored, `false` if the stack was
+    /// empty.
+    pub fn undo(&mut self) -> bool {
+        if let Some((text, cursor)) = self.undo_stack.pop() {
+            self.text = text;
+            self.cursor = cursor;
+            true
+        } else {
+            false
         }
     }
 
@@ -66,13 +101,15 @@ impl LineBuffer {
     }
 
     pub fn clear(&mut self) {
+        self.push_undo();
         self.text.clear();
         self.cursor = 0;
     }
 
     /// Replace the entire buffer with `s` and place the cursor at the end.
-    /// Used by history navigation.
+    /// Used by history navigation and tab completion replacements.
     pub fn set_text(&mut self, s: &str) {
+        self.push_undo();
         self.text.clear();
         self.text.push_str(s);
         self.cursor = self.text.len();
@@ -81,11 +118,13 @@ impl LineBuffer {
     // ---- single-character editing ----
 
     pub fn insert_char(&mut self, c: char) {
+        self.push_undo();
         self.text.insert(self.cursor, c);
         self.cursor += c.len_utf8();
     }
 
     pub fn insert_str(&mut self, s: &str) {
+        self.push_undo();
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
     }
@@ -93,6 +132,7 @@ impl LineBuffer {
     /// Delete the grapheme to the left of the cursor (Backspace).
     pub fn delete_left(&mut self) {
         if let Some(prev) = grapheme_boundary_before(&self.text, self.cursor) {
+            self.push_undo();
             self.text.drain(prev..self.cursor);
             self.cursor = prev;
         }
@@ -103,6 +143,7 @@ impl LineBuffer {
     /// is handled at the engine layer).
     pub fn delete_right(&mut self) {
         if let Some(next) = grapheme_boundary_after(&self.text, self.cursor) {
+            self.push_undo();
             self.text.drain(self.cursor..next);
         }
     }
@@ -139,18 +180,30 @@ impl LineBuffer {
         self.cursor = word_boundary_after(&self.text, self.cursor);
     }
 
-    pub fn delete_word_left(&mut self) {
+    /// Delete the word to the left of the cursor. Returns the
+    /// deleted text so the engine can route it to the kill ring.
+    pub fn delete_word_left(&mut self) -> Option<String> {
         let start = word_boundary_before(&self.text, self.cursor);
         if start < self.cursor {
-            self.text.drain(start..self.cursor);
+            self.push_undo();
+            let killed: String = self.text.drain(start..self.cursor).collect();
             self.cursor = start;
+            Some(killed)
+        } else {
+            None
         }
     }
 
-    pub fn delete_word_right(&mut self) {
+    /// Delete the word to the right of the cursor. Returns the
+    /// deleted text.
+    pub fn delete_word_right(&mut self) -> Option<String> {
         let end = word_boundary_after(&self.text, self.cursor);
         if end > self.cursor {
-            self.text.drain(self.cursor..end);
+            self.push_undo();
+            let killed: String = self.text.drain(self.cursor..end).collect();
+            Some(killed)
+        } else {
+            None
         }
     }
 
@@ -158,22 +211,48 @@ impl LineBuffer {
 
     /// Ctrl-K: delete from cursor to end of line (end of buffer for
     /// single-line edits; end of current line within multi-line).
-    pub fn kill_to_end(&mut self) {
+    /// Returns the deleted text.
+    pub fn kill_to_end(&mut self) -> Option<String> {
         let end = match self.text[self.cursor..].find('\n') {
             Some(rel) => self.cursor + rel,
             None => self.text.len(),
         };
-        self.text.drain(self.cursor..end);
+        if end > self.cursor {
+            self.push_undo();
+            let killed: String = self.text.drain(self.cursor..end).collect();
+            Some(killed)
+        } else {
+            None
+        }
     }
 
-    /// Ctrl-U: delete from start of line to cursor.
-    pub fn kill_to_start(&mut self) {
+    /// Ctrl-U: delete from start of line to cursor. Returns the
+    /// deleted text.
+    pub fn kill_to_start(&mut self) -> Option<String> {
         let start = match self.text[..self.cursor].rfind('\n') {
             Some(at) => at + 1,
             None => 0,
         };
-        self.text.drain(start..self.cursor);
-        self.cursor = start;
+        if start < self.cursor {
+            self.push_undo();
+            let killed: String = self.text.drain(start..self.cursor).collect();
+            self.cursor = start;
+            Some(killed)
+        } else {
+            None
+        }
+    }
+
+    /// Drain the entire buffer and return what was there. Used by the
+    /// engine for `dd`/`cc`-style "kill the whole line" actions.
+    pub fn take_all(&mut self) -> Option<String> {
+        if self.text.is_empty() {
+            return None;
+        }
+        self.push_undo();
+        let killed = std::mem::take(&mut self.text);
+        self.cursor = 0;
+        Some(killed)
     }
 }
 
@@ -477,5 +556,58 @@ mod tests {
         b.move_left();
         assert_eq!(b.before_cursor(), "hel");
         assert_eq!(b.after_cursor(), "lo");
+    }
+
+    #[test]
+    fn undo_restores_pre_mutation_state() {
+        let mut b = LineBuffer::new();
+        b.insert_char('a');
+        b.insert_char('b');
+        b.insert_char('c');
+        assert_eq!(b.text(), "abc");
+        assert!(b.undo());
+        assert_eq!(b.text(), "ab");
+        assert!(b.undo());
+        assert_eq!(b.text(), "a");
+        assert!(b.undo());
+        assert_eq!(b.text(), "");
+        // Stack empty.
+        assert!(!b.undo());
+    }
+
+    #[test]
+    fn undo_restores_cursor_position() {
+        let mut b = LineBuffer::from_str("hello");
+        b.move_left();
+        b.move_left();
+        let cursor_before = b.cursor();
+        b.delete_left();
+        assert_eq!(b.text(), "helo");
+        b.undo();
+        assert_eq!(b.text(), "hello");
+        assert_eq!(b.cursor(), cursor_before);
+    }
+
+    #[test]
+    fn undo_handles_kill_to_end() {
+        let mut b = LineBuffer::from_str("hello world");
+        b.move_home();
+        b.move_word_right();
+        b.kill_to_end();
+        assert_eq!(b.text(), "hello");
+        b.undo();
+        assert_eq!(b.text(), "hello world");
+    }
+
+    #[test]
+    fn undo_idempotent_on_noop_mutations() {
+        // delete_left at start of buffer is a no-op and should not
+        // pollute the undo stack.
+        let mut b = LineBuffer::from_str("abc");
+        b.move_home();
+        b.delete_left();
+        b.delete_left();
+        // Stack still empty — neither no-op pushed.
+        assert!(!b.undo());
     }
 }

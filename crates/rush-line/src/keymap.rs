@@ -67,6 +67,14 @@ pub enum Action {
     /// buffer. Pressing this action while already in search mode
     /// cycles to the next older match.
     SearchHistory,
+
+    /// Undo the most recent text change. No-op if the undo stack is
+    /// empty.
+    Undo,
+
+    /// Insert the most-recently killed text at the cursor (Ctrl-Y in
+    /// emacs, `p` / `P` in vi). No-op if no kill has happened yet.
+    Yank,
 }
 
 pub trait KeyMap {
@@ -168,6 +176,15 @@ impl KeyMap for EmacsKeyMap {
 
             // ---- history search ----
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
+
+            // ---- undo ----
+            // Ctrl-_ and Ctrl-/ both produce \x1f on most terminals
+            // and are commonly bound to undo in emacs-style readlines.
+            (KeyCode::Char('_'), KeyModifiers::CONTROL) => one(Action::Undo),
+            (KeyCode::Char('/'), KeyModifiers::CONTROL) => one(Action::Undo),
+
+            // ---- yank ----
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => one(Action::Yank),
 
             _ => Vec::new(),
         }

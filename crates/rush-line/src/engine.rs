@@ -105,6 +105,11 @@ pub struct LineEditor {
     /// `Some`, the regular keymap is bypassed; key events go to the
     /// search handler.
     search: Option<SearchState>,
+    /// Most-recently-killed text. Yank inserts this at the cursor.
+    /// Single slot, not a ring — bash readline has a fuller kill
+    /// ring with M-y to cycle, but for shell daily use a single
+    /// slot covers 95% of cases; expand later if asked.
+    kill_ring: Option<String>,
 }
 
 /// State for an in-progress reverse-incremental history search.
@@ -156,6 +161,7 @@ impl LineEditor {
             edit_stash: None,
             completion_cycle: None,
             search: None,
+            kill_ring: None,
         }
     }
 
@@ -419,23 +425,33 @@ impl LineEditor {
                 ActionResult::Continue
             }
             Action::DeleteWordLeft => {
-                self.buffer.delete_word_left();
+                if let Some(killed) = self.buffer.delete_word_left() {
+                    self.kill_ring = Some(killed);
+                }
                 ActionResult::Continue
             }
             Action::DeleteWordRight => {
-                self.buffer.delete_word_right();
+                if let Some(killed) = self.buffer.delete_word_right() {
+                    self.kill_ring = Some(killed);
+                }
                 ActionResult::Continue
             }
             Action::KillToEnd => {
-                self.buffer.kill_to_end();
+                if let Some(killed) = self.buffer.kill_to_end() {
+                    self.kill_ring = Some(killed);
+                }
                 ActionResult::Continue
             }
             Action::KillToStart => {
-                self.buffer.kill_to_start();
+                if let Some(killed) = self.buffer.kill_to_start() {
+                    self.kill_ring = Some(killed);
+                }
                 ActionResult::Continue
             }
             Action::DeleteLine => {
-                self.buffer.clear();
+                if let Some(killed) = self.buffer.take_all() {
+                    self.kill_ring = Some(killed);
+                }
                 ActionResult::Continue
             }
             Action::MoveLeft => {
@@ -529,6 +545,16 @@ impl LineEditor {
             }
             Action::SearchHistory => {
                 self.enter_search();
+                ActionResult::Continue
+            }
+            Action::Undo => {
+                self.buffer.undo();
+                ActionResult::Continue
+            }
+            Action::Yank => {
+                if let Some(text) = self.kill_ring.clone() {
+                    self.buffer.insert_str(&text);
+                }
                 ActionResult::Continue
             }
         };
