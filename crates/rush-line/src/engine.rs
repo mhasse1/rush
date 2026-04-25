@@ -30,7 +30,8 @@ use std::io::{self, BufWriter, Stderr, Write};
 
 use crossterm::{
     cursor::{self, SetCursorStyle},
-    event::{self, Event, KeyEventKind},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+    execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
     QueueableCommand,
@@ -43,6 +44,7 @@ use crate::history::History;
 use crate::keymap::{Action, EmacsKeyMap, KeyMap};
 use crate::layout::measure;
 use crate::painter::Painter;
+use crate::validator::{AlwaysComplete, ValidationResult, Validator};
 
 /// Whatever produces the prompt string for the current input session.
 /// Implementors return the entire prompt (including any embedded `\n`
@@ -77,6 +79,7 @@ pub struct LineEditor {
     keymap: Box<dyn KeyMap>,
     history: Option<Box<dyn History>>,
     completer: Option<Box<dyn Completer>>,
+    validator: Box<dyn Validator>,
     /// Whether to render an autosuggestion hint after the cursor.
     /// Defaults to `true` if a history is attached. The host can
     /// turn it off via [`LineEditor::with_hint`].
@@ -125,6 +128,7 @@ impl LineEditor {
             keymap: Box::new(EmacsKeyMap),
             history: None,
             completer: None,
+            validator: Box::new(AlwaysComplete),
             hint_enabled: true,
             last_hint: String::new(),
             edit_stash: None,
@@ -166,13 +170,29 @@ impl LineEditor {
         self
     }
 
+    /// Attach a validator. On Enter, if it reports `Incomplete`, the
+    /// engine inserts a `\n` instead of submitting (multi-line
+    /// continuation for unclosed quotes / braces / trailing `\`).
+    /// Default is [`AlwaysComplete`] — every Enter submits.
+    pub fn with_validator<V: Validator + 'static>(mut self, validator: V) -> Self {
+        self.validator = Box::new(validator);
+        self
+    }
+
     /// Read one line of input. Enables raw mode for the duration and
     /// restores it on exit (success or error). On Enter, returns
     /// [`Signal::Success`] with the buffer contents and clears the
     /// buffer for the next call.
     pub fn read_line(&mut self, prompt: &dyn Prompt) -> io::Result<Signal> {
         terminal::enable_raw_mode()?;
+        // Bracketed paste tells the terminal to wrap pasted content
+        // in `\x1b[200~...\x1b[201~`, so crossterm can deliver it as
+        // `Event::Paste` instead of streaming each char (and each
+        // embedded \n triggering Submit). Best-effort: not every
+        // emulator supports it; ignore the error.
+        let _ = execute!(io::stderr(), EnableBracketedPaste);
         let result = self.read_line_inner(prompt);
+        let _ = execute!(io::stderr(), DisableBracketedPaste);
         let _ = terminal::disable_raw_mode();
         result
     }
@@ -221,6 +241,16 @@ impl LineEditor {
                         match self.apply_action(action)? {
                             ActionResult::Continue => needs_repaint = true,
                             ActionResult::Submit => {
+                                // Ask the validator: is this buffer
+                                // ready, or does it want a continuation?
+                                if matches!(
+                                    self.validator.validate(self.buffer.text()),
+                                    ValidationResult::Incomplete
+                                ) {
+                                    self.buffer.insert_char('\n');
+                                    needs_repaint = true;
+                                    continue;
+                                }
                                 self.move_below_paint()?;
                                 let line = std::mem::take(&mut self.buffer)
                                     .text()
@@ -248,7 +278,21 @@ impl LineEditor {
                     self.painter.handle_resize(w, h);
                     self.repaint(prompt)?;
                 }
-                _ => {} // mouse / paste / focus events: ignored for now
+                Event::Paste(text) => {
+                    // Insert the full pasted string at cursor position
+                    // as one unit. Embedded \n stay as `\n` in the
+                    // buffer (the validator decides whether the result
+                    // is submittable on Enter; Paste itself never
+                    // submits).
+                    self.buffer.insert_str(&text);
+                    self.edit_stash = None;
+                    self.completion_cycle = None;
+                    if let Some(history) = self.history.as_deref_mut() {
+                        history.reset_cursor();
+                    }
+                    self.repaint(prompt)?;
+                }
+                _ => {} // mouse / focus events: ignored for now
             }
         }
     }

@@ -24,6 +24,21 @@ use rush_line::{FileBackedHistory, LineEditor, Signal, ViKeyMap};
 use crate::builtins;
 use crate::completer::RushCompleter;
 use crate::prompt::RushPrompt;
+use crate::validator::RushValidator;
+
+/// Bridge rush's `RushValidator` (which implements
+/// `rushline::Validator`) to `rush_line::Validator`. Same logic.
+struct ValidatorAdapter(RushValidator);
+
+impl rush_line::Validator for ValidatorAdapter {
+    fn validate(&self, line: &str) -> rush_line::ValidationResult {
+        use rushline::Validator as _;
+        match self.0.validate(line) {
+            rushline::ValidationResult::Complete => rush_line::ValidationResult::Complete,
+            rushline::ValidationResult::Incomplete => rush_line::ValidationResult::Incomplete,
+        }
+    }
+}
 
 /// Bridge rush's `RushCompleter` (which implements `rushline::Completer`)
 /// to `rush_line::Completer`. Same path/command-completion logic; just
@@ -111,9 +126,11 @@ pub fn run(is_login: bool) {
     let history = FileBackedHistory::with_file(config.history_size, history_path())
         .unwrap_or_else(|_| FileBackedHistory::in_memory(config.history_size));
     let completer = CompleterAdapter(RushCompleter::new());
+    let validator = ValidatorAdapter(RushValidator);
     let editor_builder = LineEditor::new()
         .with_history(history)
-        .with_completer(completer);
+        .with_completer(completer)
+        .with_validator(validator);
     // Honor rush's configured edit_mode (default vi, like the v1 path).
     let use_vi = config.edit_mode != "emacs";
     let mut editor = if use_vi {

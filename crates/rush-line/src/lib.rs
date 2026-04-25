@@ -36,6 +36,7 @@ pub mod history;
 pub mod keymap;
 pub mod layout;
 pub mod painter;
+pub mod validator;
 pub mod vi;
 
 pub use buffer::LineBuffer;
@@ -44,4 +45,5 @@ pub use engine::{LineEditor, Prompt, Signal};
 pub use history::{FileBackedHistory, History};
 pub use keymap::{Action, EmacsKeyMap, KeyMap};
 pub use painter::Painter;
+pub use validator::{AlwaysComplete, ValidationResult, Validator};
 pub use vi::{ViKeyMap, ViMode};
