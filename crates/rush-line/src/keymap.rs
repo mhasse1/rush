@@ -61,6 +61,10 @@ pub enum Action {
     /// is registered.
     Complete,
 
+    /// Cycle backward through the completion menu (Shift-Tab). No-op
+    /// if no menu is open.
+    CompletePrev,
+
     /// Enter incremental reverse history search (Ctrl-R). The engine
     /// switches the prompt to a "(reverse-i-search)`pat':" indicator
     /// and routes typing into the search pattern instead of the
@@ -234,6 +238,9 @@ impl KeyMap for EmacsKeyMap {
 
             // ---- completion ----
             (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
+            (KeyCode::BackTab, KeyModifiers::NONE) => one(Action::CompletePrev),
+            (KeyCode::BackTab, KeyModifiers::SHIFT) => one(Action::CompletePrev),
+            (KeyCode::Tab, KeyModifiers::SHIFT) => one(Action::CompletePrev),
 
             // ---- history search ----
             (KeyCode::Char('r'), KeyModifiers::CONTROL) => {

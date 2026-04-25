@@ -147,24 +147,27 @@ struct SearchState {
     original_cursor: usize,
 }
 
-/// State tracked across consecutive Tab presses. After we extend the
-/// buffer to the longest common prefix and find the user is still on
-/// an ambiguous match, the next Tab uses this to step through the
-/// suggestions one at a time.
+/// State tracked while a completion menu is open. Replaces the
+/// pre-menu in-place cycle: after the user has Tab'd into ambiguity,
+/// the menu shows all suggestions below the buffer, highlighting the
+/// current selection. Tab/Shift-Tab navigate, Enter commits, Esc
+/// cancels (restores original buffer).
 struct CompletionCycle {
-    /// The full list of suggestions returned by the completer at the
-    /// moment the cycle started.
+    /// All suggestions from the completer at the moment the menu opened.
     suggestions: Vec<Suggestion>,
-    /// Index into `suggestions` of the *previously applied* suggestion.
-    /// `None` before the first cycle step.
-    index: Option<usize>,
-    /// The buffer text before any cycle replacement was applied. We
-    /// restore this minus span before each step's replacement so we
-    /// don't accumulate replacements.
+    /// Currently highlighted suggestion (always `Some` while a menu
+    /// is open — the field stays `Option` only because we share the
+    /// type with the no-menu single-match shortcut path which never
+    /// constructs this struct).
+    index: usize,
+    /// Buffer text before the menu opened. Esc restores this verbatim.
     base_text: String,
-    /// The cursor position in `base_text` at cycle start.
+    /// Cursor byte offset in `base_text` at menu-open time. Used by
+    /// Esc to restore. Currently unused; kept in the struct so the
+    /// engine has the full original state on hand.
+    #[allow(dead_code)]
     base_cursor: usize,
-    /// The replacement span common to all suggestions.
+    /// Replacement span common to all suggestions.
     span: Span,
 }
 
@@ -484,10 +487,11 @@ impl LineEditor {
             self.edit_stash = None;
         }
 
-        // Any action other than Complete itself ends an in-flight
-        // Tab cycle. If the user pressed Tab → Tab → 'x', we don't
-        // want a future Tab to resume the cycle from where it was.
-        if !matches!(action, Action::Complete) {
+        // Any action other than menu navigation ends an in-flight
+        // completion menu. Buffer keeps the current preview (the user
+        // implicitly accepted by typing); Esc-cancel is handled in
+        // the EnterNormalMode arm below.
+        if !matches!(action, Action::Complete | Action::CompletePrev) {
             self.completion_cycle = None;
         }
 
@@ -617,12 +621,23 @@ impl LineEditor {
                 ActionResult::Continue
             }
             Action::EnterNormalMode => {
+                // Esc while a completion menu is open: cancel the
+                // menu (restore original buffer), do NOT change mode.
+                // This matches zsh's menu-select behavior — Esc
+                // dismisses the menu without leaving Insert.
+                if self.cancel_completion_menu() {
+                    return Ok(ActionResult::Continue);
+                }
                 self.in_insert_mode = false;
                 self.set_cursor_style(SetCursorStyle::SteadyBlock)?;
                 ActionResult::Continue
             }
             Action::Complete => {
                 self.handle_complete();
+                ActionResult::Continue
+            }
+            Action::CompletePrev => {
+                self.handle_complete_prev();
                 ActionResult::Continue
             }
             Action::SearchHistory => {
@@ -832,26 +847,24 @@ impl LineEditor {
         // No older match: leave state as-is.
     }
 
-    /// Apply tab completion using the bash-style policy described in
-    /// [`crate::completion`]. No-op if no completer is registered.
+    /// Apply tab completion. Single match → apply. Multiple → extend
+    /// to longest common prefix if useful, otherwise open a menu
+    /// below the buffer; Tab/Shift-Tab navigate, Enter commits, Esc
+    /// restores the original buffer.
     fn handle_complete(&mut self) {
-        // If there's already an active cycle, advance to the next
-        // suggestion rather than re-querying the completer.
+        // Menu already open: cycle to next suggestion.
         if let Some(cycle) = self.completion_cycle.as_mut() {
             let n = cycle.suggestions.len();
             if n == 0 {
                 return;
             }
-            let next = match cycle.index {
-                None => 0,
-                Some(i) => (i + 1) % n,
-            };
-            cycle.index = Some(next);
+            cycle.index = (cycle.index + 1) % n;
+            let idx = cycle.index;
             apply_replacement(
                 &mut self.buffer,
                 &cycle.base_text,
                 cycle.span,
-                &cycle.suggestions[next],
+                &cycle.suggestions[idx],
             );
             return;
         }
@@ -866,28 +879,23 @@ impl LineEditor {
             return;
         }
 
-        // All suggestions in a single completer response should share
-        // a span (rush's RushCompleter does this). Pick the first
-        // suggestion's span as authoritative.
         let span = suggestions[0].span;
-        // Sanity-bound the span to the buffer.
         let span = Span {
             start: span.start.min(line.len()),
             end: span.end.min(line.len()),
         };
-
         let already_typed = &line[span.start..span.end];
 
         if suggestions.len() == 1 {
-            // Single match: apply it (with optional trailing space).
+            // Single match: apply directly, no menu.
             apply_replacement(&mut self.buffer, &line, span, &suggestions[0]);
             return;
         }
 
         // Multiple matches: extend to longest common prefix if it's
-        // longer than what's already typed.
-        let lcp =
-            longest_common_prefix(suggestions.iter().map(|s| s.value.as_str()));
+        // longer than what's already typed. No menu shown in this case
+        // — the user keeps typing or hits Tab again.
+        let lcp = longest_common_prefix(suggestions.iter().map(|s| s.value.as_str()));
         if lcp.len() > already_typed.len() && lcp.starts_with(already_typed) {
             let extended = Suggestion {
                 value: lcp,
@@ -898,33 +906,49 @@ impl LineEditor {
             return;
         }
 
-        // Already at the common prefix (or no useful extension).
-        // Start a Tab-cycle: subsequent Tabs step through suggestions.
+        // Already at the common prefix. Open the menu and apply the
+        // first suggestion as a preview.
+        apply_replacement(&mut self.buffer, &line, span, &suggestions[0]);
         self.completion_cycle = Some(CompletionCycle {
             suggestions,
-            index: None,
+            index: 0,
             base_text: line,
             base_cursor: pos,
             span,
         });
-        // First Tab when cycle starts: don't replace yet. The user
-        // hits Tab again to take the first suggestion. (This matches
-        // the bash UX where first Tab lists; we don't have a list
-        // yet, so first Tab is a "ready to cycle" state.)
-        // To make this less surprising, immediately apply the first
-        // suggestion on this same Tab — feels closer to zsh's "always
-        // pick something."
-        let cycle = self.completion_cycle.as_mut().unwrap();
-        cycle.index = Some(0);
-        apply_replacement(
-            &mut self.buffer,
-            &cycle.base_text,
-            cycle.span,
-            &cycle.suggestions[0],
-        );
-        // base_cursor isn't used right now but kept in the struct for
-        // future "restore on Esc-during-cycle" UX.
-        let _ = cycle.base_cursor;
+    }
+
+    /// Cycle completion menu backward (Shift-Tab).
+    fn handle_complete_prev(&mut self) {
+        if let Some(cycle) = self.completion_cycle.as_mut() {
+            let n = cycle.suggestions.len();
+            if n == 0 {
+                return;
+            }
+            cycle.index = if cycle.index == 0 { n - 1 } else { cycle.index - 1 };
+            let idx = cycle.index;
+            apply_replacement(
+                &mut self.buffer,
+                &cycle.base_text,
+                cycle.span,
+                &cycle.suggestions[idx],
+            );
+        }
+    }
+
+    /// Esc while a completion menu is open: restore the original
+    /// buffer and close the menu. Returns `true` if a menu was open.
+    fn cancel_completion_menu(&mut self) -> bool {
+        if let Some(cycle) = self.completion_cycle.take() {
+            self.buffer.set_text(&cycle.base_text);
+            // base_text was the buffer before menu opened. set_text
+            // landed cursor at end; pop the undo snapshot so this
+            // restoration isn't `u`-able.
+            let _ = self.buffer.undo();
+            true
+        } else {
+            false
+        }
     }
 
     /// Emit a cursor-style escape and flush. Used by vi mode to
@@ -1055,10 +1079,18 @@ impl LineEditor {
         self.last_hint = hint.clone();
 
         // Layout: cursor lands at end of (prompt + before); total
-        // emit covers (prompt + before + after + hint).
+        // emit covers (prompt + before + after + hint + menu).
         let pre_cursor = format!("{prompt_text}{before}");
         let pre_m = measure(&pre_cursor, width);
-        let full_text = format!("{prompt_text}{before}{after}{hint}");
+        // Menu rows live below the buffer/hint. We render them in the
+        // emit stream so the painter's last_emit_rows includes them
+        // and the next clear walk wipes them.
+        let menu_text = if let Some(cycle) = &self.completion_cycle {
+            render_completion_menu(cycle, width)
+        } else {
+            String::new()
+        };
+        let full_text = format!("{prompt_text}{before}{after}{hint}{menu_text}");
         let full_m = measure(&full_text, width);
 
         // Emit.
@@ -1093,6 +1125,10 @@ impl LineEditor {
                 out.queue(SetForegroundColor(Color::DarkGrey))?;
                 out.queue(Print(hint_crlf.as_ref()))?;
                 out.queue(ResetColor)?;
+            }
+            if !menu_text.is_empty() {
+                let menu_crlf = coerce_crlf(&menu_text);
+                out.queue(Print(menu_crlf.as_ref()))?;
             }
             out.queue(cursor::RestorePosition)?;
         }
@@ -1197,6 +1233,33 @@ fn word_boundary_after_external(text: &str, byte_idx: usize) -> usize {
         i += 1;
     }
     i
+}
+
+/// Render the completion menu as a string of `\n`-separated rows
+/// to append to the paint emit. Each suggestion takes one row; the
+/// currently selected one is reverse-video so the user can see which
+/// will be committed on Enter or by typing past it. Capped at the
+/// terminal width so wrapping doesn't multiply menu rows.
+fn render_completion_menu(cycle: &CompletionCycle, width: u16) -> String {
+    if cycle.suggestions.is_empty() {
+        return String::new();
+    }
+    let max_cells = (width as usize).saturating_sub(2).max(1);
+    let mut out = String::new();
+    for (i, suggestion) in cycle.suggestions.iter().enumerate() {
+        out.push('\n');
+        let value = &suggestion.value;
+        let truncated: String = value.chars().take(max_cells).collect();
+        if i == cycle.index {
+            // SGR 7 = reverse video. Reset at end of row.
+            out.push_str("\x1b[7m");
+            out.push_str(&truncated);
+            out.push_str("\x1b[0m");
+        } else {
+            out.push_str(&truncated);
+        }
+    }
+    out
 }
 
 /// Action types that start a vi `.` recording when seen at the
