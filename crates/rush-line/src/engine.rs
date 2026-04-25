@@ -42,6 +42,7 @@ use crossterm::{
 
 use crate::buffer::LineBuffer;
 use crate::completion::{longest_common_prefix, Completer, Span, Suggestion};
+use crate::highlighter::Highlighter;
 use crate::hint::longest_history_match;
 use crate::history::History;
 use crate::keymap::{Action, EmacsKeyMap, KeyMap};
@@ -83,6 +84,7 @@ pub struct LineEditor {
     history: Option<Box<dyn History>>,
     completer: Option<Box<dyn Completer>>,
     validator: Box<dyn Validator>,
+    highlighter: Option<Box<dyn Highlighter>>,
     /// Whether to render an autosuggestion hint after the cursor.
     /// Defaults to `true` if a history is attached. The host can
     /// turn it off via [`LineEditor::with_hint`].
@@ -148,6 +150,7 @@ impl LineEditor {
             history: None,
             completer: None,
             validator: Box::new(AlwaysComplete),
+            highlighter: None,
             hint_enabled: true,
             last_hint: String::new(),
             edit_stash: None,
@@ -196,6 +199,14 @@ impl LineEditor {
     /// Default is [`AlwaysComplete`] — every Enter submits.
     pub fn with_validator<V: Validator + 'static>(mut self, validator: V) -> Self {
         self.validator = Box::new(validator);
+        self
+    }
+
+    /// Attach a syntax highlighter. The buffer (split at the cursor)
+    /// is piped through it on each repaint, with the result emitted
+    /// verbatim — including any ANSI escapes for color/style.
+    pub fn with_highlighter<H: Highlighter + 'static>(mut self, highlighter: H) -> Self {
+        self.highlighter = Some(Box::new(highlighter));
         self
     }
 
@@ -805,15 +816,31 @@ impl LineEditor {
         // Emit.
         self.painter.prepare_for_emit()?;
         let prompt_crlf = coerce_crlf(&prompt_text);
-        let before_crlf = coerce_crlf(&before);
-        let after_crlf = coerce_crlf(&after);
+        // Apply the syntax highlighter to before_cursor / after_cursor
+        // when one is attached and we're not in Ctrl-R search mode
+        // (the search-mode "buffer" is the matched history entry, not
+        // user input — the highlighter would decorate the recall, not
+        // the typing).
+        let highlight_active = self.highlighter.is_some() && self.search.is_none();
+        let before_to_print = if highlight_active {
+            coerce_crlf(&self.highlighter.as_deref().unwrap().highlight(&before))
+                .into_owned()
+        } else {
+            coerce_crlf(&before).into_owned()
+        };
+        let after_to_print = if highlight_active {
+            coerce_crlf(&self.highlighter.as_deref().unwrap().highlight(&after))
+                .into_owned()
+        } else {
+            coerce_crlf(&after).into_owned()
+        };
         let hint_crlf = coerce_crlf(&hint);
         {
             let out = self.painter.out();
             out.queue(Print(prompt_crlf.as_ref()))?;
-            out.queue(Print(before_crlf.as_ref()))?;
+            out.queue(Print(&before_to_print))?;
             out.queue(cursor::SavePosition)?;
-            out.queue(Print(after_crlf.as_ref()))?;
+            out.queue(Print(&after_to_print))?;
             if !hint.is_empty() {
                 out.queue(SetForegroundColor(Color::DarkGrey))?;
                 out.queue(Print(hint_crlf.as_ref()))?;

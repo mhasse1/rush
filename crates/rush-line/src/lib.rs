@@ -31,6 +31,7 @@
 pub mod buffer;
 pub mod completion;
 pub mod engine;
+pub mod highlighter;
 pub mod hint;
 pub mod history;
 pub mod keymap;
@@ -42,6 +43,7 @@ pub mod vi;
 pub use buffer::LineBuffer;
 pub use completion::{Completer, Span, Suggestion};
 pub use engine::{LineEditor, Prompt, Signal};
+pub use highlighter::Highlighter;
 pub use history::{FileBackedHistory, History};
 pub use keymap::{Action, EmacsKeyMap, KeyMap};
 pub use painter::Painter;

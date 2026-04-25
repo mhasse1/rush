@@ -23,8 +23,29 @@ use rush_line::{FileBackedHistory, LineEditor, Signal, ViKeyMap};
 
 use crate::builtins;
 use crate::completer::RushCompleter;
+use crate::highlighter::RushHighlighter;
 use crate::prompt::RushPrompt;
 use crate::validator::RushValidator;
+
+/// Bridge rush's `RushHighlighter` (which implements
+/// `rushline::Highlighter` and returns `StyledText`) to
+/// `rush_line::Highlighter`, which expects an ANSI-formatted string.
+struct HighlighterAdapter(RushHighlighter);
+
+impl rush_line::Highlighter for HighlighterAdapter {
+    fn highlight(&self, segment: &str) -> String {
+        use rushline::Highlighter as _;
+        // RushHighlighter ignores cursor position, so any value works.
+        let styled = self.0.highlight(segment, segment.len());
+        let mut out = String::new();
+        for (style, text) in styled.buffer {
+            // nu_ansi_term::Style::paint returns an AnsiGenericString
+            // whose Display impl emits the start/end SGR escapes.
+            out.push_str(&style.paint(text).to_string());
+        }
+        out
+    }
+}
 
 /// Bridge rush's `RushValidator` (which implements
 /// `rushline::Validator`) to `rush_line::Validator`. Same logic.
@@ -127,10 +148,12 @@ pub fn run(is_login: bool) {
         .unwrap_or_else(|_| FileBackedHistory::in_memory(config.history_size));
     let completer = CompleterAdapter(RushCompleter::new());
     let validator = ValidatorAdapter(RushValidator);
+    let highlighter = HighlighterAdapter(RushHighlighter);
     let editor_builder = LineEditor::new()
         .with_history(history)
         .with_completer(completer)
-        .with_validator(validator);
+        .with_validator(validator)
+        .with_highlighter(highlighter);
     // Honor rush's configured edit_mode (default vi, like the v1 path).
     let use_vi = config.edit_mode != "emacs";
     let mut editor = if use_vi {
