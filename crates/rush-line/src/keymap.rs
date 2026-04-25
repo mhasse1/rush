@@ -54,6 +54,12 @@ pub enum Action {
     // keymap is responsible for tracking which mode it's in.
     EnterInsertMode,
     EnterNormalMode,
+
+    /// Tab completion. Engine asks the registered completer for
+    /// suggestions and applies the bash-style "complete to common
+    /// prefix; subsequent Tabs cycle" policy. No-op if no completer
+    /// is registered.
+    Complete,
 }
 
 pub trait KeyMap {
@@ -149,6 +155,9 @@ impl KeyMap for EmacsKeyMap {
 
             // ---- display ----
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
+
+            // ---- completion ----
+            (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
 
             _ => Vec::new(),
         }

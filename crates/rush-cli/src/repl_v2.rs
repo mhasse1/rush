@@ -22,7 +22,31 @@ use rush_core::value::Value;
 use rush_line::{FileBackedHistory, LineEditor, Signal, ViKeyMap};
 
 use crate::builtins;
+use crate::completer::RushCompleter;
 use crate::prompt::RushPrompt;
+
+/// Bridge rush's `RushCompleter` (which implements `rushline::Completer`)
+/// to `rush_line::Completer`. Same path/command-completion logic; just
+/// translate between the two crates' suggestion shapes.
+struct CompleterAdapter(RushCompleter);
+
+impl rush_line::Completer for CompleterAdapter {
+    fn complete(&mut self, line: &str, pos: usize) -> Vec<rush_line::Suggestion> {
+        use rushline::Completer as _;
+        self.0
+            .complete(line, pos)
+            .into_iter()
+            .map(|s| rush_line::Suggestion {
+                value: s.value,
+                span: rush_line::Span {
+                    start: s.span.start,
+                    end: s.span.end,
+                },
+                append_whitespace: s.append_whitespace,
+            })
+            .collect()
+    }
+}
 
 fn history_path() -> std::path::PathBuf {
     let home = std::env::var("HOME")
@@ -86,7 +110,10 @@ pub fn run(is_login: bool) {
     // failure; if it does, fall back to in-memory so v2 still works.
     let history = FileBackedHistory::with_file(config.history_size, history_path())
         .unwrap_or_else(|_| FileBackedHistory::in_memory(config.history_size));
-    let editor_builder = LineEditor::new().with_history(history);
+    let completer = CompleterAdapter(RushCompleter::new());
+    let editor_builder = LineEditor::new()
+        .with_history(history)
+        .with_completer(completer);
     // Honor rush's configured edit_mode (default vi, like the v1 path).
     let use_vi = config.edit_mode != "emacs";
     let mut editor = if use_vi {
@@ -97,7 +124,7 @@ pub fn run(is_login: bool) {
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
     eprintln!(
-        "{}rush-line v2 (RUSH_LINE_V2=1) — {} mode, no completion/hint yet{}",
+        "{}rush-line v2 (RUSH_LINE_V2=1) — {} mode, no hint yet{}",
         detected_theme.muted,
         if use_vi { "vi" } else { "emacs" },
         detected_theme.reset

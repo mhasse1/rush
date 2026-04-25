@@ -29,7 +29,9 @@
 //! loop) is built up in subsequent phases on top of this primitive.
 
 pub mod buffer;
+pub mod completion;
 pub mod engine;
+pub mod hint;
 pub mod history;
 pub mod keymap;
 pub mod layout;
@@ -37,6 +39,7 @@ pub mod painter;
 pub mod vi;
 
 pub use buffer::LineBuffer;
+pub use completion::{Completer, Span, Suggestion};
 pub use engine::{LineEditor, Prompt, Signal};
 pub use history::{FileBackedHistory, History};
 pub use keymap::{Action, EmacsKeyMap, KeyMap};

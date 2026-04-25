@@ -31,12 +31,14 @@ use std::io::{self, BufWriter, Stderr, Write};
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{self, Event, KeyEventKind},
-    style::Print,
+    style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
     QueueableCommand,
 };
 
 use crate::buffer::LineBuffer;
+use crate::completion::{longest_common_prefix, Completer, Span, Suggestion};
+use crate::hint::longest_history_match;
 use crate::history::History;
 use crate::keymap::{Action, EmacsKeyMap, KeyMap};
 use crate::layout::measure;
@@ -74,11 +76,44 @@ pub struct LineEditor {
     buffer: LineBuffer,
     keymap: Box<dyn KeyMap>,
     history: Option<Box<dyn History>>,
+    completer: Option<Box<dyn Completer>>,
+    /// Whether to render an autosuggestion hint after the cursor.
+    /// Defaults to `true` if a history is attached. The host can
+    /// turn it off via [`LineEditor::with_hint`].
+    hint_enabled: bool,
+    /// Last computed hint suffix, populated each repaint. Used by
+    /// MoveRight/MoveEnd at end-of-buffer to "accept" the hint by
+    /// appending it to the buffer.
+    last_hint: String,
     /// Snapshot of the in-progress edit taken on first `HistoryPrev`,
     /// so a subsequent `HistoryNext` past the newest entry can put
     /// the user's typing back. None when not currently navigating
     /// history.
     edit_stash: Option<String>,
+    /// Active completion cycle, if the user is pressing Tab repeatedly
+    /// after an ambiguous match. Cleared by any non-Complete action.
+    completion_cycle: Option<CompletionCycle>,
+}
+
+/// State tracked across consecutive Tab presses. After we extend the
+/// buffer to the longest common prefix and find the user is still on
+/// an ambiguous match, the next Tab uses this to step through the
+/// suggestions one at a time.
+struct CompletionCycle {
+    /// The full list of suggestions returned by the completer at the
+    /// moment the cycle started.
+    suggestions: Vec<Suggestion>,
+    /// Index into `suggestions` of the *previously applied* suggestion.
+    /// `None` before the first cycle step.
+    index: Option<usize>,
+    /// The buffer text before any cycle replacement was applied. We
+    /// restore this minus span before each step's replacement so we
+    /// don't accumulate replacements.
+    base_text: String,
+    /// The cursor position in `base_text` at cycle start.
+    base_cursor: usize,
+    /// The replacement span common to all suggestions.
+    span: Span,
 }
 
 impl LineEditor {
@@ -89,8 +124,20 @@ impl LineEditor {
             buffer: LineBuffer::new(),
             keymap: Box::new(EmacsKeyMap),
             history: None,
+            completer: None,
+            hint_enabled: true,
+            last_hint: String::new(),
             edit_stash: None,
+            completion_cycle: None,
         }
+    }
+
+    /// Enable or disable the autosuggestion hint. Default is on; the
+    /// hint requires a history backend and falls back to no-op without
+    /// one.
+    pub fn with_hint(mut self, enabled: bool) -> Self {
+        self.hint_enabled = enabled;
+        self
     }
 
     pub fn with_keymap<K: KeyMap + 'static>(mut self, keymap: K) -> Self {
@@ -113,6 +160,12 @@ impl LineEditor {
         self.history.as_deref_mut()
     }
 
+    /// Attach a completer. Tab will invoke it.
+    pub fn with_completer<C: Completer + 'static>(mut self, completer: C) -> Self {
+        self.completer = Some(Box::new(completer));
+        self
+    }
+
     /// Read one line of input. Enables raw mode for the duration and
     /// restores it on exit (success or error). On Enter, returns
     /// [`Signal::Success`] with the buffer contents and clears the
@@ -133,6 +186,7 @@ impl LineEditor {
         self.painter.invalidate();
         self.buffer.clear();
         self.edit_stash = None;
+        self.completion_cycle = None;
         if let Some(history) = self.history.as_deref_mut() {
             history.reset_cursor();
         }
@@ -225,6 +279,13 @@ impl LineEditor {
             self.edit_stash = None;
         }
 
+        // Any action other than Complete itself ends an in-flight
+        // Tab cycle. If the user pressed Tab → Tab → 'x', we don't
+        // want a future Tab to resume the cycle from where it was.
+        if !matches!(action, Action::Complete) {
+            self.completion_cycle = None;
+        }
+
         let result = match action {
             Action::InsertChar(c) => {
                 self.buffer.insert_char(c);
@@ -263,7 +324,14 @@ impl LineEditor {
                 ActionResult::Continue
             }
             Action::MoveRight => {
-                self.buffer.move_right();
+                if self.cursor_at_end() && !self.last_hint.is_empty() {
+                    // Accept the autosuggestion hint: append it to
+                    // the buffer. Cursor lands at the new end.
+                    self.buffer.insert_str(&self.last_hint.clone());
+                    self.last_hint.clear();
+                } else {
+                    self.buffer.move_right();
+                }
                 ActionResult::Continue
             }
             Action::MoveWordLeft => {
@@ -279,7 +347,12 @@ impl LineEditor {
                 ActionResult::Continue
             }
             Action::MoveEnd => {
-                self.buffer.move_end();
+                if self.cursor_at_end() && !self.last_hint.is_empty() {
+                    self.buffer.insert_str(&self.last_hint.clone());
+                    self.last_hint.clear();
+                } else {
+                    self.buffer.move_end();
+                }
                 ActionResult::Continue
             }
             Action::HistoryPrev => {
@@ -331,8 +404,107 @@ impl LineEditor {
                 self.set_cursor_style(SetCursorStyle::SteadyBlock)?;
                 ActionResult::Continue
             }
+            Action::Complete => {
+                self.handle_complete();
+                ActionResult::Continue
+            }
         };
         Ok(result)
+    }
+
+    /// Apply tab completion using the bash-style policy described in
+    /// [`crate::completion`]. No-op if no completer is registered.
+    fn handle_complete(&mut self) {
+        // If there's already an active cycle, advance to the next
+        // suggestion rather than re-querying the completer.
+        if let Some(cycle) = self.completion_cycle.as_mut() {
+            let n = cycle.suggestions.len();
+            if n == 0 {
+                return;
+            }
+            let next = match cycle.index {
+                None => 0,
+                Some(i) => (i + 1) % n,
+            };
+            cycle.index = Some(next);
+            apply_replacement(
+                &mut self.buffer,
+                &cycle.base_text,
+                cycle.span,
+                &cycle.suggestions[next],
+            );
+            return;
+        }
+
+        let Some(completer) = self.completer.as_deref_mut() else {
+            return;
+        };
+        let line = self.buffer.text().to_string();
+        let pos = self.buffer.cursor();
+        let suggestions = completer.complete(&line, pos);
+        if suggestions.is_empty() {
+            return;
+        }
+
+        // All suggestions in a single completer response should share
+        // a span (rush's RushCompleter does this). Pick the first
+        // suggestion's span as authoritative.
+        let span = suggestions[0].span;
+        // Sanity-bound the span to the buffer.
+        let span = Span {
+            start: span.start.min(line.len()),
+            end: span.end.min(line.len()),
+        };
+
+        let already_typed = &line[span.start..span.end];
+
+        if suggestions.len() == 1 {
+            // Single match: apply it (with optional trailing space).
+            apply_replacement(&mut self.buffer, &line, span, &suggestions[0]);
+            return;
+        }
+
+        // Multiple matches: extend to longest common prefix if it's
+        // longer than what's already typed.
+        let lcp =
+            longest_common_prefix(suggestions.iter().map(|s| s.value.as_str()));
+        if lcp.len() > already_typed.len() && lcp.starts_with(already_typed) {
+            let extended = Suggestion {
+                value: lcp,
+                span,
+                append_whitespace: false,
+            };
+            apply_replacement(&mut self.buffer, &line, span, &extended);
+            return;
+        }
+
+        // Already at the common prefix (or no useful extension).
+        // Start a Tab-cycle: subsequent Tabs step through suggestions.
+        self.completion_cycle = Some(CompletionCycle {
+            suggestions,
+            index: None,
+            base_text: line,
+            base_cursor: pos,
+            span,
+        });
+        // First Tab when cycle starts: don't replace yet. The user
+        // hits Tab again to take the first suggestion. (This matches
+        // the bash UX where first Tab lists; we don't have a list
+        // yet, so first Tab is a "ready to cycle" state.)
+        // To make this less surprising, immediately apply the first
+        // suggestion on this same Tab — feels closer to zsh's "always
+        // pick something."
+        let cycle = self.completion_cycle.as_mut().unwrap();
+        cycle.index = Some(0);
+        apply_replacement(
+            &mut self.buffer,
+            &cycle.base_text,
+            cycle.span,
+            &cycle.suggestions[0],
+        );
+        // base_cursor isn't used right now but kept in the struct for
+        // future "restore on Esc-during-cycle" UX.
+        let _ = cycle.base_cursor;
     }
 
     /// Emit a cursor-style escape and flush. Used by vi mode to
@@ -343,30 +515,65 @@ impl LineEditor {
         Ok(())
     }
 
+    fn cursor_at_end(&self) -> bool {
+        self.buffer.cursor() == self.buffer.len()
+    }
+
     fn repaint(&mut self, prompt: &dyn Prompt) -> io::Result<()> {
         let prompt_text = prompt.render();
-        let before = self.buffer.before_cursor();
-        let after = self.buffer.after_cursor();
+        let before = self.buffer.before_cursor().to_string();
+        let after = self.buffer.after_cursor().to_string();
         let width = self.painter.screen_width();
 
+        // Compute the autosuggestion hint. Only meaningful when the
+        // cursor is at the end of the buffer (otherwise the hint
+        // would visually float in the middle of edited text). And
+        // only when the user is editing fresh, not navigating
+        // history — avoid hinting "ls -la /tmp" when they just
+        // recalled "ls -la /tmp".
+        let hint = if self.hint_enabled
+            && after.is_empty()
+            && self
+                .history
+                .as_deref()
+                .map(|h| h.at_present())
+                .unwrap_or(true)
+        {
+            self.history
+                .as_deref()
+                .map(|h| {
+                    longest_history_match(&before, h.entries().iter().map(String::as_str))
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        self.last_hint = hint.clone();
+
         // Layout: cursor lands at end of (prompt + before); total
-        // emit covers (prompt + before + after).
+        // emit covers (prompt + before + after + hint).
         let pre_cursor = format!("{prompt_text}{before}");
         let pre_m = measure(&pre_cursor, width);
-        let full_text = format!("{prompt_text}{before}{after}");
+        let full_text = format!("{prompt_text}{before}{after}{hint}");
         let full_m = measure(&full_text, width);
 
         // Emit.
         self.painter.prepare_for_emit()?;
         let prompt_crlf = coerce_crlf(&prompt_text);
-        let before_crlf = coerce_crlf(before);
-        let after_crlf = coerce_crlf(after);
+        let before_crlf = coerce_crlf(&before);
+        let after_crlf = coerce_crlf(&after);
+        let hint_crlf = coerce_crlf(&hint);
         {
             let out = self.painter.out();
             out.queue(Print(prompt_crlf.as_ref()))?;
             out.queue(Print(before_crlf.as_ref()))?;
             out.queue(cursor::SavePosition)?;
             out.queue(Print(after_crlf.as_ref()))?;
+            if !hint.is_empty() {
+                out.queue(SetForegroundColor(Color::DarkGrey))?;
+                out.queue(Print(hint_crlf.as_ref()))?;
+                out.queue(ResetColor)?;
+            }
             out.queue(cursor::RestorePosition)?;
         }
         self.painter.finalize(full_m.rows_used, pre_m.cursor_row);
@@ -406,6 +613,34 @@ enum ActionResult {
     Submit,
     Cancel,
     EndOfFile,
+}
+
+/// Replace the bytes in `span` of `base` with the suggestion's value
+/// (plus a trailing space if requested), commit the result to
+/// `buffer`, and put the cursor immediately after the replacement.
+fn apply_replacement(buffer: &mut LineBuffer, base: &str, span: Span, suggestion: &Suggestion) {
+    let mut new_text = String::with_capacity(base.len() + suggestion.value.len() + 1);
+    new_text.push_str(&base[..span.start]);
+    new_text.push_str(&suggestion.value);
+    let cursor_after = new_text.len();
+    if suggestion.append_whitespace {
+        new_text.push(' ');
+    }
+    if span.end < base.len() {
+        new_text.push_str(&base[span.end..]);
+    }
+    buffer.set_text(&new_text);
+    // Place cursor immediately after the inserted value (or after the
+    // trailing space if we added one).
+    let cursor_pos = if suggestion.append_whitespace {
+        cursor_after + 1
+    } else {
+        cursor_after
+    };
+    // set_text put cursor at end-of-buffer; walk it back.
+    while buffer.cursor() > cursor_pos {
+        buffer.move_left();
+    }
 }
 
 /// Convert solitary `\n` into `\r\n` so output lands correctly in raw

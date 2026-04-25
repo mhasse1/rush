@@ -63,6 +63,11 @@ pub trait History {
 
     /// Persist any new entries that haven't yet been written.
     fn sync(&mut self) -> io::Result<()>;
+
+    /// All entries, oldest first. Used by the autosuggestion hint
+    /// (which scans from newest backward looking for a prefix match)
+    /// and could be used by future history-search features.
+    fn entries(&self) -> &[String];
 }
 
 #[derive(Debug)]
@@ -183,6 +188,10 @@ impl History for FileBackedHistory {
 
     fn at_present(&self) -> bool {
         FileBackedHistory::at_present(self)
+    }
+
+    fn entries(&self) -> &[String] {
+        &self.entries
     }
 
     fn backward(&mut self) -> Option<&str> {
