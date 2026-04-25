@@ -138,6 +138,16 @@ impl KeyMap for ViKeyMap {
             ViMode::Normal => self.translate_normal(event),
         }
     }
+
+    fn reset(&mut self) -> Vec<Action> {
+        // Each fresh prompt starts in Insert with all pending state
+        // cleared. The returned action makes the engine update the
+        // cursor shape (bar) so it visibly matches.
+        self.mode = ViMode::Insert;
+        self.pending = Pending::None;
+        self.count = None;
+        vec![Action::EnterInsertMode]
+    }
 }
 
 impl ViKeyMap {
@@ -175,7 +185,14 @@ impl ViKeyMap {
             (KeyCode::BackTab, KeyModifiers::NONE)
             | (KeyCode::BackTab, KeyModifiers::SHIFT)
             | (KeyCode::Tab, KeyModifiers::SHIFT) => one(Action::CompletePrev),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('r'), KeyModifiers::CONTROL)
+            // Alt-/ and Alt-? cover terminals that fold `Esc /` and
+            // `Esc ?` into a single Alt-modified event before crossterm
+            // sees them (xterm with metaSendsEsc, some tmux configs).
+            // The vi-Normal handler already covers the two-keystroke
+            // case where Esc and / arrive as separate events.
+            | (KeyCode::Char('/'), KeyModifiers::ALT)
+            | (KeyCode::Char('?'), KeyModifiers::ALT) => {
                 if self.fzf_enabled {
                     one(Action::HostCommand("__fzf_history__".to_string()))
                 } else {

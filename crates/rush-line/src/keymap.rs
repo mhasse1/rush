@@ -133,6 +133,18 @@ pub trait KeyMap {
     /// if the keystroke advanced an internal state machine without
     /// completing a command (e.g. vi's `d` waiting for a motion).
     fn translate(&mut self, event: KeyEvent) -> Vec<Action>;
+
+    /// Reset the keymap's per-session state at the start of a new
+    /// `read_line` call. Returns any `Action`s the engine should
+    /// apply to put the editor in the right initial state — most
+    /// importantly, vi keymaps return `[EnterInsertMode]` here so a
+    /// fresh prompt always starts in Insert (matching zsh, bash's
+    /// vi-mode, and ksh).
+    ///
+    /// Default impl is a no-op for stateless keymaps like emacs.
+    fn reset(&mut self) -> Vec<Action> {
+        Vec::new()
+    }
 }
 
 /// Default emacs-style bindings.

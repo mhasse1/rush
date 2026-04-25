@@ -107,6 +107,10 @@ impl FileBackedHistory {
     /// (the most recent are kept if the file exceeds it). Creates the
     /// parent directory if missing. A non-existent path is fine —
     /// history starts empty.
+    ///
+    /// Multi-line entries (submissions containing `\n`) are stored
+    /// with newlines escaped as `\\n` so each entry remains one
+    /// physical file line. `decode_entry` reverses the escape on load.
     pub fn with_file(capacity: usize, path: PathBuf) -> io::Result<Self> {
         let mut entries = Vec::new();
         if let Ok(file) = File::open(&path) {
@@ -114,7 +118,7 @@ impl FileBackedHistory {
             for line in reader.lines() {
                 let line = line?;
                 if !line.is_empty() {
-                    entries.push(line);
+                    entries.push(decode_entry(&line));
                 }
             }
             // Trim to capacity, keeping the most recent.
@@ -253,12 +257,51 @@ impl History for FileBackedHistory {
             .open(&path)?;
         let mut writer = BufWriter::new(file);
         for entry in &self.entries[self.dirty_from..] {
-            writeln!(writer, "{entry}")?;
+            writeln!(writer, "{}", encode_entry(entry))?;
         }
         writer.flush()?;
         self.dirty_from = self.entries.len();
         Ok(())
     }
+}
+
+/// Escape `\n` → `\\n` and `\\` → `\\\\` so a multi-line entry can be
+/// stored as a single physical line in the history file.
+fn encode_entry(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Reverse [`encode_entry`]. Unknown `\\X` sequences are kept literal
+/// so we never silently lose user content if the file was hand-edited.
+fn decode_entry(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.peek() {
+                Some('n') => {
+                    chars.next();
+                    out.push('\n');
+                }
+                Some('\\') => {
+                    chars.next();
+                    out.push('\\');
+                }
+                _ => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -382,6 +425,40 @@ mod tests {
 
         let h4 = FileBackedHistory::with_file(100, path.clone()).unwrap();
         assert_eq!(h4.entries, vec!["one", "two", "three", "four"]);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        let cases = [
+            ("hello", "hello"),
+            ("for i in 1..3\nputs i\nend", "for i in 1..3\\nputs i\\nend"),
+            ("path\\to\\file", "path\\\\to\\\\file"),
+            ("mix\\n and \\real newline\nhere", "mix\\\\n and \\\\real newline\\nhere"),
+        ];
+        for (raw, encoded) in cases {
+            assert_eq!(encode_entry(raw), encoded, "encode {raw:?}");
+            assert_eq!(decode_entry(encoded), raw, "decode {encoded:?}");
+        }
+    }
+
+    #[test]
+    fn multiline_entry_survives_file_roundtrip() {
+        let dir =
+            std::env::temp_dir().join(format!("rush-line-history-multi-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("history");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut h = FileBackedHistory::with_file(100, path.clone()).unwrap();
+            h.add("for i in 1..3\nputs i\nend");
+            h.sync().unwrap();
+        }
+        let h2 = FileBackedHistory::with_file(100, path.clone()).unwrap();
+        assert_eq!(h2.entries, vec!["for i in 1..3\nputs i\nend"]);
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);

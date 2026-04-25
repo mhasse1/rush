@@ -298,6 +298,14 @@ impl LineEditor {
             // fresh-paint state.
         }
 
+        // Reset keymap to its session-start state. Vi keymaps return
+        // [EnterInsertMode] so the cursor shape matches the mode the
+        // user expects on a fresh prompt.
+        let init_actions = self.keymap.reset();
+        for action in init_actions {
+            let _ = self.apply_action(action)?;
+        }
+
         // Initial paint.
         self.repaint(prompt)?;
 
