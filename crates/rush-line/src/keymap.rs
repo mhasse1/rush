@@ -60,6 +60,13 @@ pub enum Action {
     /// prefix; subsequent Tabs cycle" policy. No-op if no completer
     /// is registered.
     Complete,
+
+    /// Enter incremental reverse history search (Ctrl-R). The engine
+    /// switches the prompt to a "(reverse-i-search)`pat':" indicator
+    /// and routes typing into the search pattern instead of the
+    /// buffer. Pressing this action while already in search mode
+    /// cycles to the next older match.
+    SearchHistory,
 }
 
 pub trait KeyMap {
@@ -158,6 +165,9 @@ impl KeyMap for EmacsKeyMap {
 
             // ---- completion ----
             (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
+
+            // ---- history search ----
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
 
             _ => Vec::new(),
         }

@@ -131,6 +131,7 @@ impl ViKeyMap {
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => one(Action::EndOfInput),
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
             (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
             _ => Vec::new(),
         }
     }

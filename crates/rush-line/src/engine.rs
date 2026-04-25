@@ -30,7 +30,10 @@ use std::io::{self, BufWriter, Stderr, Write};
 
 use crossterm::{
     cursor::{self, SetCursorStyle},
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers,
+    },
     execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, Clear, ClearType},
@@ -96,6 +99,22 @@ pub struct LineEditor {
     /// Active completion cycle, if the user is pressing Tab repeatedly
     /// after an ambiguous match. Cleared by any non-Complete action.
     completion_cycle: Option<CompletionCycle>,
+    /// Active reverse-incremental history search (Ctrl-R). When
+    /// `Some`, the regular keymap is bypassed; key events go to the
+    /// search handler.
+    search: Option<SearchState>,
+}
+
+/// State for an in-progress reverse-incremental history search.
+struct SearchState {
+    /// What the user has typed so far.
+    pattern: String,
+    /// Currently matched history-entries index (newest matched-back).
+    /// `None` means no match (the prompt shows `failing-i-search`).
+    match_index: Option<usize>,
+    /// Buffer state to restore on cancel.
+    original_buffer: String,
+    original_cursor: usize,
 }
 
 /// State tracked across consecutive Tab presses. After we extend the
@@ -133,6 +152,7 @@ impl LineEditor {
             last_hint: String::new(),
             edit_stash: None,
             completion_cycle: None,
+            search: None,
         }
     }
 
@@ -207,6 +227,7 @@ impl LineEditor {
         self.buffer.clear();
         self.edit_stash = None;
         self.completion_cycle = None;
+        self.search = None;
         if let Some(history) = self.history.as_deref_mut() {
             history.reset_cursor();
         }
@@ -231,6 +252,49 @@ impl LineEditor {
                         && key_event.kind != KeyEventKind::Repeat
                     {
                         continue;
+                    }
+                    // If we're in a Ctrl-R search, route the event
+                    // through the search handler instead of the
+                    // regular keymap.
+                    if self.search.is_some() {
+                        match self.handle_search_key(key_event) {
+                            SearchResult::Continue => {
+                                self.repaint(prompt)?;
+                                continue;
+                            }
+                            SearchResult::Accept => {
+                                // Exit search; the buffer is already
+                                // set to the matched entry. Fall
+                                // through to the normal keymap with
+                                // the same key event so e.g. Right
+                                // accepts and moves cursor right.
+                                self.search = None;
+                            }
+                            SearchResult::Cancel => {
+                                self.search = None;
+                                self.repaint(prompt)?;
+                                continue;
+                            }
+                            SearchResult::Submit => {
+                                self.search = None;
+                                if matches!(
+                                    self.validator.validate(self.buffer.text()),
+                                    ValidationResult::Incomplete
+                                ) {
+                                    self.buffer.insert_char('\n');
+                                    self.repaint(prompt)?;
+                                    continue;
+                                }
+                                self.move_below_paint()?;
+                                let line = std::mem::take(&mut self.buffer)
+                                    .text()
+                                    .to_string();
+                                if let Some(history) = self.history.as_deref_mut() {
+                                    history.add(&line);
+                                }
+                                return Ok(Signal::Success(line));
+                            }
+                        }
                     }
                     let actions = self.keymap.translate(key_event);
                     if actions.is_empty() {
@@ -452,8 +516,130 @@ impl LineEditor {
                 self.handle_complete();
                 ActionResult::Continue
             }
+            Action::SearchHistory => {
+                self.enter_search();
+                ActionResult::Continue
+            }
         };
         Ok(result)
+    }
+
+    fn enter_search(&mut self) {
+        if self.history.is_none() {
+            return;
+        }
+        self.search = Some(SearchState {
+            pattern: String::new(),
+            match_index: None,
+            original_buffer: self.buffer.text().to_string(),
+            original_cursor: self.buffer.cursor(),
+        });
+    }
+
+    /// Drive the reverse-incremental search state machine for one
+    /// key event. Returns whether to continue searching, accept the
+    /// match into the buffer, cancel back to the original buffer,
+    /// or submit immediately (Enter while in search).
+    fn handle_search_key(&mut self, key: KeyEvent) -> SearchResult {
+        let KeyEvent { code, modifiers, .. } = key;
+        let mods = modifiers - KeyModifiers::SHIFT;
+
+        match (code, mods) {
+            // Cancel: restore original buffer.
+            (KeyCode::Esc, KeyModifiers::NONE)
+            | (KeyCode::Char('c'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+                if let Some(state) = self.search.as_ref() {
+                    let original = state.original_buffer.clone();
+                    let cursor = state.original_cursor;
+                    self.buffer.set_text(&original);
+                    while self.buffer.cursor() > cursor {
+                        self.buffer.move_left();
+                    }
+                }
+                SearchResult::Cancel
+            }
+            // Submit immediately.
+            (KeyCode::Enter, KeyModifiers::NONE) => SearchResult::Submit,
+            // Cycle to next older match.
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                self.search_step_older();
+                SearchResult::Continue
+            }
+            // Backspace: trim pattern, re-search from the most recent.
+            (KeyCode::Backspace, KeyModifiers::NONE) => {
+                if let Some(state) = self.search.as_mut() {
+                    state.pattern.pop();
+                    if state.pattern.is_empty() {
+                        state.match_index = None;
+                        let original = state.original_buffer.clone();
+                        self.buffer.set_text(&original);
+                    } else {
+                        self.search_from_newest();
+                    }
+                }
+                SearchResult::Continue
+            }
+            // Printable char: extend the pattern.
+            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+                if let Some(state) = self.search.as_mut() {
+                    state.pattern.push(c);
+                }
+                self.search_from_newest();
+                SearchResult::Continue
+            }
+            // Anything else (arrow keys, Ctrl-A/E, etc.): accept
+            // the current match into the buffer and let the regular
+            // keymap process the same key event.
+            _ => SearchResult::Accept,
+        }
+    }
+
+    /// Search from the newest entry backward for the first one
+    /// containing the current pattern. Updates the buffer to the
+    /// matched entry (or restores the original if no match).
+    fn search_from_newest(&mut self) {
+        let Some(state) = self.search.as_mut() else { return; };
+        let Some(history) = self.history.as_deref() else { return; };
+        let entries = history.entries();
+        let mut found: Option<usize> = None;
+        for (i, entry) in entries.iter().enumerate().rev() {
+            if entry.contains(&state.pattern) {
+                found = Some(i);
+                break;
+            }
+        }
+        state.match_index = found;
+        if let Some(i) = found {
+            let entry = entries[i].clone();
+            self.buffer.set_text(&entry);
+        } else {
+            // No match — leave the buffer showing whatever the
+            // previous match was (so the user can see what they had).
+            // bash's prompt prefix changes to "failing-i-search" to
+            // signal this; we render the same way at paint time.
+        }
+    }
+
+    /// Step to the next older match (Ctrl-R while already in search).
+    fn search_step_older(&mut self) {
+        let Some(state) = self.search.as_mut() else { return; };
+        let Some(history) = self.history.as_deref() else { return; };
+        let entries = history.entries();
+        let start = state.match_index.unwrap_or(entries.len());
+        let mut found: Option<usize> = None;
+        for i in (0..start).rev() {
+            if entries[i].contains(&state.pattern) {
+                found = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = found {
+            state.match_index = Some(i);
+            let entry = entries[i].clone();
+            self.buffer.set_text(&entry);
+        }
+        // No older match: leave state as-is.
     }
 
     /// Apply tab completion using the bash-style policy described in
@@ -564,7 +750,19 @@ impl LineEditor {
     }
 
     fn repaint(&mut self, prompt: &dyn Prompt) -> io::Result<()> {
-        let prompt_text = prompt.render();
+        // While searching history, replace the host prompt with the
+        // bash-style search indicator. `failing-i-search` signals
+        // there's no match for the current pattern.
+        let prompt_text = if let Some(state) = &self.search {
+            let label = if state.match_index.is_none() && !state.pattern.is_empty() {
+                "failing-i-search"
+            } else {
+                "reverse-i-search"
+            };
+            format!("({label})`{}': ", state.pattern)
+        } else {
+            prompt.render()
+        };
         let before = self.buffer.before_cursor().to_string();
         let after = self.buffer.after_cursor().to_string();
         let width = self.painter.screen_width();
@@ -574,9 +772,12 @@ impl LineEditor {
         // would visually float in the middle of edited text). And
         // only when the user is editing fresh, not navigating
         // history — avoid hinting "ls -la /tmp" when they just
-        // recalled "ls -la /tmp".
+        // recalled "ls -la /tmp". Disabled in Ctrl-R search mode
+        // since the buffer there is the matched entry, not user
+        // input.
         let hint = if self.hint_enabled
             && after.is_empty()
+            && self.search.is_none()
             && self
                 .history
                 .as_deref()
@@ -657,6 +858,18 @@ enum ActionResult {
     Submit,
     Cancel,
     EndOfFile,
+}
+
+enum SearchResult {
+    /// Stay in search mode; repaint and read the next event.
+    Continue,
+    /// Accept the current match into the buffer; exit search and
+    /// re-process the key through the normal keymap.
+    Accept,
+    /// Restore the original buffer; exit search.
+    Cancel,
+    /// Submit immediately (Enter pressed in search mode).
+    Submit,
 }
 
 /// Replace the bytes in `span` of `base` with the suggestion's value
