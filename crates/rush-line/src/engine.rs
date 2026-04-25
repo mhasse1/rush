@@ -29,7 +29,7 @@ use std::borrow::Cow;
 use std::io::{self, BufWriter, Stderr, Write};
 
 use crossterm::{
-    cursor,
+    cursor::{self, SetCursorStyle},
     event::{self, Event, KeyEventKind},
     style::Print,
     terminal::{self, Clear, ClearType},
@@ -158,32 +158,36 @@ impl LineEditor {
                     {
                         continue;
                     }
-                    let Some(action) = self.keymap.translate(key_event) else {
+                    let actions = self.keymap.translate(key_event);
+                    if actions.is_empty() {
                         continue;
-                    };
-                    match self.apply_action(action) {
-                        ActionResult::Continue => {
-                            self.repaint(prompt)?;
-                        }
-                        ActionResult::Submit => {
-                            // Move cursor below the paint area so the
-                            // submitted line stays visible and the
-                            // next host output starts on a fresh row.
-                            self.move_below_paint()?;
-                            let line = std::mem::take(&mut self.buffer).text().to_string();
-                            if let Some(history) = self.history.as_deref_mut() {
-                                history.add(&line);
+                    }
+                    let mut needs_repaint = false;
+                    for action in actions {
+                        match self.apply_action(action)? {
+                            ActionResult::Continue => needs_repaint = true,
+                            ActionResult::Submit => {
+                                self.move_below_paint()?;
+                                let line = std::mem::take(&mut self.buffer)
+                                    .text()
+                                    .to_string();
+                                if let Some(history) = self.history.as_deref_mut() {
+                                    history.add(&line);
+                                }
+                                return Ok(Signal::Success(line));
                             }
-                            return Ok(Signal::Success(line));
+                            ActionResult::Cancel => {
+                                self.move_below_paint()?;
+                                return Ok(Signal::CtrlC);
+                            }
+                            ActionResult::EndOfFile => {
+                                self.move_below_paint()?;
+                                return Ok(Signal::CtrlD);
+                            }
                         }
-                        ActionResult::Cancel => {
-                            self.move_below_paint()?;
-                            return Ok(Signal::CtrlC);
-                        }
-                        ActionResult::EndOfFile => {
-                            self.move_below_paint()?;
-                            return Ok(Signal::CtrlD);
-                        }
+                    }
+                    if needs_repaint {
+                        self.repaint(prompt)?;
                     }
                 }
                 Event::Resize(w, h) => {
@@ -196,9 +200,10 @@ impl LineEditor {
     }
 
     /// Apply an `Action` to the buffer (or signal a control flow
-    /// change). Pure buffer-state transformation; doesn't touch the
-    /// terminal.
-    fn apply_action(&mut self, action: Action) -> ActionResult {
+    /// change). Mostly pure buffer-state transformation; mode-signal
+    /// actions (`EnterInsertMode`/`EnterNormalMode`) and `Clear` do
+    /// touch the terminal directly.
+    fn apply_action(&mut self, action: Action) -> io::Result<ActionResult> {
         // Any text-modifying action while the user is on a recalled
         // history entry detaches them from history navigation: the
         // current buffer is now their edit, not the recalled entry.
@@ -214,12 +219,13 @@ impl LineEditor {
                 | Action::DeleteWordRight
                 | Action::KillToEnd
                 | Action::KillToStart
+                | Action::DeleteLine
         );
         if modifies_text {
             self.edit_stash = None;
         }
 
-        match action {
+        let result = match action {
             Action::InsertChar(c) => {
                 self.buffer.insert_char(c);
                 ActionResult::Continue
@@ -248,6 +254,10 @@ impl LineEditor {
                 self.buffer.kill_to_start();
                 ActionResult::Continue
             }
+            Action::DeleteLine => {
+                self.buffer.clear();
+                ActionResult::Continue
+            }
             Action::MoveLeft => {
                 self.buffer.move_left();
                 ActionResult::Continue
@@ -274,8 +284,6 @@ impl LineEditor {
             }
             Action::HistoryPrev => {
                 if let Some(history) = self.history.as_deref_mut() {
-                    // First Up of the navigation: stash the live edit
-                    // so a later Down past the newest entry can restore.
                     if history.at_present() {
                         self.edit_stash = Some(self.buffer.text().to_string());
                     }
@@ -290,10 +298,6 @@ impl LineEditor {
                     if let Some(entry) = history.forward() {
                         self.buffer.set_text(entry);
                     } else if let Some(stash) = self.edit_stash.take() {
-                        // We walked past the newest entry — restore
-                        // the in-progress edit we stashed on the first
-                        // Up. (history.forward already cleared its
-                        // cursor to None.)
                         self.buffer.set_text(&stash);
                     }
                 }
@@ -302,8 +306,6 @@ impl LineEditor {
             Action::Submit => ActionResult::Submit,
             Action::Cancel => ActionResult::Cancel,
             Action::EndOfInput => {
-                // Ctrl-D: EOF only if buffer is empty; otherwise treat
-                // as forward-delete (matching readline / emacs).
                 if self.buffer.is_empty() {
                     ActionResult::EndOfFile
                 } else {
@@ -313,16 +315,32 @@ impl LineEditor {
             }
             Action::Clear => {
                 // Ctrl-L: clear screen, keep buffer state, redraw at top.
-                let _ = self
-                    .painter
+                self.painter
                     .out()
-                    .queue(Clear(ClearType::All))
-                    .and_then(|w| w.queue(cursor::MoveTo(0, 0)))
-                    .and_then(|w| w.flush());
+                    .queue(Clear(ClearType::All))?
+                    .queue(cursor::MoveTo(0, 0))?
+                    .flush()?;
                 self.painter.invalidate();
                 ActionResult::Continue
             }
-        }
+            Action::EnterInsertMode => {
+                self.set_cursor_style(SetCursorStyle::SteadyBar)?;
+                ActionResult::Continue
+            }
+            Action::EnterNormalMode => {
+                self.set_cursor_style(SetCursorStyle::SteadyBlock)?;
+                ActionResult::Continue
+            }
+        };
+        Ok(result)
+    }
+
+    /// Emit a cursor-style escape and flush. Used by vi mode to
+    /// distinguish Insert (bar) from Normal (block).
+    fn set_cursor_style(&mut self, style: SetCursorStyle) -> io::Result<()> {
+        self.painter.out().queue(style)?;
+        self.painter.flush()?;
+        Ok(())
     }
 
     fn repaint(&mut self, prompt: &dyn Prompt) -> io::Result<()> {

@@ -12,8 +12,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Things the engine knows how to do. Each variant is one indivisible
-/// edit/navigation operation. Compound operations (e.g. "transpose
-/// chars") would compose these in the engine.
+/// edit/navigation/mode operation. Vi compound commands (e.g. `a` =
+/// "move right then enter insert") return multiple actions from a
+/// single keystroke — see [`KeyMap::translate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     // Insertion
@@ -26,6 +27,8 @@ pub enum Action {
     DeleteWordRight,
     KillToEnd,
     KillToStart,
+    /// Delete the entire buffer (vi `dd` / `cc`).
+    DeleteLine,
 
     // Cursor movement
     MoveLeft,
@@ -47,15 +50,18 @@ pub enum Action {
     // Display
     Clear,          // Ctrl-L
 
-    // Catch-all for events the keymap doesn't handle.
-    // The engine ignores these; keymaps return `None` to mean
-    // "this isn't a known binding."
+    // Mode signals (vi). The engine updates the cursor shape; the
+    // keymap is responsible for tracking which mode it's in.
+    EnterInsertMode,
+    EnterNormalMode,
 }
 
-pub trait KeyMap: Send {
-    /// Translate a key event to an `Action`. Returns `None` if the
-    /// keymap has no binding for this event — the engine ignores it.
-    fn translate(&self, event: KeyEvent) -> Option<Action>;
+pub trait KeyMap {
+    /// Translate a key event into a sequence of `Action`s. Returns
+    /// an empty vec if the keymap has no binding for this event, or
+    /// if the keystroke advanced an internal state machine without
+    /// completing a command (e.g. vi's `d` waiting for a motion).
+    fn translate(&mut self, event: KeyEvent) -> Vec<Action>;
 }
 
 /// Default emacs-style bindings.
@@ -90,7 +96,7 @@ pub trait KeyMap: Send {
 pub struct EmacsKeyMap;
 
 impl KeyMap for EmacsKeyMap {
-    fn translate(&self, event: KeyEvent) -> Option<Action> {
+    fn translate(&mut self, event: KeyEvent) -> Vec<Action> {
         let KeyEvent { code, modifiers, .. } = event;
 
         // Strip SHIFT for printable keys — uppercase letters arrive
@@ -99,51 +105,52 @@ impl KeyMap for EmacsKeyMap {
         // and ALT bits as-is.
         let mods = modifiers - KeyModifiers::SHIFT;
 
+        let one = |a: Action| vec![a];
         match (code, mods) {
             // ---- printable insertion ----
-            (KeyCode::Char(c), KeyModifiers::NONE) => Some(Action::InsertChar(c)),
+            (KeyCode::Char(c), KeyModifiers::NONE) => one(Action::InsertChar(c)),
 
             // ---- deletion ----
-            (KeyCode::Backspace, KeyModifiers::NONE) => Some(Action::DeleteLeft),
-            (KeyCode::Char('h'), KeyModifiers::CONTROL) => Some(Action::DeleteLeft),
-            (KeyCode::Delete, KeyModifiers::NONE) => Some(Action::DeleteRight),
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) => Some(Action::EndOfInput),
-            (KeyCode::Backspace, KeyModifiers::ALT) => Some(Action::DeleteWordLeft),
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => Some(Action::DeleteWordLeft),
-            (KeyCode::Char('d'), KeyModifiers::ALT) => Some(Action::DeleteWordRight),
-            (KeyCode::Char('k'), KeyModifiers::CONTROL) => Some(Action::KillToEnd),
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => Some(Action::KillToStart),
+            (KeyCode::Backspace, KeyModifiers::NONE) => one(Action::DeleteLeft),
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => one(Action::DeleteLeft),
+            (KeyCode::Delete, KeyModifiers::NONE) => one(Action::DeleteRight),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => one(Action::EndOfInput),
+            (KeyCode::Backspace, KeyModifiers::ALT) => one(Action::DeleteWordLeft),
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => one(Action::DeleteWordLeft),
+            (KeyCode::Char('d'), KeyModifiers::ALT) => one(Action::DeleteWordRight),
+            (KeyCode::Char('k'), KeyModifiers::CONTROL) => one(Action::KillToEnd),
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => one(Action::KillToStart),
 
             // ---- movement ----
-            (KeyCode::Left, KeyModifiers::NONE) => Some(Action::MoveLeft),
-            (KeyCode::Char('b'), KeyModifiers::CONTROL) => Some(Action::MoveLeft),
-            (KeyCode::Right, KeyModifiers::NONE) => Some(Action::MoveRight),
-            (KeyCode::Char('f'), KeyModifiers::CONTROL) => Some(Action::MoveRight),
-            (KeyCode::Char('b'), KeyModifiers::ALT) => Some(Action::MoveWordLeft),
-            (KeyCode::Left, KeyModifiers::ALT) => Some(Action::MoveWordLeft),
-            (KeyCode::Char('f'), KeyModifiers::ALT) => Some(Action::MoveWordRight),
-            (KeyCode::Right, KeyModifiers::ALT) => Some(Action::MoveWordRight),
-            (KeyCode::Home, KeyModifiers::NONE) => Some(Action::MoveHome),
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) => Some(Action::MoveHome),
-            (KeyCode::End, KeyModifiers::NONE) => Some(Action::MoveEnd),
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) => Some(Action::MoveEnd),
+            (KeyCode::Left, KeyModifiers::NONE) => one(Action::MoveLeft),
+            (KeyCode::Char('b'), KeyModifiers::CONTROL) => one(Action::MoveLeft),
+            (KeyCode::Right, KeyModifiers::NONE) => one(Action::MoveRight),
+            (KeyCode::Char('f'), KeyModifiers::CONTROL) => one(Action::MoveRight),
+            (KeyCode::Char('b'), KeyModifiers::ALT) => one(Action::MoveWordLeft),
+            (KeyCode::Left, KeyModifiers::ALT) => one(Action::MoveWordLeft),
+            (KeyCode::Char('f'), KeyModifiers::ALT) => one(Action::MoveWordRight),
+            (KeyCode::Right, KeyModifiers::ALT) => one(Action::MoveWordRight),
+            (KeyCode::Home, KeyModifiers::NONE) => one(Action::MoveHome),
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) => one(Action::MoveHome),
+            (KeyCode::End, KeyModifiers::NONE) => one(Action::MoveEnd),
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => one(Action::MoveEnd),
 
             // ---- history ----
-            (KeyCode::Up, KeyModifiers::NONE) => Some(Action::HistoryPrev),
-            (KeyCode::Char('p'), KeyModifiers::CONTROL) => Some(Action::HistoryPrev),
-            (KeyCode::Down, KeyModifiers::NONE) => Some(Action::HistoryNext),
-            (KeyCode::Char('n'), KeyModifiers::CONTROL) => Some(Action::HistoryNext),
+            (KeyCode::Up, KeyModifiers::NONE) => one(Action::HistoryPrev),
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => one(Action::HistoryPrev),
+            (KeyCode::Down, KeyModifiers::NONE) => one(Action::HistoryNext),
+            (KeyCode::Char('n'), KeyModifiers::CONTROL) => one(Action::HistoryNext),
 
             // ---- submission / signals ----
-            (KeyCode::Enter, KeyModifiers::NONE) => Some(Action::Submit),
-            (KeyCode::Char('j'), KeyModifiers::CONTROL) => Some(Action::Submit),
-            (KeyCode::Char('m'), KeyModifiers::CONTROL) => Some(Action::Submit),
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Cancel),
+            (KeyCode::Enter, KeyModifiers::NONE) => one(Action::Submit),
+            (KeyCode::Char('j'), KeyModifiers::CONTROL) => one(Action::Submit),
+            (KeyCode::Char('m'), KeyModifiers::CONTROL) => one(Action::Submit),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) => one(Action::Cancel),
 
             // ---- display ----
-            (KeyCode::Char('l'), KeyModifiers::CONTROL) => Some(Action::Clear),
+            (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
 
-            _ => None,
+            _ => Vec::new(),
         }
     }
 }
@@ -156,156 +163,141 @@ mod tests {
         KeyEvent::new(code, modifiers)
     }
 
+    fn one(m: &mut dyn KeyMap, code: KeyCode, modifiers: KeyModifiers) -> Vec<Action> {
+        m.translate(ev(code, modifiers))
+    }
+
     #[test]
     fn printable_char_inserts() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('a'), KeyModifiers::NONE)),
-            Some(Action::InsertChar('a'))
+            one(&mut m, KeyCode::Char('a'), KeyModifiers::NONE),
+            vec![Action::InsertChar('a')]
         );
     }
 
     #[test]
     fn shift_modifier_is_invisible_to_keymap() {
-        // Uppercase 'A' arrives with SHIFT; we treat it as plain insert.
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('A'), KeyModifiers::SHIFT)),
-            Some(Action::InsertChar('A'))
+            one(&mut m, KeyCode::Char('A'), KeyModifiers::SHIFT),
+            vec![Action::InsertChar('A')]
         );
     }
 
     #[test]
     fn enter_submits() {
-        let m = EmacsKeyMap;
-        assert_eq!(
-            m.translate(ev(KeyCode::Enter, KeyModifiers::NONE)),
-            Some(Action::Submit)
-        );
+        let mut m = EmacsKeyMap;
+        assert_eq!(one(&mut m, KeyCode::Enter, KeyModifiers::NONE), vec![Action::Submit]);
     }
 
     #[test]
     fn ctrl_c_cancels() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('c'), KeyModifiers::CONTROL)),
-            Some(Action::Cancel)
+            one(&mut m, KeyCode::Char('c'), KeyModifiers::CONTROL),
+            vec![Action::Cancel]
         );
     }
 
     #[test]
     fn ctrl_d_translates_to_end_of_input_keymap_does_not_inspect_buffer() {
-        // The keymap unconditionally maps Ctrl-D to EndOfInput; the engine
-        // turns it into DeleteRight when the buffer is non-empty.
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('d'), KeyModifiers::CONTROL)),
-            Some(Action::EndOfInput)
+            one(&mut m, KeyCode::Char('d'), KeyModifiers::CONTROL),
+            vec![Action::EndOfInput]
         );
     }
 
     #[test]
     fn backspace_and_ctrl_h_both_delete_left() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Backspace, KeyModifiers::NONE)),
-            Some(Action::DeleteLeft)
+            one(&mut m, KeyCode::Backspace, KeyModifiers::NONE),
+            vec![Action::DeleteLeft]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::Char('h'), KeyModifiers::CONTROL)),
-            Some(Action::DeleteLeft)
+            one(&mut m, KeyCode::Char('h'), KeyModifiers::CONTROL),
+            vec![Action::DeleteLeft]
         );
     }
 
     #[test]
     fn arrow_keys_and_emacs_motion_keys_agree() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
+        assert_eq!(one(&mut m, KeyCode::Left, KeyModifiers::NONE), vec![Action::MoveLeft]);
         assert_eq!(
-            m.translate(ev(KeyCode::Left, KeyModifiers::NONE)),
-            Some(Action::MoveLeft)
+            one(&mut m, KeyCode::Char('b'), KeyModifiers::CONTROL),
+            vec![Action::MoveLeft]
         );
+        assert_eq!(one(&mut m, KeyCode::Right, KeyModifiers::NONE), vec![Action::MoveRight]);
         assert_eq!(
-            m.translate(ev(KeyCode::Char('b'), KeyModifiers::CONTROL)),
-            Some(Action::MoveLeft)
-        );
-        assert_eq!(
-            m.translate(ev(KeyCode::Right, KeyModifiers::NONE)),
-            Some(Action::MoveRight)
-        );
-        assert_eq!(
-            m.translate(ev(KeyCode::Char('f'), KeyModifiers::CONTROL)),
-            Some(Action::MoveRight)
+            one(&mut m, KeyCode::Char('f'), KeyModifiers::CONTROL),
+            vec![Action::MoveRight]
         );
     }
 
     #[test]
     fn alt_motion_is_word_wise() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('b'), KeyModifiers::ALT)),
-            Some(Action::MoveWordLeft)
+            one(&mut m, KeyCode::Char('b'), KeyModifiers::ALT),
+            vec![Action::MoveWordLeft]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::Char('f'), KeyModifiers::ALT)),
-            Some(Action::MoveWordRight)
+            one(&mut m, KeyCode::Char('f'), KeyModifiers::ALT),
+            vec![Action::MoveWordRight]
         );
     }
 
     #[test]
     fn home_end_keys() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
+        assert_eq!(one(&mut m, KeyCode::Home, KeyModifiers::NONE), vec![Action::MoveHome]);
+        assert_eq!(one(&mut m, KeyCode::End, KeyModifiers::NONE), vec![Action::MoveEnd]);
         assert_eq!(
-            m.translate(ev(KeyCode::Home, KeyModifiers::NONE)),
-            Some(Action::MoveHome)
+            one(&mut m, KeyCode::Char('a'), KeyModifiers::CONTROL),
+            vec![Action::MoveHome]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::End, KeyModifiers::NONE)),
-            Some(Action::MoveEnd)
-        );
-        assert_eq!(
-            m.translate(ev(KeyCode::Char('a'), KeyModifiers::CONTROL)),
-            Some(Action::MoveHome)
-        );
-        assert_eq!(
-            m.translate(ev(KeyCode::Char('e'), KeyModifiers::CONTROL)),
-            Some(Action::MoveEnd)
+            one(&mut m, KeyCode::Char('e'), KeyModifiers::CONTROL),
+            vec![Action::MoveEnd]
         );
     }
 
     #[test]
     fn history_keys() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Up, KeyModifiers::NONE)),
-            Some(Action::HistoryPrev)
+            one(&mut m, KeyCode::Up, KeyModifiers::NONE),
+            vec![Action::HistoryPrev]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::Down, KeyModifiers::NONE)),
-            Some(Action::HistoryNext)
+            one(&mut m, KeyCode::Down, KeyModifiers::NONE),
+            vec![Action::HistoryNext]
         );
     }
 
     #[test]
     fn kill_keys() {
-        let m = EmacsKeyMap;
+        let mut m = EmacsKeyMap;
         assert_eq!(
-            m.translate(ev(KeyCode::Char('k'), KeyModifiers::CONTROL)),
-            Some(Action::KillToEnd)
+            one(&mut m, KeyCode::Char('k'), KeyModifiers::CONTROL),
+            vec![Action::KillToEnd]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::Char('u'), KeyModifiers::CONTROL)),
-            Some(Action::KillToStart)
+            one(&mut m, KeyCode::Char('u'), KeyModifiers::CONTROL),
+            vec![Action::KillToStart]
         );
         assert_eq!(
-            m.translate(ev(KeyCode::Char('w'), KeyModifiers::CONTROL)),
-            Some(Action::DeleteWordLeft)
+            one(&mut m, KeyCode::Char('w'), KeyModifiers::CONTROL),
+            vec![Action::DeleteWordLeft]
         );
     }
 
     #[test]
-    fn unknown_keybinding_returns_none() {
-        let m = EmacsKeyMap;
-        // F-keys aren't bound by default.
-        assert_eq!(m.translate(ev(KeyCode::F(1), KeyModifiers::NONE)), None);
+    fn unknown_keybinding_returns_empty_vec() {
+        let mut m = EmacsKeyMap;
+        assert_eq!(one(&mut m, KeyCode::F(1), KeyModifiers::NONE), Vec::<Action>::new());
     }
 }

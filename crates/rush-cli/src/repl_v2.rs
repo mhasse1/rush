@@ -19,7 +19,7 @@ use rush_core::config::RushConfig;
 use rush_core::eval::{Evaluator, StdOutput};
 use rush_core::theme;
 use rush_core::value::Value;
-use rush_line::{FileBackedHistory, LineEditor, Signal};
+use rush_line::{FileBackedHistory, LineEditor, Signal, ViKeyMap};
 
 use crate::builtins;
 use crate::prompt::RushPrompt;
@@ -86,12 +86,21 @@ pub fn run(is_login: bool) {
     // failure; if it does, fall back to in-memory so v2 still works.
     let history = FileBackedHistory::with_file(config.history_size, history_path())
         .unwrap_or_else(|_| FileBackedHistory::in_memory(config.history_size));
-    let mut editor = LineEditor::new().with_history(history);
+    let editor_builder = LineEditor::new().with_history(history);
+    // Honor rush's configured edit_mode (default vi, like the v1 path).
+    let use_vi = config.edit_mode != "emacs";
+    let mut editor = if use_vi {
+        editor_builder.with_keymap(ViKeyMap::new())
+    } else {
+        editor_builder
+    };
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
     eprintln!(
-        "{}rush-line v2 (RUSH_LINE_V2=1) — emacs only, no completion/hint/vi yet{}",
-        detected_theme.muted, detected_theme.reset
+        "{}rush-line v2 (RUSH_LINE_V2=1) — {} mode, no completion/hint yet{}",
+        detected_theme.muted,
+        if use_vi { "vi" } else { "emacs" },
+        detected_theme.reset
     );
     println!();
 
