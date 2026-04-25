@@ -109,11 +109,19 @@ impl<W: Write> Painter<W> {
     /// Update the cached terminal size. Call from a SIGWINCH / Resize
     /// event handler.
     ///
-    /// Resize also implies the previous paint geometry is unreliable
-    /// (terminal reflowed everything), so we [`Painter::invalidate`].
+    /// Notably **does not** invalidate the paint-area trackers. The
+    /// terminal reflowed visible content on resize, but the cursor is
+    /// still attached to its character and our stored `rows_above_cursor`
+    /// is the closest thing we have to "where the paint top is now."
+    /// Walking up by that count and clearing `last_emit_rows` rows
+    /// gives a best-effort cleanup of the previous paint; the
+    /// subsequent fresh emit redraws on top. If reflow shifted things
+    /// by a row, the visible result is a one-row glitch — bash
+    /// readline accepts the same trade. The alternative (zeroing the
+    /// trackers) silently *adds* a prompt every resize because the
+    /// next repaint then has nothing to clean up before emitting.
     pub fn handle_resize(&mut self, width: u16, height: u16) {
         self.terminal_size = (width, height);
-        self.invalidate();
     }
 
     /// Forget any tracked paint area. The next paint emits fresh at the
@@ -239,14 +247,18 @@ mod tests {
     }
 
     #[test]
-    fn handle_resize_updates_size_and_invalidates() {
+    fn handle_resize_updates_size_only_keeps_paint_state() {
+        // Paint state must survive resize so the next repaint can
+        // walk up to (approximately) the old paint top and clear
+        // before emitting fresh — otherwise resize duplicates the
+        // prompt instead of redrawing it.
         let mut p = Painter::with_size(Vec::<u8>::new(), (80, 24));
         p.finalize(3, 1);
         p.handle_resize(120, 40);
         assert_eq!(p.screen_width(), 120);
         assert_eq!(p.screen_height(), 40);
-        assert_eq!(p.last_emit_rows(), 0);
-        assert_eq!(p.rows_above_cursor(), 0);
+        assert_eq!(p.last_emit_rows(), 3);
+        assert_eq!(p.rows_above_cursor(), 1);
     }
 
     #[test]
