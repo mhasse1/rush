@@ -490,12 +490,12 @@ pub(crate) fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
 // ── fzf integration ────────────────────────────────────────────────
 
 /// Check if fzf is available on PATH.
-fn has_fzf() -> bool {
+pub(crate) fn has_fzf() -> bool {
     rush_core::process::command_exists("fzf")
 }
 
 /// Run fzf with history file as input. Returns selected line or None.
-fn fzf_history_search() -> Option<String> {
+pub(crate) fn fzf_history_search() -> Option<String> {
     let history_path = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(|h| format!("{h}/.config/rush/history"))

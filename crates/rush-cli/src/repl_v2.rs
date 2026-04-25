@@ -156,10 +156,14 @@ pub fn run(is_login: bool) {
         .with_highlighter(highlighter);
     // Honor rush's configured edit_mode (default vi, like the v1 path).
     let use_vi = config.edit_mode != "emacs";
+    // If fzf is available, route history search to it via the host-
+    // command bridge (Ctrl-R in either mode; `/` and `?` in vi-Normal).
+    // Without fzf, those keys hit our built-in reverse-i-search.
+    let fzf_enabled = crate::repl::has_fzf();
     let mut editor = if use_vi {
-        editor_builder.with_keymap(ViKeyMap::new())
+        editor_builder.with_keymap(ViKeyMap::new().with_fzf(fzf_enabled))
     } else {
-        editor_builder
+        editor_builder.with_keymap(rush_line::EmacsKeyMap::new().with_fzf(fzf_enabled))
     };
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
@@ -254,6 +258,20 @@ pub fn run(is_login: bool) {
                 // Conventional shell behavior: clear the line and prompt again.
             }
             Ok(Signal::CtrlD) => break,
+            Ok(Signal::HostCommand(name)) => {
+                // Editor surfaces a named command. Today the only one
+                // we wire is fzf history search; map others to no-op.
+                if name == "__fzf_history__" {
+                    if let Some(selected) = crate::repl::fzf_history_search() {
+                        let trimmed = selected.trim();
+                        if !trimmed.is_empty() {
+                            // Pre-load the editor with the recalled
+                            // line; user can edit before submitting.
+                            editor.set_initial_text(trimmed);
+                        }
+                    }
+                }
+            }
             Err(e) => {
                 eprintln!("rush: input error: {e}");
                 break;

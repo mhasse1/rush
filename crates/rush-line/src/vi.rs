@@ -84,6 +84,11 @@ pub struct ViKeyMap {
     /// many times. `0` alone (without an in-progress count) is a
     /// motion (MoveHome), not a digit.
     count: Option<u32>,
+    /// When true, Ctrl-R, `/`, and `?` fire
+    /// `Action::HostCommand("__fzf_history__")` instead of the
+    /// built-in reverse-i-search. Set by the host when fzf is on
+    /// PATH.
+    fzf_enabled: bool,
 }
 
 impl Default for ViKeyMap {
@@ -98,6 +103,7 @@ impl ViKeyMap {
             mode: ViMode::Insert,
             pending: Pending::None,
             count: None,
+            fzf_enabled: false,
         }
     }
 
@@ -108,7 +114,16 @@ impl ViKeyMap {
             mode: ViMode::Normal,
             pending: Pending::None,
             count: None,
+            fzf_enabled: false,
         }
+    }
+
+    /// Route Ctrl-R / `/` / `?` to `Action::HostCommand("__fzf_history__")`
+    /// instead of the built-in reverse-i-search. Set by the host
+    /// when fzf is available.
+    pub fn with_fzf(mut self, enabled: bool) -> Self {
+        self.fzf_enabled = enabled;
+        self
     }
 
     pub fn mode(&self) -> ViMode {
@@ -157,7 +172,13 @@ impl ViKeyMap {
             (KeyCode::Char('d'), KeyModifiers::CONTROL) => one(Action::EndOfInput),
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
             (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                if self.fzf_enabled {
+                    one(Action::HostCommand("__fzf_history__".to_string()))
+                } else {
+                    one(Action::SearchHistory)
+                }
+            }
             _ => Vec::new(),
         }
     }
@@ -296,6 +317,9 @@ impl ViKeyMap {
             // ---- toggle case (one-shot) ----
             (KeyCode::Char('~'), KeyModifiers::NONE) => one(Action::ToggleCase),
 
+            // ---- repeat last edit ----
+            (KeyCode::Char('.'), KeyModifiers::NONE) => one(Action::Repeat),
+
             // ---- motions ----
             (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, KeyModifiers::NONE) => {
                 one(Action::MoveLeft)
@@ -326,14 +350,20 @@ impl ViKeyMap {
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
 
             // ---- history search ----
-            // Ctrl-R, /, and ? all enter reverse-i-search. Vi users
-            // expect `/` for search; `?` exists too for symmetry with
-            // forward search (we only have one search direction; `?`
-            // does the same thing as `/` for now — same as bash's
-            // history-search-backward without ksh forward search).
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
-            (KeyCode::Char('/'), KeyModifiers::NONE) => one(Action::SearchHistory),
-            (KeyCode::Char('?'), KeyModifiers::NONE) => one(Action::SearchHistory),
+            // Ctrl-R, /, and ? all enter history search. With fzf
+            // enabled they fire HostCommand("__fzf_history__"); the
+            // host runs fzf and pre-loads the editor with the
+            // selected line. Without fzf, our built-in reverse-i-
+            // search handles them.
+            (KeyCode::Char('r'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('/'), KeyModifiers::NONE)
+            | (KeyCode::Char('?'), KeyModifiers::NONE) => {
+                if self.fzf_enabled {
+                    one(Action::HostCommand("__fzf_history__".to_string()))
+                } else {
+                    one(Action::SearchHistory)
+                }
+            }
 
             // Unknown — Esc on Esc is a no-op (already in Normal).
             _ => Vec::new(),

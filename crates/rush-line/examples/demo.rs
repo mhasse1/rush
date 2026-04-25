@@ -81,6 +81,9 @@ fn main() -> std::io::Result<()> {
                 println!();
                 break;
             }
+            Signal::HostCommand(_) => {
+                // Demo doesn't wire fzf or any host commands; ignore.
+            }
         }
     }
 

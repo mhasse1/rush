@@ -75,6 +75,11 @@ pub enum Signal {
     CtrlC,
     /// The user pressed Ctrl-D on an empty buffer.
     CtrlD,
+    /// The keymap fired [`crate::Action::HostCommand`]. The host
+    /// runs whatever external process the name refers to, then can
+    /// re-enter `read_line` (optionally pre-loading the buffer with
+    /// [`LineEditor::set_initial_text`]).
+    HostCommand(String),
 }
 
 pub struct LineEditor {
@@ -110,6 +115,24 @@ pub struct LineEditor {
     /// ring with M-y to cycle, but for shell daily use a single
     /// slot covers 95% of cases; expand later if asked.
     kill_ring: Option<String>,
+    /// If `Some`, the next `read_line` call pre-loads the buffer
+    /// with this text instead of starting empty. Set by the host via
+    /// [`LineEditor::set_initial_text`] after a `Signal::HostCommand`
+    /// detour (e.g. fzf history search returns a selected line).
+    pending_initial_text: Option<String>,
+    /// Most recent committed edit-command sequence. Vi `.` replays
+    /// this. Empty when nothing's been recorded yet.
+    last_edit: Vec<Action>,
+    /// Edit-recording-in-progress. `Some(vec)` while a multi-action
+    /// edit (insert mode session, operator+motion+chars+Esc, etc.) is
+    /// being captured; committed to `last_edit` when it completes.
+    recording: Option<Vec<Action>>,
+    /// Mirrors the keymap's vi-Insert mode flag for the engine, set
+    /// by `EnterInsertMode` actions. Used to decide when to commit
+    /// a recording (we commit when control returns to Normal — i.e.
+    /// `EnterNormalMode` arrives, or a self-contained Normal-mode
+    /// edit like `dd` finishes a single action vec).
+    in_insert_mode: bool,
 }
 
 /// State for an in-progress reverse-incremental history search.
@@ -151,7 +174,7 @@ impl LineEditor {
         Self {
             painter: Painter::new(out),
             buffer: LineBuffer::new(),
-            keymap: Box::new(EmacsKeyMap),
+            keymap: Box::new(EmacsKeyMap::new()),
             history: None,
             completer: None,
             validator: Box::new(AlwaysComplete),
@@ -162,7 +185,18 @@ impl LineEditor {
             completion_cycle: None,
             search: None,
             kill_ring: None,
+            pending_initial_text: None,
+            last_edit: Vec::new(),
+            recording: None,
+            in_insert_mode: false,
         }
+    }
+
+    /// Pre-load the buffer for the next `read_line` call. Used by
+    /// hosts after a `Signal::HostCommand` detour to seed the editor
+    /// with text from an external source (e.g. fzf-selected history).
+    pub fn set_initial_text(&mut self, text: &str) {
+        self.pending_initial_text = Some(text.to_string());
     }
 
     /// Enable or disable the autosuggestion hint. Default is on; the
@@ -242,6 +276,11 @@ impl LineEditor {
         // up into anything that isn't ours.
         self.painter.invalidate();
         self.buffer.clear();
+        if let Some(seed) = self.pending_initial_text.take() {
+            self.buffer.set_text(&seed);
+            // set_text places cursor at end; that's the desired
+            // landing spot for fzf-recalled lines.
+        }
         self.edit_stash = None;
         self.completion_cycle = None;
         self.search = None;
@@ -313,12 +352,42 @@ impl LineEditor {
                             }
                         }
                     }
-                    let actions = self.keymap.translate(key_event);
+                    let mut actions = self.keymap.translate(key_event);
                     if actions.is_empty() {
                         continue;
                     }
+                    // Vi `.`: substitute the recorded last-edit
+                    // sequence in place of Action::Repeat. We don't
+                    // expand recursively (the recording filter never
+                    // keeps Repeat itself, so this is one-shot).
+                    if actions.iter().any(|a| matches!(a, Action::Repeat)) {
+                        actions = self.last_edit.clone();
+                        if actions.is_empty() {
+                            continue; // nothing to repeat
+                        }
+                    }
+                    // Recording: start when the vec contains any
+                    // text-mod or mode-entry action. Append every
+                    // subsequent vec while we're in Insert. Commit
+                    // when we drop back to Normal.
+                    let triggers_recording = self.recording.is_none()
+                        && actions.iter().any(starts_edit_recording);
+                    if triggers_recording {
+                        self.recording = Some(Vec::new());
+                    }
+                    if let Some(rec) = self.recording.as_mut() {
+                        rec.extend(actions.iter().cloned());
+                    }
                     let mut needs_repaint = false;
                     for action in actions {
+                        // HostCommand short-circuits — surface to the
+                        // host immediately. We move the cursor below
+                        // our paint area first so whatever the host
+                        // runs (fzf, etc.) starts on a clean row.
+                        if let Action::HostCommand(name) = action {
+                            self.move_below_paint()?;
+                            return Ok(Signal::HostCommand(name));
+                        }
                         match self.apply_action(action)? {
                             ActionResult::Continue => needs_repaint = true,
                             ActionResult::Submit => {
@@ -348,6 +417,17 @@ impl LineEditor {
                             ActionResult::EndOfFile => {
                                 self.move_below_paint()?;
                                 return Ok(Signal::CtrlD);
+                            }
+                        }
+                    }
+                    // After the action vec finishes, commit any
+                    // in-progress recording if we're back in Normal
+                    // (or were never in Insert — single-action edits
+                    // like `dd` or `x`).
+                    if !self.in_insert_mode {
+                        if let Some(rec) = self.recording.take() {
+                            if !rec.is_empty() {
+                                self.last_edit = rec;
                             }
                         }
                     }
@@ -532,10 +612,12 @@ impl LineEditor {
                 ActionResult::Continue
             }
             Action::EnterInsertMode => {
+                self.in_insert_mode = true;
                 self.set_cursor_style(SetCursorStyle::SteadyBar)?;
                 ActionResult::Continue
             }
             Action::EnterNormalMode => {
+                self.in_insert_mode = false;
                 self.set_cursor_style(SetCursorStyle::SteadyBlock)?;
                 ActionResult::Continue
             }
@@ -622,6 +704,12 @@ impl LineEditor {
                 }
                 ActionResult::Continue
             }
+            // HostCommand is short-circuited in read_line_inner before
+            // we get here, but match exhaustiveness still wants an arm.
+            Action::HostCommand(_) => ActionResult::Continue,
+            // Repeat is expanded to last_edit at the start of the
+            // action loop and never reaches apply_action.
+            Action::Repeat => ActionResult::Continue,
         };
         Ok(result)
     }
@@ -1109,6 +1197,29 @@ fn word_boundary_after_external(text: &str, byte_idx: usize) -> usize {
         i += 1;
     }
     i
+}
+
+/// Action types that start a vi `.` recording when seen at the
+/// start of a fresh edit. Movement-only actions (MoveLeft, etc.) and
+/// non-buffer actions (Submit, Cancel, history nav, search, complete,
+/// HostCommand, Repeat itself) don't trigger recording — `.` repeats
+/// the last *edit*, not the last keystroke.
+fn starts_edit_recording(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::InsertChar(_)
+            | Action::DeleteLeft
+            | Action::DeleteRight
+            | Action::DeleteWordLeft
+            | Action::DeleteWordRight
+            | Action::KillToEnd
+            | Action::KillToStart
+            | Action::DeleteLine
+            | Action::ReplaceChar(_)
+            | Action::ToggleCase
+            | Action::EnterInsertMode
+            | Action::Yank
+    )
 }
 
 fn word_boundary_before_external(text: &str, byte_idx: usize) -> usize {

@@ -109,6 +109,18 @@ pub enum Action {
     YankToEnd,
     /// Copy from start of buffer to cursor (vi `y0`).
     YankToStart,
+
+    /// Surface the keystroke back to the host as a named command,
+    /// e.g. `"__fzf_history__"`. The engine returns from `read_line`
+    /// with [`crate::Signal::HostCommand`] carrying this string, so
+    /// the host can run an external process (fzf, peco, …) and
+    /// optionally pre-load the editor buffer for the next call.
+    HostCommand(String),
+
+    /// Vi `.` — replay the most recent edit command (the action
+    /// sequence from the last text-changing keystroke through return
+    /// to Normal mode). No-op if nothing's been recorded yet.
+    Repeat,
 }
 
 pub trait KeyMap {
@@ -148,7 +160,22 @@ pub trait KeyMap {
 /// so it always returns `EndOfInput` for Ctrl-D — the engine decides
 /// which one applies based on buffer state.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct EmacsKeyMap;
+pub struct EmacsKeyMap {
+    /// When true, Ctrl-R fires `Action::HostCommand("__fzf_history__")`
+    /// instead of the built-in reverse-i-search. Set by the host
+    /// when fzf is available on PATH.
+    pub fzf_enabled: bool,
+}
+
+impl EmacsKeyMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn with_fzf(mut self, enabled: bool) -> Self {
+        self.fzf_enabled = enabled;
+        self
+    }
+}
 
 impl KeyMap for EmacsKeyMap {
     fn translate(&mut self, event: KeyEvent) -> Vec<Action> {
@@ -209,7 +236,13 @@ impl KeyMap for EmacsKeyMap {
             (KeyCode::Tab, KeyModifiers::NONE) => one(Action::Complete),
 
             // ---- history search ----
-            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
+                if self.fzf_enabled {
+                    one(Action::HostCommand("__fzf_history__".to_string()))
+                } else {
+                    one(Action::SearchHistory)
+                }
+            }
 
             // ---- undo ----
             // Ctrl-_ and Ctrl-/ both produce \x1f on most terminals
@@ -239,7 +272,7 @@ mod tests {
 
     #[test]
     fn printable_char_inserts() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('a'), KeyModifiers::NONE),
             vec![Action::InsertChar('a')]
@@ -248,7 +281,7 @@ mod tests {
 
     #[test]
     fn shift_modifier_is_invisible_to_keymap() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('A'), KeyModifiers::SHIFT),
             vec![Action::InsertChar('A')]
@@ -257,13 +290,13 @@ mod tests {
 
     #[test]
     fn enter_submits() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(one(&mut m, KeyCode::Enter, KeyModifiers::NONE), vec![Action::Submit]);
     }
 
     #[test]
     fn ctrl_c_cancels() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('c'), KeyModifiers::CONTROL),
             vec![Action::Cancel]
@@ -272,7 +305,7 @@ mod tests {
 
     #[test]
     fn ctrl_d_translates_to_end_of_input_keymap_does_not_inspect_buffer() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('d'), KeyModifiers::CONTROL),
             vec![Action::EndOfInput]
@@ -281,7 +314,7 @@ mod tests {
 
     #[test]
     fn backspace_and_ctrl_h_both_delete_left() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Backspace, KeyModifiers::NONE),
             vec![Action::DeleteLeft]
@@ -294,7 +327,7 @@ mod tests {
 
     #[test]
     fn arrow_keys_and_emacs_motion_keys_agree() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(one(&mut m, KeyCode::Left, KeyModifiers::NONE), vec![Action::MoveLeft]);
         assert_eq!(
             one(&mut m, KeyCode::Char('b'), KeyModifiers::CONTROL),
@@ -309,7 +342,7 @@ mod tests {
 
     #[test]
     fn alt_motion_is_word_wise() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('b'), KeyModifiers::ALT),
             vec![Action::MoveWordLeft]
@@ -322,7 +355,7 @@ mod tests {
 
     #[test]
     fn home_end_keys() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(one(&mut m, KeyCode::Home, KeyModifiers::NONE), vec![Action::MoveHome]);
         assert_eq!(one(&mut m, KeyCode::End, KeyModifiers::NONE), vec![Action::MoveEnd]);
         assert_eq!(
@@ -337,7 +370,7 @@ mod tests {
 
     #[test]
     fn history_keys() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Up, KeyModifiers::NONE),
             vec![Action::HistoryPrev]
@@ -350,7 +383,7 @@ mod tests {
 
     #[test]
     fn kill_keys() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(
             one(&mut m, KeyCode::Char('k'), KeyModifiers::CONTROL),
             vec![Action::KillToEnd]
@@ -367,7 +400,7 @@ mod tests {
 
     #[test]
     fn unknown_keybinding_returns_empty_vec() {
-        let mut m = EmacsKeyMap;
+        let mut m = EmacsKeyMap::new();
         assert_eq!(one(&mut m, KeyCode::F(1), KeyModifiers::NONE), Vec::<Action>::new());
     }
 }
