@@ -163,12 +163,7 @@ pub fn run(is_login: bool) {
     };
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
-    eprintln!(
-        "{}rush-line v2 (RUSH_LINE_V2=1) — {} mode, no hint yet{}",
-        detected_theme.muted,
-        if use_vi { "vi" } else { "emacs" },
-        detected_theme.reset
-    );
+    let _ = use_vi; // mode is visible via cursor shape; no banner needed
     println!();
 
     loop {

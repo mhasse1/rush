@@ -231,13 +231,15 @@ fn main() {
         std::process::exit(0);
     }
 
-    // Interactive REPL. Default path uses rushline (the forked
-    // reedline). `RUSH_LINE_V2=1` opts into the experimental rush-line
-    // backend (no history/completion/hint/vi yet — phases in flight).
-    if std::env::var_os("RUSH_LINE_V2").is_some() {
-        repl_v2::run(is_login);
-    } else {
+    // Interactive REPL. Default path uses rush-line, the from-scratch
+    // line editor that replaced the long-suffering rushline (forked
+    // reedline) fork. The legacy rushline path is kept around behind
+    // `RUSH_LINE_V1=1` as a one-release safety net while we collect
+    // daily-use feedback on rush-line.
+    if std::env::var_os("RUSH_LINE_V1").is_some() {
         repl::run(is_login);
+    } else {
+        repl_v2::run(is_login);
     }
 }
 
