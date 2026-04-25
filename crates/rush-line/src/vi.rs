@@ -325,6 +325,16 @@ impl ViKeyMap {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => one(Action::Cancel),
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => one(Action::Clear),
 
+            // ---- history search ----
+            // Ctrl-R, /, and ? all enter reverse-i-search. Vi users
+            // expect `/` for search; `?` exists too for symmetry with
+            // forward search (we only have one search direction; `?`
+            // does the same thing as `/` for now — same as bash's
+            // history-search-backward without ksh forward search).
+            (KeyCode::Char('r'), KeyModifiers::CONTROL) => one(Action::SearchHistory),
+            (KeyCode::Char('/'), KeyModifiers::NONE) => one(Action::SearchHistory),
+            (KeyCode::Char('?'), KeyModifiers::NONE) => one(Action::SearchHistory),
+
             // Unknown — Esc on Esc is a no-op (already in Normal).
             _ => Vec::new(),
         }

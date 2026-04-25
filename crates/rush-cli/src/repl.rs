@@ -413,7 +413,7 @@ pub fn run(is_login: bool) {
 }
 
 /// Expand history references: !!, !$, !N
-fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
+pub(crate) fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
     if !line.contains('!') {
         return None;
     }
@@ -467,7 +467,7 @@ fn expand_history(line: &str, last_cmd: &Option<String>) -> Option<String> {
 }
 
 /// Route "--help" flag to help system: "file --help" → "help file"
-fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn route_help(line: &str) -> std::borrow::Cow<'_, str> {
     if line.ends_with(" --help") || line.ends_with(" -h") {
         let word = line.split_whitespace().next().unwrap_or("");
         let topic = match word.to_lowercase().as_str() {

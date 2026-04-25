@@ -68,6 +68,12 @@ pub trait History {
     /// (which scans from newest backward looking for a prefix match)
     /// and could be used by future history-search features.
     fn entries(&self) -> &[String];
+
+    /// Remove the most recently added entry. Used by hosts to filter
+    /// meta-commands (e.g. `history`, `clear`, `exit`) that were
+    /// already added on submit but shouldn't pollute autosuggestion.
+    /// No-op when the history is empty.
+    fn delete_last_entry(&mut self);
 }
 
 #[derive(Debug)]
@@ -192,6 +198,18 @@ impl History for FileBackedHistory {
 
     fn entries(&self) -> &[String] {
         &self.entries
+    }
+
+    fn delete_last_entry(&mut self) {
+        if self.entries.pop().is_some() {
+            // The dropped entry might have been on disk already (if a
+            // sync ran between add and delete) — that's a corner the
+            // bash-with-histappend convention also has. Conservative
+            // fix: clamp dirty_from so we don't re-write a now-removed
+            // entry on the next sync.
+            self.dirty_from = self.dirty_from.min(self.entries.len());
+            self.cursor = None;
+        }
     }
 
     fn backward(&mut self) -> Option<&str> {

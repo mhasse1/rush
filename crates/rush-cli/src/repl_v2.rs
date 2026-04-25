@@ -164,6 +164,8 @@ pub fn run(is_login: bool) {
     let mut prompt = RushPrompt::new(detected_theme.clone());
 
     let _ = use_vi; // mode is visible via cursor shape; no banner needed
+    let show_timing = config.show_timing;
+    let mut last_cmd: Option<String> = None;
     println!();
 
     loop {
@@ -183,16 +185,70 @@ pub fn run(is_login: bool) {
                 if trimmed.is_empty() {
                     continue;
                 }
+
+                // History expansion: !!, !$, !N, !prefix.
+                let expanded = crate::repl::expand_history(trimmed, &last_cmd);
+                let trimmed = expanded.as_deref().unwrap_or(trimmed);
+
+                // --help routing: "file --help" → "help file".
+                let trimmed_cow = crate::repl::route_help(trimmed);
+                let trimmed = trimmed_cow.as_ref();
+
                 if trimmed == "exit" || trimmed == "quit" {
                     break;
                 }
-                // Sync history to disk after each submit so kills /
-                // crashes don't lose recent commands. Matches the
-                // bash-with-histappend behavior the v1 REPL uses.
+
+                last_cmd = Some(trimmed.to_string());
+
+                // Filter meta-commands out of the saved history so they
+                // don't pollute autosuggestion. The line was already
+                // pushed by the editor's submit handler; pop it.
+                let first_word = trimmed.split_whitespace().next().unwrap_or("");
+                if matches!(first_word, "history" | "clear" | "exit") {
+                    if let Some(history) = editor.history_mut() {
+                        history.delete_last_entry();
+                    }
+                }
+
                 if let Some(history) = editor.history_mut() {
                     let _ = history.sync();
                 }
+
+                let start = std::time::Instant::now();
                 crate::run_line(&mut evaluator, trimmed);
+                let elapsed = start.elapsed();
+
+                // Slow-command timing (>500ms).
+                if show_timing && elapsed.as_millis() > 500 {
+                    let secs = elapsed.as_secs_f64();
+                    if secs >= 60.0 {
+                        let mins = secs as u64 / 60;
+                        let rem = secs % 60.0;
+                        eprintln!(
+                            "{}  {mins}m{rem:.1}s{}",
+                            detected_theme.muted, detected_theme.reset
+                        );
+                    } else {
+                        eprintln!(
+                            "{}  {secs:.1}s{}",
+                            detected_theme.muted, detected_theme.reset
+                        );
+                    }
+                }
+
+                // Post-exec hints. Error hints on failure, training
+                // hints on success.
+                if evaluator.exit_code != 0 {
+                    if let Some(hint) = rush_core::hints::hint_for_command(
+                        trimmed,
+                        evaluator.exit_code,
+                    ) {
+                        eprintln!("{}  {hint}{}", detected_theme.muted, detected_theme.reset);
+                    }
+                } else if let Some(hint) = rush_core::hints::training_hint(trimmed) {
+                    eprintln!();
+                    eprintln!("{}  {hint}{}", detected_theme.muted, detected_theme.reset);
+                }
             }
             Ok(Signal::CtrlC) => {
                 // Conventional shell behavior: clear the line and prompt again.
