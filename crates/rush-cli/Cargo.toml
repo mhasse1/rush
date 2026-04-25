@@ -7,6 +7,7 @@ description = "Rush shell binary"
 
 [dependencies]
 rush-core = { path = "../rush-core" }
+rush-line = { path = "../rush-line" }
 rushline = { git = "https://github.com/mhasse1/rushline.git", branch = "main" }
 nu-ansi-term = "0.50"
 serde_json.workspace = true

@@ -3,6 +3,7 @@ mod completer;
 mod highlighter;
 mod prompt;
 mod repl;
+mod repl_v2;
 mod signals;
 mod validator;
 
@@ -230,8 +231,14 @@ fn main() {
         std::process::exit(0);
     }
 
-    // Interactive REPL with reedline
-    repl::run(is_login);
+    // Interactive REPL. Default path uses rushline (the forked
+    // reedline). `RUSH_LINE_V2=1` opts into the experimental rush-line
+    // backend (no history/completion/hint/vi yet — phases in flight).
+    if std::env::var_os("RUSH_LINE_V2").is_some() {
+        repl_v2::run(is_login);
+    } else {
+        repl::run(is_login);
+    }
 }
 
 /// True if `line` contains a `|` outside of single- or double-quoted

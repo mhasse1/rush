@@ -1076,6 +1076,7 @@ dependencies = [
  "libc",
  "nu-ansi-term",
  "rush-core",
+ "rush-line",
  "rushline",
  "serde_json",
 ]
