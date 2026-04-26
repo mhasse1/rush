@@ -20,25 +20,27 @@
 
 #[cfg(unix)]
 fn main() -> std::io::Result<()> {
-    use rush_line::tty::RawTty;
+    use rush_line::tty::{RawByte, RawTty};
 
     println!("raw_bytes demo. Press `q` (lowercase) to exit.");
-    println!("Each line shows one byte read from stdin.\r");
+    println!("Resize the terminal to see Resize events.\r");
 
     let mut tty = RawTty::enter()?;
 
     loop {
         match tty.read_byte()? {
-            None => {
-                // EOF — destroyed pty or stdin closed.
-                eprint!("\r\n[eof]\r\n");
+            RawByte::Eof => {
+                eprint!("\r\n[eof — controlling pty destroyed or signal]\r\n");
                 break;
             }
-            Some(b'q') => {
+            RawByte::Resize => {
+                eprint!("[resize]\r\n");
+            }
+            RawByte::Byte(b'q') => {
                 eprint!("\r\n[bye]\r\n");
                 break;
             }
-            Some(b) => {
+            RawByte::Byte(b) => {
                 let printable = if (0x20..=0x7E).contains(&b) {
                     format!(" '{}'", b as char)
                 } else {
