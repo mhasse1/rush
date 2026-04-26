@@ -537,6 +537,30 @@ pub fn dispatch_with_jobs_and_builtins(
                     }
                 }
             }
+        } else if evaluator.env.functions.contains_key(first_word) {
+            // #280: bare segment whose first word matches a defined Rush
+            // function — invoke the function rather than fork/exec.
+            // Mirrors POSIX shell lookup order (function before PATH).
+            // Args after first_word are tokenized shell-style and
+            // passed as Rush strings; quoted args stay grouped.
+            let parts = process::parse_command_line(segment);
+            let args: Vec<Value> = parts
+                .into_iter()
+                .skip(1)
+                .map(Value::String)
+                .collect();
+            let name = first_word.to_string();
+            match evaluator.call_function(&name, &args) {
+                Ok(_) => {
+                    last_exit = evaluator.exit_code;
+                    last_failed = last_exit != 0;
+                }
+                Err(_) => {
+                    last_exit = 1;
+                    last_failed = true;
+                    evaluator.exit_code = 1;
+                }
+            }
         } else {
             // External command — fork/exec with inherited TTY
             let result = process::run_native(segment);
@@ -1633,6 +1657,45 @@ mod tests {
             );
         }
         std::env::set_current_dir(saved).ok();
+    }
+
+    // ── #280: bare function calls without parens ────────────────────
+
+    #[test]
+    fn bare_zero_arg_function_call_invokes_function() {
+        let (_, lines) = run("def f(); puts \"hi\"; end; f");
+        assert_eq!(lines, vec!["hi"]);
+    }
+
+    #[test]
+    fn bare_function_call_passes_args() {
+        let (_, lines) = run("def hi(name); puts \"hello #{name}\"; end; hi world");
+        assert_eq!(lines, vec!["hello world"]);
+    }
+
+    #[test]
+    fn bare_function_call_passes_quoted_args() {
+        let (_, lines) = run(
+            "def show(s); puts s; end; show \"with spaces\"",
+        );
+        assert_eq!(lines, vec!["with spaces"]);
+    }
+
+    #[test]
+    fn bare_function_shadows_path_lookup() {
+        // A defined function takes precedence over PATH — calling
+        // `ls` invokes the function, not `/usr/bin/ls`.
+        let (_, lines) = run("def ls(); puts \"shadowed\"; end; ls");
+        assert_eq!(lines, vec!["shadowed"]);
+    }
+
+    #[test]
+    fn unknown_command_still_falls_through_to_path() {
+        // No function defined → external command path → PATH lookup
+        // → `command not found` (exit 127). Important: the function
+        // table check must not swallow PATH dispatch for non-matches.
+        let (code, _) = run("definitely_not_a_command_or_function_xyz");
+        assert_eq!(code, 127);
     }
 
     // ── #272: shell-segment `#{...}` interpolation ───────────────────

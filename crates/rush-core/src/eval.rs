@@ -1860,7 +1860,7 @@ impl<'a> Evaluator<'a> {
         }
     }
 
-    fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Value, Signal> {
+    pub(crate) fn call_function(&mut self, name: &str, args: &[Value]) -> Result<Value, Signal> {
         // Builtins
         match name.to_ascii_lowercase().as_str() {
             "puts" => {
