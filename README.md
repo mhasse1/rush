@@ -271,8 +271,9 @@ Rush source -> Lexer -> Parser -> AST -> Evaluator (native Rust)
 
 - **rush-core** -- lexer, parser, AST, evaluator, stdlib, pipeline operators
 - **rush-cli** -- REPL, line editor, prompt, themes, AI, MCP, LLM mode
+- **rush-line** -- ground-up line editor (cursor-relative painter, signal-aware input)
 - **rush-agent** -- local LLM agent loop (Ollama integration)
-- **rush-ps-bridge** -- PowerShell interop for `ps`/`ps5`/`win32` blocks on Windows
+- **rush-ps-bridge** -- PowerShell companion binary, invoked via `plugin.ps` / `plugin.ps5`
 
 678 tests. ~5MB binary. ~10ms startup. CI on macOS, Linux, and Windows.
 
