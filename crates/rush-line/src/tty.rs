@@ -69,11 +69,11 @@ pub struct RawTty {
     original: libc::termios,
     fd: libc::c_int,
     /// Originals captured before we replaced the handlers, restored on
-    /// `Drop`. Stored as raw `sighandler_t` (which is `usize`-sized) so
-    /// we can hand them straight back to `libc::signal`.
-    prev_winch: libc::sighandler_t,
-    prev_hup: libc::sighandler_t,
-    prev_term: libc::sighandler_t,
+    /// `Drop`. Full `sigaction` structs (not just handlers) so we
+    /// preserve the original `sa_flags` / `sa_mask`.
+    prev_winch: libc::sigaction,
+    prev_hup: libc::sigaction,
+    prev_term: libc::sigaction,
 }
 
 impl RawTty {
@@ -131,17 +131,36 @@ impl RawTty {
         WINCH_PENDING.store(false, Ordering::Relaxed);
         EXIT_PENDING.store(false, Ordering::Relaxed);
 
-        // Install our handlers. `libc::signal` returns the previous
-        // handler; we save it for restoration on Drop. On Linux/macOS
-        // `signal()` has BSD semantics — no `SA_RESTART`, so blocking
-        // syscalls (our `read`) interrupt with `EINTR` after delivery.
-        // That's exactly the behavior we need.
-        let prev_winch =
-            unsafe { libc::signal(libc::SIGWINCH, handle_winch as *const () as libc::sighandler_t) };
-        let prev_hup =
-            unsafe { libc::signal(libc::SIGHUP, handle_exit as *const () as libc::sighandler_t) };
-        let prev_term =
-            unsafe { libc::signal(libc::SIGTERM, handle_exit as *const () as libc::sighandler_t) };
+        // Install our handlers. We use `sigaction` rather than `signal`
+        // because Linux glibc's `signal()` sets `SA_RESTART` by default
+        // — which is the opposite of what we want. With `SA_RESTART`,
+        // a blocking `read()` is auto-restarted after the handler runs,
+        // so we never see `EINTR` and never check `EXIT_PENDING`. The
+        // process hangs through SIGHUP / SIGTERM; only the default
+        // disposition (which we replaced) was killing the shell.
+        //
+        // `flags = 0` gives us: handler stays installed across deliveries
+        // (no `SA_RESETHAND`), and `read()` returns `EINTR` (no
+        // `SA_RESTART`). That's exactly the contract this module needs.
+        let mut act: libc::sigaction = unsafe { std::mem::zeroed() };
+        act.sa_sigaction = handle_winch as *const () as usize;
+        act.sa_flags = 0;
+        unsafe { libc::sigemptyset(&mut act.sa_mask); }
+        let mut prev_winch: libc::sigaction = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(libc::SIGWINCH, &act, &mut prev_winch) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        act.sa_sigaction = handle_exit as *const () as usize;
+        let mut prev_hup: libc::sigaction = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(libc::SIGHUP, &act, &mut prev_hup) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+
+        let mut prev_term: libc::sigaction = unsafe { std::mem::zeroed() };
+        if unsafe { libc::sigaction(libc::SIGTERM, &act, &mut prev_term) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
 
         Ok(Self {
             original,
@@ -257,9 +276,9 @@ impl Drop for RawTty {
         // propagate errors and we're in teardown anyway.
         unsafe {
             let _ = libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
-            libc::signal(libc::SIGWINCH, self.prev_winch);
-            libc::signal(libc::SIGHUP, self.prev_hup);
-            libc::signal(libc::SIGTERM, self.prev_term);
+            libc::sigaction(libc::SIGWINCH, &self.prev_winch, std::ptr::null_mut());
+            libc::sigaction(libc::SIGHUP, &self.prev_hup, std::ptr::null_mut());
+            libc::sigaction(libc::SIGTERM, &self.prev_term, std::ptr::null_mut());
         }
     }
 }
