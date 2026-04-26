@@ -431,7 +431,35 @@ impl Parser {
 
         // Capture raw body source for mixed Rush+shell function bodies
         let body_start = self.current().position;
-        let body = self.parse_body(&[TokenType::End])?;
+        let body_start_pos = self.pos;
+        // Resilient parse (#279): if the body contains shell syntax the
+        // Rush parser can't make sense of (e.g. `nvidia-smi
+        // --query=foo` lexes `=` as Assign), don't fail the whole
+        // function — skip to the matching `end`, return an empty AST
+        // body, and let `exec_function_body_mixed` dispatch each line
+        // through triage at runtime using `raw_body`. Only swallow the
+        // parse error when the raw body genuinely looks like shell
+        // (flag-style args, path separators, redirects); otherwise
+        // re-raise the error so Rush typos don't silently turn into
+        // empty no-op functions.
+        let body = match self.parse_body(&[TokenType::End]) {
+            Ok(b) => b,
+            Err(e) => {
+                self.pos = body_start_pos;
+                self.skip_to_matching_end();
+                let body_end_for_check = self.current().position;
+                let raw_for_check = self
+                    .source
+                    .as_ref()
+                    .map(|s| &s[body_start..body_end_for_check])
+                    .unwrap_or("");
+                if raw_for_check.lines().any(Self::looks_like_shell_line) {
+                    Vec::new()
+                } else {
+                    return Err(e);
+                }
+            }
+        };
         let body_end = self.current().position;
         let raw_body = self.source.as_ref().map(|s| {
             s[body_start..body_end].trim().to_string()
@@ -445,6 +473,75 @@ impl Parser {
             is_static: false,
             raw_body,
         })
+    }
+
+    /// Heuristic: does the raw body of a function look like it contains
+    /// shell syntax? Used by the resilient `def` parser (#279) to decide
+    /// whether to swallow a strict parse error or re-raise it. Markers:
+    /// flag-style args (` -x`, ` --foo`), path separators in the first
+    /// word, and shell metacharacters that would never appear in pure
+    /// Rush statements (pipe, redirect).
+    fn looks_like_shell_line(line: &str) -> bool {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            return false;
+        }
+        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        if first_word.contains('/') {
+            return true;
+        }
+        // Flag args: a whitespace-bounded `-x` or `--foo`. The space
+        // prefix matters — `x-1` (subtraction) is not a flag.
+        if trimmed.contains(" -") || trimmed.contains(" --") {
+            return true;
+        }
+        // Pipes / redirects, but not inside obvious Rush blocks.
+        // Conservative: any of these chars at all.
+        trimmed.contains('|')
+            || trimmed.contains('>')
+            || trimmed.contains('<')
+    }
+
+    /// Advance `self.pos` past a function body whose strict parse failed,
+    /// stopping at the matching `end` (depth-aware: nested block-openers
+    /// each push a level). Used by `parse_function_def` to recover from
+    /// shell syntax inside `def ... end` (#279).
+    fn skip_to_matching_end(&mut self) {
+        let mut depth = 1;
+        while self.current().token_type != TokenType::Eof {
+            match self.current().token_type {
+                TokenType::If
+                | TokenType::For
+                | TokenType::While
+                | TokenType::Unless
+                | TokenType::Until
+                | TokenType::Loop
+                | TokenType::Case
+                | TokenType::Def
+                | TokenType::Try
+                | TokenType::Do
+                | TokenType::Begin
+                | TokenType::Class
+                | TokenType::Enum
+                | TokenType::Macos
+                | TokenType::Win64
+                | TokenType::Win32
+                | TokenType::Linux
+                | TokenType::Isssh
+                | TokenType::Parallel
+                | TokenType::Orchestrate => {
+                    depth += 1;
+                }
+                TokenType::End => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            self.pos += 1;
+        }
     }
 
     fn parse_param_list(&mut self) -> ParseResult<Vec<ParamDef>> {
@@ -1861,6 +1958,76 @@ mod tests {
     fn function_call() {
         let nodes = parse("greet(\"hello\")").unwrap();
         assert!(matches!(&nodes[0], Node::FunctionCall { name, .. } if name == "greet"));
+    }
+
+    // ── #279: function bodies tolerate shell syntax ─────────────────
+
+    #[test]
+    fn def_body_with_shell_flag_equals() {
+        // `--query-gpu=foo` would lex `=` as Assign and confuse the
+        // strict parser. Resilient mode: capture raw_body and proceed.
+        let src = "def temps()\n  nvidia-smi --query-gpu=temperature.gpu --format=csv\nend";
+        let nodes = parse(src).unwrap();
+        match &nodes[0] {
+            Node::FunctionDef { name, body, raw_body, .. } => {
+                assert_eq!(name, "temps");
+                assert!(body.is_empty(), "AST body should be empty (raw fallback)");
+                let raw = raw_body.as_ref().expect("raw_body should be captured");
+                assert!(raw.contains("--query-gpu=temperature.gpu"));
+                assert!(raw.contains("--format=csv"));
+            }
+            other => panic!("expected FunctionDef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn def_body_with_shell_flag_quoted_value() {
+        let src = "def f()\n  curl --header=\"X-Foo: bar\" example.com\nend";
+        let nodes = parse(src).unwrap();
+        assert!(matches!(&nodes[0], Node::FunctionDef { name, .. } if name == "f"));
+    }
+
+    #[test]
+    fn def_body_pure_rush_unaffected() {
+        // Recovery path must not kick in when strict parse succeeds —
+        // the AST body should still be populated for pure-Rush bodies.
+        let src = "def g()\n  x = 1\n  puts x\nend";
+        let nodes = parse(src).unwrap();
+        match &nodes[0] {
+            Node::FunctionDef { body, .. } => {
+                assert!(!body.is_empty(), "pure-Rush body should populate AST");
+            }
+            other => panic!("expected FunctionDef, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn def_body_recovery_handles_nested_blocks() {
+        // Recovery must depth-track block-openers so a stray `end`
+        // inside nested if/while/for doesn't terminate the function.
+        let src = "def h()\n  rg --type=rust pat\n  if true\n    while false\n      for i in [1,2]\n      end\n    end\n  end\nend";
+        let nodes = parse(src).unwrap();
+        assert!(matches!(&nodes[0], Node::FunctionDef { name, .. } if name == "h"));
+    }
+
+    #[test]
+    fn def_body_pure_rush_typo_still_errors() {
+        // No flags, no paths, no pipes — body is pure-Rush-shaped and
+        // the parse error must surface, not silently produce an empty
+        // no-op function.
+        let src = "def bad()\n  x = \n  puts x\nend";
+        assert!(parse(src).is_err());
+    }
+
+    #[test]
+    fn def_after_recovery_outer_continues() {
+        // After recovery, the outer parser must continue: a second
+        // top-level def parses normally, body length 1 in the AST.
+        let src = "def first()\n  cargo --features=foo build\nend\ndef second()\n  puts \"ok\"\nend";
+        let nodes = parse(src).unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(matches!(&nodes[0], Node::FunctionDef { name, .. } if name == "first"));
+        assert!(matches!(&nodes[1], Node::FunctionDef { name, body, .. } if name == "second" && !body.is_empty()));
     }
 
     // ── Classes ─────────────────────────────────────────────────────
