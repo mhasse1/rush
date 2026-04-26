@@ -1690,10 +1690,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn unknown_command_still_falls_through_to_path() {
         // No function defined → external command path → PATH lookup
         // → `command not found` (exit 127). Important: the function
         // table check must not swallow PATH dispatch for non-matches.
+        // Unix-only: Windows falls back via cmd.exe /C, which returns
+        // exit 1/9009 instead of the POSIX 127 convention. See #290.
         let (code, _) = run("definitely_not_a_command_or_function_xyz");
         assert_eq!(code, 127);
     }
@@ -1701,7 +1704,12 @@ mod tests {
     // ── #272: shell-segment `#{...}` interpolation ───────────────────
 
     #[test]
+    #[cfg(unix)]
     fn cd_interpolates_double_quoted_var() {
+        // Unix-only: end-to-end cwd comparison is fragile on Windows under
+        // canonicalize / 8.3 short-name normalization. The interpolation
+        // logic itself is already covered cross-platform by
+        // shell_command_interpolates_in_double_quotes / shell_segment_*.
         let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let saved = std::env::current_dir().unwrap();
         let target = std::env::temp_dir();

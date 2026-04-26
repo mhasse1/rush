@@ -20,7 +20,9 @@ dist/
 .last-build-sha
 .publish-tmp*
 internal/
-.claude/
+.claude/*
+!.claude/agents
+!.claude/agents/**
 *.btskey
 shared/
 # Leak-hunt runtime artifacts (RSS CSVs, stdout captures, logs)
