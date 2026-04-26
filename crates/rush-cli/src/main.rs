@@ -31,6 +31,11 @@ pub fn rush_version_short() -> &'static str {
 }
 
 fn main() {
+    // Tracing — opt-in via RUSH_TRACE=1. Init early so signal-handler
+    // and watchdog setup can also emit events. See rush-line/src/trace.rs.
+    rush_line::trace::init();
+    rush_line::trace!("main", "rush start argv={:?}", std::env::args().collect::<Vec<_>>());
+
     // Install signal handlers before anything else
     signals::install();
     signals::update_terminal_size();

@@ -61,9 +61,19 @@ impl UnixInput {
     /// Block until at least one event is available, then return it.
     /// Mirrors `crossterm::event::read()` for the engine's perspective.
     pub fn next_event(&mut self) -> io::Result<Event> {
+        let mut iters = 0u64;
         loop {
             if let Some(evt) = self.queue.pop_front() {
+                crate::trace!("next_event", "emit qlen={} iters={iters}", self.queue.len());
                 return Ok(evt);
+            }
+            iters += 1;
+            // Defensive: if we somehow loop without making progress for
+            // an absurd number of iterations, the trace will surface it
+            // and we'll bail rather than hang the world.
+            if iters > 10_000 {
+                crate::trace!("next_event", "BAIL: 10k iters without emit");
+                return Err(io::Error::other("next_event spin guard tripped"));
             }
             self.fill_queue()?;
         }
@@ -72,33 +82,41 @@ impl UnixInput {
     fn fill_queue(&mut self) -> io::Result<()> {
         // Esc disambiguation: if the decoder is mid-Esc and stdin has no
         // bytes ready within the timeout, flush so the lone Esc commits.
-        if self.decoder.is_pending() && !self.tty.wait_input(ESC_TIMEOUT)? {
-            for ev in self.decoder.flush() {
-                push_translated(&mut self.queue, ev);
+        if self.decoder.is_pending() {
+            crate::trace!("fill_queue", "decoder pending, wait_input {}ms", ESC_TIMEOUT.as_millis());
+            let ready = self.tty.wait_input(ESC_TIMEOUT)?;
+            crate::trace!("fill_queue", "wait_input -> ready={ready}");
+            if !ready {
+                let evs = self.decoder.flush();
+                crate::trace!("fill_queue", "decoder flush -> {} events", evs.len());
+                for ev in evs {
+                    push_translated(&mut self.queue, ev);
+                }
+                return Ok(());
             }
-            return Ok(());
         }
 
         // Otherwise read a byte (or signal-driven event) and feed.
+        crate::trace!("fill_queue", "read_byte");
         match self.tty.read_byte()? {
             RawByte::Byte(b) => {
-                for ev in self.decoder.feed(b) {
+                crate::trace!("fill_queue", "byte 0x{b:02x}");
+                let evs = self.decoder.feed(b);
+                crate::trace!("fill_queue", "decoder feed -> {} events", evs.len());
+                for ev in evs {
                     push_translated(&mut self.queue, ev);
                 }
             }
             RawByte::Resize => {
-                // Look up new terminal size for the engine. crossterm's
-                // terminal::size() is just a TIOCGWINSZ ioctl — no
-                // event-loop coupling — so we keep using it here.
+                crate::trace!("fill_queue", "RESIZE");
                 if let Ok((w, h)) = crossterm::terminal::size() {
                     self.queue.push_back(Event::Resize(w, h));
                 } else {
-                    // Best-effort fallback so the engine still gets
-                    // a Resize signal it can handle.
                     self.queue.push_back(Event::Resize(80, 24));
                 }
             }
             RawByte::Eof => {
+                crate::trace!("fill_queue", "EOF");
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "stdin closed (controlling pty destroyed or signal received)",

@@ -270,6 +270,7 @@ impl LineEditor {
         // -specific (no EPOLLHUP, ConPTY closes the handle cleanly),
         // and the decoder's escape-sequence assumptions don't match
         // Windows' VK_*-encoded events.
+        crate::trace!("read_line", "enter");
         #[cfg(unix)]
         let mut input = crate::unix_input::UnixInput::enter()?;
         #[cfg(windows)]
@@ -290,6 +291,7 @@ impl LineEditor {
         #[cfg(windows)]
         let _ = terminal::disable_raw_mode();
         // Unix: `input` drops here, restoring termios + handlers.
+        crate::trace!("read_line", "exit ok={}", result.is_ok());
         result
     }
 

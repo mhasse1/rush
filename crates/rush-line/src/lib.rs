@@ -39,6 +39,7 @@ pub mod history;
 pub mod keymap;
 pub mod layout;
 pub mod painter;
+pub mod trace;
 #[cfg(unix)]
 pub mod tty;
 #[cfg(unix)]
