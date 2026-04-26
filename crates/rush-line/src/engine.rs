@@ -31,7 +31,7 @@ use std::io::{self, BufWriter, Stderr, Write};
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{
-        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent,
+        DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent,
         KeyEventKind, KeyModifiers,
     },
     execute,
@@ -39,6 +39,9 @@ use crossterm::{
     terminal::{self, Clear, ClearType},
     QueueableCommand,
 };
+// `event::read()` only runs on Windows now; Unix uses our `unix_input`.
+#[cfg(windows)]
+use crossterm::event;
 
 use crate::buffer::LineBuffer;
 use crate::completion::{longest_common_prefix, Completer, Span, Suggestion};
@@ -258,20 +261,43 @@ impl LineEditor {
     /// [`Signal::Success`] with the buffer contents and clears the
     /// buffer for the next call.
     pub fn read_line(&mut self, prompt: &dyn Prompt) -> io::Result<Signal> {
+        // Unix: take raw mode + signal handlers via RawTty (RAII), and
+        // run the read loop against our own decoder. This avoids
+        // crossterm's mio-based event reader, which busy-loops on a
+        // destroyed pty's `EPOLLHUP` (#282).
+        //
+        // Windows: keep crossterm. The orphan-pty failure mode is Unix
+        // -specific (no EPOLLHUP, ConPTY closes the handle cleanly),
+        // and the decoder's escape-sequence assumptions don't match
+        // Windows' VK_*-encoded events.
+        #[cfg(unix)]
+        let mut input = crate::unix_input::UnixInput::enter()?;
+        #[cfg(windows)]
         terminal::enable_raw_mode()?;
+
         // Bracketed paste tells the terminal to wrap pasted content
-        // in `\x1b[200~...\x1b[201~`, so crossterm can deliver it as
+        // in `\x1b[200~...\x1b[201~` so we can deliver it as
         // `Event::Paste` instead of streaming each char (and each
         // embedded \n triggering Submit). Best-effort: not every
         // emulator supports it; ignore the error.
         let _ = execute!(io::stderr(), EnableBracketedPaste);
-        let result = self.read_line_inner(prompt);
+        let result = self.read_line_inner(
+            prompt,
+            #[cfg(unix)]
+            &mut input,
+        );
         let _ = execute!(io::stderr(), DisableBracketedPaste);
+        #[cfg(windows)]
         let _ = terminal::disable_raw_mode();
+        // Unix: `input` drops here, restoring termios + handlers.
         result
     }
 
-    fn read_line_inner(&mut self, prompt: &dyn Prompt) -> io::Result<Signal> {
+    fn read_line_inner(
+        &mut self,
+        prompt: &dyn Prompt,
+        #[cfg(unix)] input: &mut crate::unix_input::UnixInput,
+    ) -> io::Result<Signal> {
         // Each call starts a fresh editing session. The cursor is
         // wherever the host left it (after a previous command's stdout
         // ran, etc.); we don't query it. The painter starts with no
@@ -310,6 +336,9 @@ impl LineEditor {
         self.repaint(prompt)?;
 
         loop {
+            #[cfg(unix)]
+            let evt = input.next_event()?;
+            #[cfg(windows)]
             let evt = event::read()?;
             match evt {
                 Event::Key(key_event) => {

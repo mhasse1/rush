@@ -205,6 +205,49 @@ impl RawTty {
             return Err(err);
         }
     }
+
+    /// Wait up to `timeout` for stdin to have data ready. Returns `true`
+    /// if stdin is readable before the timeout, `false` if the wait
+    /// expired without input.
+    ///
+    /// Used by the engine to disambiguate a lone Esc from a multi-byte
+    /// escape sequence (Alt-x, arrow key, etc.). After feeding `0x1B`
+    /// to the decoder, the engine waits ~50ms here; on `false` it calls
+    /// `Decoder::flush()` to commit the lone Esc.
+    ///
+    /// Uses `select(2)` on `STDIN_FILENO`. Returns Ok(false) on signal
+    /// interruption (`EINTR`) — caller should re-check decoder state
+    /// and signal flags before deciding what to do; that path falls
+    /// through to "no input arrived in the window," which is what we
+    /// want for Esc disambiguation.
+    pub fn wait_input(&self, timeout: std::time::Duration) -> io::Result<bool> {
+        let mut tv = libc::timeval {
+            tv_sec: timeout.as_secs() as libc::time_t,
+            tv_usec: (timeout.subsec_micros() as libc::suseconds_t),
+        };
+        let mut set: libc::fd_set = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::FD_ZERO(&mut set);
+            libc::FD_SET(self.fd, &mut set);
+        }
+        let rc = unsafe {
+            libc::select(
+                self.fd + 1,
+                &mut set,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut tv,
+            )
+        };
+        if rc < 0 {
+            let err = io::Error::last_os_error();
+            if err.raw_os_error() == Some(libc::EINTR) {
+                return Ok(false);
+            }
+            return Err(err);
+        }
+        Ok(rc > 0)
+    }
 }
 
 impl Drop for RawTty {

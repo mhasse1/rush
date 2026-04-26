@@ -41,6 +41,8 @@ pub mod layout;
 pub mod painter;
 #[cfg(unix)]
 pub mod tty;
+#[cfg(unix)]
+pub mod unix_input;
 pub mod validator;
 pub mod vi;
 
