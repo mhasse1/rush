@@ -30,6 +30,8 @@
 
 pub mod buffer;
 pub mod completion;
+#[cfg(unix)]
+pub mod decoder;
 pub mod engine;
 pub mod highlighter;
 pub mod hint;
