@@ -309,14 +309,38 @@ unsafe fn open_pty_pair() -> io::Result<(OwnedFd, OwnedFd)> {
         libc::close(master);
         return Err(err);
     }
-    let mut buf = [0 as libc::c_char; 256];
-    let rc = libc::ptsname_r(master, buf.as_mut_ptr(), buf.len());
-    if rc != 0 {
-        let err = io::Error::from_raw_os_error(rc);
-        libc::close(master);
-        return Err(err);
-    }
-    let slave = libc::open(buf.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
+
+    // The libc crate exposes `ptsname_r` on Linux (the thread-safe form
+    // glibc provides) but only `ptsname` on macOS / *BSD (the legacy
+    // form returning a pointer to a static buffer). Single-threaded
+    // test harness, so the static buffer is fine — but we still copy it
+    // into a CString immediately so the caller can pass a stable
+    // pointer to `open()`.
+    let slave_name: std::ffi::CString = {
+        #[cfg(target_os = "linux")]
+        {
+            let mut buf = [0 as libc::c_char; 256];
+            let rc = libc::ptsname_r(master, buf.as_mut_ptr(), buf.len());
+            if rc != 0 {
+                let err = io::Error::from_raw_os_error(rc);
+                libc::close(master);
+                return Err(err);
+            }
+            std::ffi::CStr::from_ptr(buf.as_ptr()).to_owned()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let p = libc::ptsname(master);
+            if p.is_null() {
+                let err = io::Error::last_os_error();
+                libc::close(master);
+                return Err(err);
+            }
+            std::ffi::CStr::from_ptr(p).to_owned()
+        }
+    };
+
+    let slave = libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
     if slave < 0 {
         let err = io::Error::last_os_error();
         libc::close(master);
