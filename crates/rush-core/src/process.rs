@@ -17,12 +17,29 @@ pub struct CommandResult {
     pub exit_code: i32,
 }
 
+/// Set argv[0] to the basename of `program` when spawning by absolute or
+/// relative path on Unix (#269). Without this, tools that print
+/// self-referential diagnostics (`mkdir -v`, `rm -v`, …) prefix every
+/// message with the full path the alias supplied (`/usr/bin/mkdir`).
+/// POSIX shells normalize argv[0] to what the user typed; this matches
+/// that. No-op on non-Unix and when `program` is a bare command name.
+fn fixup_argv0(_cmd: &mut Command, program: &str) {
+    #[cfg(unix)]
+    if program.contains('/') {
+        use std::os::unix::process::CommandExt;
+        if let Some(name) = std::path::Path::new(program).file_name() {
+            _cmd.arg0(name);
+        }
+    }
+}
+
 // ── Single Command ──────────────────────────────────────────────────
 
 /// Run a single command with inherited stdio (TTY preserved).
 /// Sets up proper process group for job control.
 pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
     let mut cmd = Command::new(program);
+    fixup_argv0(&mut cmd, program);
     cmd.args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -96,7 +113,9 @@ pub fn run_command(program: &str, args: &[&str]) -> CommandResult {
 
 /// Run a single command and capture stdout+stderr.
 pub fn run_command_capture(program: &str, args: &[&str]) -> CommandResult {
-    match Command::new(program)
+    let mut cmd = Command::new(program);
+    fixup_argv0(&mut cmd, program);
+    match cmd
         .args(args)
         .stdin(Stdio::inherit())
         .stdout(Stdio::piped())
@@ -198,6 +217,7 @@ pub fn spawn_background(line: &str) -> Result<(u32, u32), String> {
     let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
     let mut cmd = Command::new(program);
+    fixup_argv0(&mut cmd, program);
     cmd.args(&args)
         .stdin(Stdio::null())  // Background jobs don't read terminal
         .stdout(Stdio::inherit())
@@ -334,7 +354,9 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
         let program = &parts[0];
         let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
-        let spawn_result = Command::new(program)
+        let mut child_cmd = Command::new(program);
+        fixup_argv0(&mut child_cmd, program);
+        let spawn_result = child_cmd
             .args(&args)
             .stdin(stdin)
             .stdout(stdout)
@@ -639,7 +661,9 @@ fn run_with_redirects(program: &str, args: &[&str], redirects: &[Redirect]) -> C
 
 // Keep old single-redirect function for test compatibility
 fn run_cmd_with_stdio(program: &str, args: &[&str], stdin: Stdio, stdout: Stdio, stderr: Stdio) -> CommandResult {
-    let result = Command::new(program)
+    let mut cmd = Command::new(program);
+    fixup_argv0(&mut cmd, program);
+    let result = cmd
         .args(args)
         .stdin(stdin)
         .stdout(stdout)
