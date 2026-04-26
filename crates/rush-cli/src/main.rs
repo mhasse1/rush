@@ -236,6 +236,13 @@ fn main() {
     // reedline) fork. The legacy rushline path is kept around behind
     // `RUSH_LINE_V1=1` as a one-release safety net while we collect
     // daily-use feedback on rush-line.
+
+    // #282: spawn the orphan watchdog before entering the read loop.
+    // We've confirmed stdin is a tty (the non-interactive branch above
+    // already short-circuited otherwise), so a later loss of the
+    // controlling terminal is a real orphan condition.
+    signals::install_orphan_watchdog();
+
     if std::env::var_os("RUSH_LINE_V1").is_some() {
         repl::run(is_login);
     } else {
