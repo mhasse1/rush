@@ -206,10 +206,15 @@ pub fn is_rush_syntax(input: &str) -> bool {
         }
     }
 
-    // String interpolation
-    if trimmed.contains("#{") {
-        return true;
-    }
+    // (Removed for #272.) Previously: `trimmed.contains("#{") → true`. The
+    // rule was redundant — every genuine Rush case with `#{...}` is
+    // already caught upstream (block keywords, builtins like `puts`,
+    // assignments, dotted method calls, function-call-with-parens, …),
+    // and the rule mis-classified shell commands as Rush whenever the
+    // user used `#{var}` interpolation in args (`cd "#{name}"`, `git -C
+    // "#{dir}"`, `nvidia-smi --query=#{x}`). Those segments now reach the
+    // shell-command path where `expand_shell_interpolation` substitutes
+    // the value before dispatch.
 
     // Array/hash literals at start. Rush literals pack tight: `[1,2]`,
     // `{a:1}`. Shell `[ -f path ]` (the `test` bracket form) has a

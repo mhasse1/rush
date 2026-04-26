@@ -167,6 +167,21 @@ pub fn dispatch_with_jobs_and_builtins(
             (false, segment)
         };
 
+        // Step 2d: Expand `#{...}` interpolation on shell-command segments
+        // (#272). Rush-syntax segments are skipped — the parser owns their
+        // string-literal interpolation. Single-quoted regions are
+        // preserved literal; double-quoted and unquoted regions expand.
+        // Touches every downstream path (cd, export, unset, run_native,
+        // pipe chains, subshell), so `cd "#{name}"`, `git -C "#{dir}"`,
+        // and friends all see the substituted value.
+        let segment_expanded;
+        let segment: &str = if triage::is_rush_syntax(segment) {
+            segment
+        } else {
+            segment_expanded = expand_shell_interpolation(segment, evaluator);
+            &segment_expanded
+        };
+
         // set -x: print command before execution
         if flags::xtrace() {
             eprintln!("+ {segment}");
@@ -576,6 +591,52 @@ pub fn dispatch_with_jobs_and_builtins(
 pub fn dispatch_simple(line: &str, evaluator: &mut Evaluator) -> i32 {
     let result = dispatch(line, evaluator, None);
     result.exit_code
+}
+
+// ── Shell-segment interpolation (#272) ──────────────────────────────
+
+/// Expand `#{...}` interpolation in a shell-command segment, respecting
+/// single-quote vs double-quote boundaries. Single-quoted runs pass
+/// through literally; double-quoted and unquoted runs are handed to
+/// `Evaluator::expand_interpolation` which substitutes `#{expr}` with
+/// `expr`'s evaluated value.
+///
+/// Used by `dispatch_with_jobs_and_builtins` to make
+/// `cd "#{path}"`, `git -C "#{dir}"`, `mv from "#{dst}"`, and the rest
+/// of the shell-command surface honor Rush variables — bringing builtin
+/// and external-command arg evaluation in line with the documented
+/// double-quote interpolation rule.
+fn expand_shell_interpolation(segment: &str, evaluator: &mut crate::eval::Evaluator) -> String {
+    let mut out = String::with_capacity(segment.len());
+    let mut buf = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    for c in segment.chars() {
+        if c == '\'' && !in_double {
+            if !in_single {
+                if !buf.is_empty() {
+                    out.push_str(&evaluator.expand_interpolation(&buf));
+                    buf.clear();
+                }
+                in_single = true;
+                out.push('\'');
+            } else {
+                in_single = false;
+                out.push('\'');
+            }
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+            buf.push('"');
+        } else if in_single {
+            out.push(c);
+        } else {
+            buf.push(c);
+        }
+    }
+    if !buf.is_empty() {
+        out.push_str(&evaluator.expand_interpolation(&buf));
+    }
+    out
 }
 
 // ── Heredoc Expansion ───────────────────────────────────────────────
@@ -1572,6 +1633,89 @@ mod tests {
             );
         }
         std::env::set_current_dir(saved).ok();
+    }
+
+    // ── #272: shell-segment `#{...}` interpolation ───────────────────
+
+    #[test]
+    fn cd_interpolates_double_quoted_var() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        let target = std::env::temp_dir();
+        let line = format!("dir = \"{}\"; cd \"#{{dir}}\"", target.display());
+        let (code, _) = run(&line);
+        assert_eq!(code, 0);
+        let now = std::env::current_dir().unwrap();
+        assert_eq!(
+            now.canonicalize().unwrap_or(now),
+            target.canonicalize().unwrap(),
+        );
+        std::env::set_current_dir(saved).ok();
+    }
+
+    #[test]
+    fn cd_interpolates_unquoted_var() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        let target = std::env::temp_dir();
+        let line = format!("dir = \"{}\"; cd #{{dir}}", target.display());
+        let (code, _) = run(&line);
+        assert_eq!(code, 0);
+        std::env::set_current_dir(saved).ok();
+    }
+
+    #[test]
+    fn shell_command_interpolates_in_double_quotes() {
+        // Directly test the helper rather than spawning a process —
+        // run_native captures real output we don't want to depend on.
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("name = \"world\"", &mut eval, None);
+        let expanded =
+            expand_shell_interpolation("/bin/echo \"hello #{name}\"", &mut eval);
+        assert_eq!(expanded, "/bin/echo \"hello world\"");
+    }
+
+    #[test]
+    fn shell_segment_single_quotes_stay_literal() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("name = \"world\"", &mut eval, None);
+        // Single-quoted region: literal `#{name}` preserved.
+        let expanded =
+            expand_shell_interpolation("echo 'literal #{name}'", &mut eval);
+        assert_eq!(expanded, "echo 'literal #{name}'");
+    }
+
+    #[test]
+    fn shell_segment_mixed_quotes() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("x = \"X\"", &mut eval, None);
+        let expanded = expand_shell_interpolation(
+            "echo \"dq #{x}\" 'sq #{x}' #{x}",
+            &mut eval,
+        );
+        assert_eq!(expanded, "echo \"dq X\" 'sq #{x}' X");
+    }
+
+    #[test]
+    fn shell_segment_unterminated_interp_is_left_literal() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let expanded = expand_shell_interpolation("echo \"#{never\"", &mut eval);
+        assert_eq!(expanded, "echo \"#{never\"");
+    }
+
+    #[test]
+    fn shell_segment_apostrophe_inside_double_quotes() {
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("x = \"V\"", &mut eval, None);
+        // The inner `'` must NOT toggle single-quote mode while in_double.
+        let expanded =
+            expand_shell_interpolation("echo \"He said 'hi #{x}'\"", &mut eval);
+        assert_eq!(expanded, "echo \"He said 'hi V'\"");
     }
 
     // ── PipelineBuiltins plumbing (#224-A) ───────────────────────────
