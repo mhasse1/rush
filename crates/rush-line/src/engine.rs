@@ -13,11 +13,18 @@
 //! 1. [`Painter::prepare_for_emit`] — relative walk-up to the top of
 //!    the previous paint, per-row clear of those rows, walk back to
 //!    the top.
-//! 2. Emit content sequentially: prompt text, then `before_cursor`,
-//!    then `SavePosition`, then `after_cursor`, then hint. Embedded
-//!    `\n` are coerced to `\r\n` for raw-mode line endings.
-//! 3. `RestorePosition` to land cursor at the editor's logical
-//!    position.
+//! 2. Emit content sequentially: prompt, then `before_cursor`,
+//!    then `after_cursor`, hint, menu. Embedded `\n` are coerced to
+//!    `\r\n` for raw-mode line endings.
+//! 3. *Relative* cursor walk back to the editor's logical position
+//!    (end of `before`). We have everything we need from the layout
+//!    measurements: `full_m.cursor_row` is where the cursor lands at
+//!    end of emit; `pre_m.cursor_row`/`pre_m.cursor_col` is where we
+//!    want it. The walk is `MoveUp(full_m.cursor_row - pre_m.cursor_row)`
+//!    + `\r` + `MoveRight(pre_m.cursor_col)`. **Never** absolute
+//!    save/restore — those (DECSC/DECRC, CSI SCOSC/SCORC) desync under
+//!    tmux and other emulators with non-trivial scroll regions
+//!    (#292/#293).
 //! 4. [`Painter::finalize`] with `(rows_used, cursor_row)` derived
 //!    from [`crate::layout::measure`] over the same emitted strings.
 //!
@@ -1158,7 +1165,6 @@ impl LineEditor {
             let out = self.painter.out();
             out.queue(Print(prompt_crlf.as_ref()))?;
             out.queue(Print(&before_to_print))?;
-            out.queue(cursor::SavePosition)?;
             out.queue(Print(&after_to_print))?;
             if !hint.is_empty() {
                 out.queue(SetForegroundColor(Color::DarkGrey))?;
@@ -1169,7 +1175,21 @@ impl LineEditor {
                 let menu_crlf = coerce_crlf(&menu_text);
                 out.queue(Print(menu_crlf.as_ref()))?;
             }
-            out.queue(cursor::RestorePosition)?;
+            // Relative walk back to the editor's logical cursor (end of
+            // `before`). At this point the terminal cursor sits at
+            // (full_m.cursor_row, full_m.cursor_col); we want it at
+            // (pre_m.cursor_row, pre_m.cursor_col). delta_rows is the
+            // saturating subtraction because both come from the same
+            // measure pass — pre_m is a prefix of the full text, so
+            // pre_m.cursor_row ≤ full_m.cursor_row by construction.
+            let delta_rows = full_m.cursor_row.saturating_sub(pre_m.cursor_row);
+            if delta_rows > 0 {
+                out.queue(cursor::MoveUp(delta_rows))?;
+            }
+            out.queue(Print("\r"))?;
+            if pre_m.cursor_col > 0 {
+                out.queue(cursor::MoveRight(pre_m.cursor_col))?;
+            }
         }
         self.painter.finalize(full_m.rows_used, pre_m.cursor_row);
         self.painter.flush()?;

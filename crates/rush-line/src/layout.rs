@@ -35,6 +35,8 @@ use unicode_width::UnicodeWidthChar;
 pub struct Measurement {
     /// Row offset from start where the cursor lands at end of emit.
     pub cursor_row: u16,
+    /// Column where the cursor lands at end of emit (0-based).
+    pub cursor_col: u16,
     /// Number of distinct rows the emit wrote content to. Always at
     /// least 1 if any non-newline character was emitted; 0 if the
     /// emit was empty or pure whitespace-only newlines.
@@ -44,7 +46,7 @@ pub struct Measurement {
 /// Walk `text` and return cursor-end row + content-rows-used.
 pub fn measure(text: &str, terminal_width: u16) -> Measurement {
     if terminal_width == 0 || text.is_empty() {
-        return Measurement { cursor_row: 0, rows_used: 0 };
+        return Measurement { cursor_row: 0, cursor_col: 0, rows_used: 0 };
     }
     let width = terminal_width as usize;
     let stripped = strip_str(text);
@@ -80,11 +82,12 @@ pub fn measure(text: &str, terminal_width: u16) -> Measurement {
     }
 
     let cursor_row = row.min(u16::MAX as u32) as u16;
+    let cursor_col = (col.min(u16::MAX as usize)) as u16;
     let rows_used = match max_content_row {
         Some(m) => (m + 1).min(u16::MAX as u32) as u16,
         None => 0,
     };
-    Measurement { cursor_row, rows_used }
+    Measurement { cursor_row, cursor_col, rows_used }
 }
 
 #[cfg(test)]
@@ -94,6 +97,11 @@ mod tests {
     fn m(text: &str, width: u16) -> (u16, u16) {
         let r = measure(text, width);
         (r.cursor_row, r.rows_used)
+    }
+
+    fn mc(text: &str, width: u16) -> (u16, u16) {
+        let r = measure(text, width);
+        (r.cursor_row, r.cursor_col)
     }
 
     #[test]
@@ -183,5 +191,38 @@ mod tests {
     #[test]
     fn zero_width_terminal_returns_zeros() {
         assert_eq!(m("anything", 0), (0, 0));
+    }
+
+    // ── cursor_col coverage ─────────────────────────────────────────────
+    // (cursor_row already exhaustively tested above.)
+
+    #[test]
+    fn cursor_col_after_simple_string() {
+        assert_eq!(mc("abc", 80), (0, 3));
+    }
+
+    #[test]
+    fn cursor_col_resets_to_zero_after_newline() {
+        assert_eq!(mc("abc\n", 80), (1, 0));
+        assert_eq!(mc("abc\nde", 80), (1, 2));
+    }
+
+    #[test]
+    fn cursor_col_resets_to_zero_after_wrap() {
+        // Width 5: "abcdef" wraps. After "abcde" col=5; "f" wraps to
+        // row 1 col 1.
+        assert_eq!(mc("abcdef", 5), (1, 1));
+    }
+
+    // Note: standalone `\r` is *removed* by `strip_ansi_escapes::strip_str`
+    // before measure sees it, so the `\r` arm in the match is effectively
+    // dead. The engine's emitter always uses `\r\n` together (via
+    // `coerce_crlf`), where the `\r` is dropped and `\n` advances the row,
+    // which is what we want. A test that asserts `\r` resets column would
+    // pass through strip_str's filter and fail; don't add one.
+
+    #[test]
+    fn cursor_col_does_not_count_ansi() {
+        assert_eq!(mc("\x1b[31mabc\x1b[0m", 80), (0, 3));
     }
 }

@@ -16,11 +16,12 @@
 
 use std::env;
 use std::ffi::CString;
+use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 /// One rush-cli session attached to a pty.
@@ -50,12 +51,30 @@ impl PtySession {
         let (master, slave) = unsafe { open_pty_pair()? };
         unsafe { set_winsize(master.as_raw_fd(), cols, rows)? };
 
-        let slave_raw = slave.as_raw_fd();
+        // Three independent copies of the slave fd, one per stdio
+        // handle. `Stdio::from(File)` takes ownership and closes the
+        // file when the child has it dup2'd into place — so we need
+        // three distinct fds (can't share one). `Command` does its own
+        // stdio dup2 *after* `pre_exec` runs, which is why we can't
+        // splice slave into 0/1/2 from inside the closure: std would
+        // clobber it. Going through Stdio::from is the supported path.
+        let slave_for_stdin = dup_owned_fd(slave.as_raw_fd())?;
+        let slave_for_stdout = dup_owned_fd(slave.as_raw_fd())?;
+        let slave_for_stderr = dup_owned_fd(slave.as_raw_fd())?;
+
+        // Stash the *original* slave's raw fd for the TIOCSCTTY ioctl
+        // inside pre_exec. After the closure returns, std installs the
+        // Stdio handles via dup2 — which is fine, ioctl already ran.
+        let slave_raw_for_ctty = slave.as_raw_fd();
+
         let mut cmd = Command::new(bin);
         cmd.env("TERM", "xterm-256color")
             .env("RUSH_CONFIG_DIR", &config_dir)
             .env("RUSH_TRACE", "0")
-            .env_remove("RUST_BACKTRACE");
+            .env_remove("RUST_BACKTRACE")
+            .stdin(Stdio::from(File::from(slave_for_stdin)))
+            .stdout(Stdio::from(File::from(slave_for_stdout)))
+            .stderr(Stdio::from(File::from(slave_for_stderr)));
 
         unsafe {
             cmd.pre_exec(move || {
@@ -65,30 +84,11 @@ impl PtySession {
                     return Err(io::Error::last_os_error());
                 }
                 // Make the slave end of the pty our controlling tty.
-                // Linux signature is `ioctl(fd, TIOCSCTTY, 0)`; macOS is
-                // `ioctl(fd, TIOCSCTTY)` (no third arg). Passing 0 is
-                // safe on both — macOS ignores extra varargs.
-                #[cfg(target_os = "linux")]
-                {
-                    if libc::ioctl(slave_raw, libc::TIOCSCTTY, 0) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    if libc::ioctl(slave_raw, libc::TIOCSCTTY as _, 0) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                }
-                // Splice slave into 0/1/2.
-                for target in &[libc::STDIN_FILENO, libc::STDOUT_FILENO, libc::STDERR_FILENO] {
-                    if libc::dup2(slave_raw, *target) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                }
-                // Close the original slave fd if it's not 0/1/2.
-                if slave_raw > 2 {
-                    libc::close(slave_raw);
+                // Passing 0 as third arg is safe on Linux (where
+                // TIOCSCTTY takes a flag) and macOS (where it ignores
+                // extra varargs).
+                if libc::ioctl(slave_raw_for_ctty, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(io::Error::last_os_error());
                 }
                 Ok(())
             });
@@ -282,6 +282,16 @@ impl Drop for PtySession {
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.config_dir);
     }
+}
+
+/// Duplicate a raw fd into a fresh OwnedFd. Used to give each child
+/// stdio handle its own copy of the slave end.
+fn dup_owned_fd(fd: RawFd) -> io::Result<OwnedFd> {
+    let new = unsafe { libc::dup(fd) };
+    if new < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(new) })
 }
 
 unsafe fn open_pty_pair() -> io::Result<(OwnedFd, OwnedFd)> {
