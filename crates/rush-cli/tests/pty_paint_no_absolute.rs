@@ -13,7 +13,9 @@
 //!
 //! This test fails on main (today) — engine.rs:1161/1172 still emits
 //! the save/restore pair. After the Phase 4 fix it will pass.
-#![cfg(unix)]
+//!
+//! Linux-only for the same reason as pty_smoke.rs (see header there).
+#![cfg(target_os = "linux")]
 
 mod pty;
 

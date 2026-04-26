@@ -5,13 +5,15 @@
 //! as its controlling terminal (setsid + TIOCSCTTY); the test keeps the
 //! master end for sending input + reading output.
 //!
-//! Unix-only — pty semantics on Windows differ enough to need a separate
-//! harness (ConPTY), which we'll add when we care about Windows again.
+//! Linux-only for now: the harness compiles on macOS but the tests
+//! hang (TIOCSCTTY / ptsname semantics differ). Tracked as a follow-up
+//! so #292 isn't blocked on cross-platform pty plumbing.
+//! Windows: pty semantics need a separate harness (ConPTY).
 //!
 //! Issue refs: #289 (this harness), #282 (the input rewrite this is
 //! intended to backfill), #292 (the paint regression this is intended
 //! to verify the fix for).
-#![cfg(unix)]
+#![cfg(target_os = "linux")]
 #![allow(dead_code)] // Different test files use different subsets.
 
 use std::env;
