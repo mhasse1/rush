@@ -37,6 +37,8 @@ pub mod history;
 pub mod keymap;
 pub mod layout;
 pub mod painter;
+#[cfg(unix)]
+pub mod tty;
 pub mod validator;
 pub mod vi;
 
