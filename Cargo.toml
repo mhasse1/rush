@@ -21,3 +21,10 @@ collapsible_match = "allow"
 # load-bearing because `String` doesn't implement `PartialOrd<&str>` (only
 # `PartialEq<&str>`). Clippy's autofix produces code that doesn't compile.
 cmp_owned = "allow"
+
+# Release with line-table debug info. Same runtime perf as a stripped
+# release build, but enough symbols for `gdb`, `perf`, `pstack`, and
+# `addr2line` to give us real function names + line numbers if rush
+# ever wedges in production. Adds ~1-2 MB to the binary; trivial.
+[profile.release]
+debug = "line-tables-only"
