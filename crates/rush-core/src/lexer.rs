@@ -41,8 +41,6 @@ fn keyword_type(word: &str) -> Option<TokenType> {
         "win32" => Some(TokenType::Win32),
         "linux" => Some(TokenType::Linux),
         "isssh" => Some(TokenType::Isssh),
-        "ps" => Some(TokenType::Ps),
-        "ps5" => Some(TokenType::Ps5),
         "parallel" => Some(TokenType::Parallel),
         "orchestrate" => Some(TokenType::Orchestrate),
         "task" => Some(TokenType::Task),

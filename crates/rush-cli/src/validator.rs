@@ -101,22 +101,12 @@ fn is_incomplete(source: &str) -> bool {
         // `end` is allowed anywhere since it can legitimately close a prior
         // block regardless of position on the current line.
         if let Some(first_word) = line_words.first() {
-            let lower = first_word.to_lowercase();
-            match lower.as_str() {
+            match first_word.to_lowercase().as_str() {
                 "if" | "unless" | "while" | "until" | "for" | "loop"
                 | "def" | "class" | "enum" | "case" | "match"
                 | "try" | "begin" | "do"
                 | "macos" | "linux" | "win64" | "win32"
                 | "plugin" => {
-                    depth += 1;
-                }
-                // ps / ps5 are block keywords ONLY when bare (no args) —
-                // this mirrors triage::is_rush_syntax. Without this gate
-                // the unix `ps` command (`ps`, `ps -ef`, `ps aux`, etc.)
-                // is misclassified as an open block, the Submit path
-                // appends `\n` and waits forever for `end`. Caused #282-
-                // adjacent "ps never returns" reports on Spark.
-                "ps" | "ps5" if line_words.len() == 1 => {
                     depth += 1;
                 }
                 _ => {}
@@ -224,19 +214,16 @@ mod tests {
     }
 
     #[test]
-    fn ps_with_args_is_shell_not_block() {
-        // The unix `ps` command must not be eaten by the multi-line
-        // continuation gate. Only bare `ps` opens a Rush ps-block,
-        // matching triage's classification. Caused real-world hangs
-        // where typing `ps` or `ps -ef | grep …` would silently drop
-        // rush into multi-line capture and never submit until the user
-        // typed `end`.
+    fn ps_is_always_shell_command() {
+        // The `ps`/`ps5` block keyword has been deleted in favor of
+        // `plugin.ps ... end`. Every form of `ps` is now the unix
+        // command and must submit cleanly without entering multi-
+        // line capture mode.
+        assert!(!is_incomplete("ps"));
+        assert!(!is_incomplete("ps5"));
         assert!(!is_incomplete("ps -ef"));
         assert!(!is_incomplete("ps aux"));
         assert!(!is_incomplete("ps -ef | grep rush"));
         assert!(!is_incomplete("ps5 -SomeArg"));
-        // Bare `ps` / `ps5` still legitimately open a block.
-        assert!(is_incomplete("ps"));
-        assert!(is_incomplete("ps5"));
     }
 }

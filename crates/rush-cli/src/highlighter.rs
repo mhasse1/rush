@@ -61,7 +61,7 @@ fn highlight_rush(styled: &mut StyledText, line: &str) {
             | TokenType::Begin | TokenType::Do | TokenType::And | TokenType::Or
             | TokenType::Not | TokenType::Break | TokenType::Next | TokenType::Continue
             | TokenType::Macos | TokenType::Linux | TokenType::Win64 | TokenType::Win32
-            | TokenType::Ps | TokenType::Ps5 | TokenType::SelfKw | TokenType::Super => {
+            | TokenType::SelfKw | TokenType::Super => {
                 Style::new().bold().fg(Color::Blue)
             }
             TokenType::True | TokenType::False | TokenType::Nil => Style::new().fg(Color::Cyan),

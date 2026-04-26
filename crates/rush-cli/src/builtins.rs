@@ -2220,7 +2220,7 @@ pub fn run_script(evaluator: &mut Evaluator, content: &str, source_name: &str) {
         "if", "unless", "while", "until", "for", "parallel", "parallel!",
         "orchestrate", "task", "loop",
         "def", "class", "enum", "case", "match", "try", "begin",
-        "macos", "linux", "win64", "win32", "ps", "ps5", "plugin",
+        "macos", "linux", "win64", "win32", "plugin",
     ];
 
     for line in content.lines() {

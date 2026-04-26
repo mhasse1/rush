@@ -149,7 +149,6 @@ impl Parser {
                 self.parse_platform_block()?
             }
             TokenType::Win32 => self.parse_win32_block()?,
-            TokenType::Ps | TokenType::Ps5 => self.parse_raw_ps_block()?,
             TokenType::Plugin => self.parse_plugin_block()?,
             TokenType::Next | TokenType::Continue | TokenType::Break => {
                 self.parse_loop_control()?
@@ -831,23 +830,6 @@ impl Parser {
             property: None,
             operator: None,
             property_value: None,
-        })
-    }
-
-    fn parse_raw_ps_block(&mut self) -> ParseResult<Node> {
-        let platform = self.advance_clone().value.to_ascii_lowercase();
-        let (property, operator, property_value) = self.parse_platform_condition()?;
-        self.skip_newlines();
-        let raw_body = self.capture_raw_body();
-        self.expect(TokenType::End)?;
-
-        Ok(Node::PlatformBlock {
-            platform,
-            body: None,
-            raw_body: Some(raw_body),
-            property,
-            operator,
-            property_value,
         })
     }
 
@@ -2271,15 +2253,6 @@ mod tests {
         assert!(matches!(
             &nodes[0],
             Node::PlatformBlock { platform, body: Some(_), .. } if platform == "macos"
-        ));
-    }
-
-    #[test]
-    fn ps_block() {
-        let nodes = parse("ps\n  Get-Process\nend").unwrap();
-        assert!(matches!(
-            &nodes[0],
-            Node::PlatformBlock { platform, raw_body: Some(_), .. } if platform == "ps"
         ));
     }
 

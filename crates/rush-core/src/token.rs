@@ -51,8 +51,6 @@ pub enum TokenType {
     Win32,
     Linux,
     Isssh,
-    Ps,
-    Ps5,
     Plugin,
     Parallel,
     Orchestrate,

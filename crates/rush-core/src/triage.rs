@@ -26,13 +26,7 @@ pub fn is_rush_syntax(input: &str) -> bool {
         return true;
     }
 
-    // ps/ps5 are block keywords only when bare (no args)
-    if first_word.eq_ignore_ascii_case("ps") || first_word.eq_ignore_ascii_case("ps5") {
-        if trimmed.len() == first_word.len() {
-            return true; // bare "ps" or "ps5"
-        }
-        // "ps -ef", "ps aux" → shell command, fall through
-    } else if block_keywords.iter().any(|k| k.eq_ignore_ascii_case(first_word)) {
+    if block_keywords.iter().any(|k| k.eq_ignore_ascii_case(first_word)) {
         return true;
     }
 
@@ -295,12 +289,14 @@ mod tests {
     }
 
     #[test]
-    fn ps_disambiguation() {
-        // Bare "ps" = Rush block keyword
-        assert!(is_rush_syntax("ps"));
-        // "ps aux" = shell command
+    fn ps_is_always_shell_command() {
+        // After deleting the `ps`/`ps5` block keyword, every form of
+        // `ps` falls through to PATH dispatch (the unix command).
+        // Multi-line PowerShell embedding is now `plugin.ps ... end`.
+        assert!(!is_rush_syntax("ps"));
         assert!(!is_rush_syntax("ps aux"));
         assert!(!is_rush_syntax("ps -ef"));
+        assert!(!is_rush_syntax("ps5"));
     }
 
     #[test]
@@ -458,9 +454,6 @@ mod tests {
         // ── Plugins ──
         "plugin",
         "plugin.python",
-        // ── Bare rush block keywords (no args) ──
-        "ps",
-        "ps5",
     ];
 
     /// Inputs that MUST classify as shell commands.
@@ -471,6 +464,11 @@ mod tests {
         "pwd",
         "whoami",
         "hostname",
+        // ── ps and ps5 are unix commands now (block keyword deleted) ──
+        "ps",
+        "ps -ef",
+        "ps aux",
+        "ps5",
         // ── Commands with args / flags ──
         "grep foo bar.txt",
         "cat /etc/hosts",
