@@ -1102,6 +1102,7 @@ name = "rush-line"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "libc",
  "strip-ansi-escapes",
  "unicode-segmentation",
  "unicode-width",
