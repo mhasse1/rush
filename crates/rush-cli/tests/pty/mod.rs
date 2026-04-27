@@ -82,20 +82,13 @@ impl PtySession {
         // forkpty: atomic master/slave + fork + setsid + ctty + dup2.
         // Returns 0 in child, child pid in parent, -1 on error.
         let mut master_fd: libc::c_int = -1;
-        let ws = libc::winsize {
+        let mut ws = libc::winsize {
             ws_row: rows,
             ws_col: cols,
             ws_xpixel: 0,
             ws_ypixel: 0,
         };
-        let pid = unsafe {
-            libc::forkpty(
-                &mut master_fd,
-                std::ptr::null_mut(), // don't need slave name
-                std::ptr::null(),     // default termios for slave
-                &ws as *const _,
-            )
-        };
+        let pid = unsafe { forkpty_compat(&mut master_fd, &mut ws) };
         if pid < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -374,6 +367,33 @@ fn libc_wif_signaled(status: libc::c_int) -> bool {
 #[allow(non_snake_case)]
 fn libc_wterm_sig(status: libc::c_int) -> i32 {
     status & 0x7f
+}
+
+/// libc::forkpty signature differs across kernels: Linux takes
+/// `*const termios` / `*const winsize`, macOS / *BSD take `*mut`. Wrap
+/// the call so the platform difference is captured in one place.
+unsafe fn forkpty_compat(
+    master_fd: *mut libc::c_int,
+    ws: *mut libc::winsize,
+) -> libc::pid_t {
+    #[cfg(target_os = "linux")]
+    {
+        libc::forkpty(
+            master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            ws as *const _,
+        )
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        libc::forkpty(
+            master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            ws,
+        )
+    }
 }
 
 fn make_tmp_config_dir() -> io::Result<PathBuf> {
