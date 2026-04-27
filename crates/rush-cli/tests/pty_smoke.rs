@@ -2,7 +2,14 @@
 //! end-to-end path: rush starts in a real pty, prints a prompt, runs
 //! a command, and exits cleanly when the controlling terminal sends
 //! SIGHUP (the headline #282 regression we never want to ship again).
-#![cfg(unix)]
+//!
+//! Gated to Linux only: forkpty + cfg-shim landed for macOS (#295)
+//! and the harness compiles cleanly there, but Unit Tests still hang
+//! on macos-aarch64 (CI run 24971101349: 2h50m before manual cancel).
+//! Root cause is *not* TIOCSCTTY semantics as initially suspected;
+//! something else in the rush↔pty interaction on macOS is wedging.
+//! Tracked under #295. Linux runs in <0.5s.
+#![cfg(target_os = "linux")]
 
 mod pty;
 

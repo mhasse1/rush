@@ -17,8 +17,12 @@
 //! child as a raw `pid_t`; `try_wait` / `kill` go through `waitpid` /
 //! `kill` directly.
 //!
-//! Unix-only — pty semantics on Windows differ enough to need a
-//! separate harness (ConPTY).
+//! Linux-only for now (test files are #![cfg(target_os = "linux")]).
+//! macOS Unit Tests hang even with forkpty (#295) — something in
+//! rush↔pty wedges that we haven't root-caused yet. The harness itself
+//! compiles cleanly on macOS; only the integration tests that actually
+//! drive a child rush are gated. Windows: separate harness needed
+//! (ConPTY).
 //!
 //! Issue refs: #289 (this harness), #282 (the input rewrite this is
 //! intended to backfill), #292 (the paint regression this is intended
