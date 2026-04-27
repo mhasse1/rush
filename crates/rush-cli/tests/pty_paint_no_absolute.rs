@@ -11,11 +11,10 @@
 //! walk back relatively; absolute save/restore is redundant and
 //! tmux-fragile.
 //!
-//! This test fails on main (today) — engine.rs:1161/1172 still emits
-//! the save/restore pair. After the Phase 4 fix it will pass.
-//!
-//! Linux-only for the same reason as pty_smoke.rs (see header there).
-#![cfg(target_os = "linux")]
+//! This test fails on prev main (commit ea53d45 era) — engine.rs:1161/
+//! 1172 still emitted the save/restore pair. After the Phase 4 fix it
+//! passes.
+#![cfg(unix)]
 
 mod pty;
 

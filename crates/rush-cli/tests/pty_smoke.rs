@@ -2,12 +2,7 @@
 //! end-to-end path: rush starts in a real pty, prints a prompt, runs
 //! a command, and exits cleanly when the controlling terminal sends
 //! SIGHUP (the headline #282 regression we never want to ship again).
-//!
-//! Gated to Linux only for now: the harness compiles on macOS but the
-//! tests hang there, almost certainly due to TIOCSCTTY / ptsname
-//! semantics that differ from Linux. Tracked separately so #292 isn't
-//! blocked on macOS-specific pty plumbing.
-#![cfg(target_os = "linux")]
+#![cfg(unix)]
 
 mod pty;
 
@@ -40,14 +35,9 @@ fn rush_starts_runs_echo_and_exits_on_sighup() {
     );
 
     s.send_signal(libc::SIGHUP).expect("send SIGHUP");
-    let status = s
+    let _outcome = s
         .expect_exit_within(Duration::from_secs(2))
         .expect("rush should exit within 2s of SIGHUP");
-
-    // Either signal-killed (status.signal() == Some(SIGHUP)) or clean
-    // exit via the EXIT_PENDING flag — both acceptable. We only care
-    // that the process terminated.
-    use std::os::unix::process::ExitStatusExt;
-    let exited_cleanly = status.code().is_some() || status.signal().is_some();
-    assert!(exited_cleanly, "child neither exited nor was signalled");
+    // Either ExitOutcome::Code(_) or ExitOutcome::Signal(_) — both
+    // acceptable. The expect_exit_within itself is the assertion.
 }

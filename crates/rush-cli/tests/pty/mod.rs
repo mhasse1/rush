@@ -1,107 +1,126 @@
 //! Pty test harness for rush-cli integration tests.
 //!
-//! Spawns rush-cli attached to a pty pair so tests can drive the shell
-//! the way a real terminal would. The child process gets the slave end
-//! as its controlling terminal (setsid + TIOCSCTTY); the test keeps the
-//! master end for sending input + reading output.
+//! Spawns rush-cli attached to a pty pair via `libc::forkpty`, which
+//! atomically: opens master/slave, forks, calls `setsid` in the child,
+//! attaches the slave as the child's controlling terminal, and dup2's
+//! it to stdin/stdout/stderr. Parent gets the master fd.
 //!
-//! Linux-only for now: the harness compiles on macOS but the tests
-//! hang (TIOCSCTTY / ptsname semantics differ). Tracked as a follow-up
-//! so #292 isn't blocked on cross-platform pty plumbing.
-//! Windows: pty semantics need a separate harness (ConPTY).
+//! We use `forkpty` rather than the manual `posix_openpt + setsid +
+//! TIOCSCTTY + dup2` dance because the manual sequence works on Linux
+//! but hangs on macOS (#295) — TIOCSCTTY-on-inherited-fd has different
+//! semantics across kernels. `forkpty` is the libc-provided "do this
+//! correctly per kernel" entrypoint and works the same on Linux and
+//! macOS (and the BSDs).
+//!
+//! Bypassing `std::process::Command` means we build the child's argv
+//! and environment by hand and `execve` directly. The harness owns the
+//! child as a raw `pid_t`; `try_wait` / `kill` go through `waitpid` /
+//! `kill` directly.
+//!
+//! Unix-only — pty semantics on Windows differ enough to need a
+//! separate harness (ConPTY).
 //!
 //! Issue refs: #289 (this harness), #282 (the input rewrite this is
 //! intended to backfill), #292 (the paint regression this is intended
-//! to verify the fix for).
-#![cfg(target_os = "linux")]
+//! to verify the fix for), #295 (macOS support — addressed here).
+#![cfg(unix)]
 #![allow(dead_code)] // Different test files use different subsets.
 
 use std::env;
-use std::ffi::CString;
-use std::fs::File;
+use std::ffi::{CString, OsStr, OsString};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
-use std::os::unix::process::CommandExt;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
+
+/// Outcome of a child process exit, modeled on the bits of
+/// `std::process::ExitStatus` we actually need.
+#[derive(Debug, Clone, Copy)]
+pub enum ExitOutcome {
+    /// Normal exit with a status code.
+    Code(i32),
+    /// Killed by a signal.
+    Signal(i32),
+}
 
 /// One rush-cli session attached to a pty.
 pub struct PtySession {
     master: OwnedFd,
-    child: Child,
-    /// Tempdir that backs RUSH_CONFIG_DIR for this session — kept alive
-    /// so it doesn't drop until after the child does. We don't use the
-    /// `tempfile` crate to stay dep-free; manual cleanup in Drop.
+    pid: libc::pid_t,
+    waited: bool,
+    /// Tempdir backing RUSH_CONFIG_DIR for this session — kept alive
+    /// so it doesn't drop until after the child does. We don't pull in
+    /// a tempfile crate; manual cleanup in Drop.
     config_dir: PathBuf,
 }
 
 impl PtySession {
     /// Spawn rush-cli inside a pty of the given size. The slave is the
-    /// child's stdin/stdout/stderr and controlling terminal; the master
-    /// fd is held in the returned session for read/write.
-    ///
-    /// `RUSH_CONFIG_DIR` is set to a fresh tempdir so the session sees
-    /// no init.rush, no history, and no theme override from the user's
-    /// real config.
+    /// child's controlling terminal and stdin/stdout/stderr; the parent
+    /// holds the master fd for read/write. `RUSH_CONFIG_DIR` is set to
+    /// a fresh tempdir so each session sees no init.rush, no history,
+    /// and no theme override from the user's real config.
     pub fn spawn(cols: u16, rows: u16) -> io::Result<Self> {
         let bin = env!("CARGO_BIN_EXE_rush-cli");
-
-        // Fresh, empty config dir so init.rush / history don't perturb.
         let config_dir = make_tmp_config_dir()?;
 
-        let (master, slave) = unsafe { open_pty_pair()? };
-        unsafe { set_winsize(master.as_raw_fd(), cols, rows)? };
+        // Build argv. Just the binary name; rush has no args here.
+        let argv0 = CString::new(bin).expect("bin path NUL-free");
+        let argv: [*const libc::c_char; 2] = [argv0.as_ptr(), std::ptr::null()];
 
-        // Three independent copies of the slave fd, one per stdio
-        // handle. `Stdio::from(File)` takes ownership and closes the
-        // file when the child has it dup2'd into place — so we need
-        // three distinct fds (can't share one). `Command` does its own
-        // stdio dup2 *after* `pre_exec` runs, which is why we can't
-        // splice slave into 0/1/2 from inside the closure: std would
-        // clobber it. Going through Stdio::from is the supported path.
-        let slave_for_stdin = dup_owned_fd(slave.as_raw_fd())?;
-        let slave_for_stdout = dup_owned_fd(slave.as_raw_fd())?;
-        let slave_for_stderr = dup_owned_fd(slave.as_raw_fd())?;
+        // Build envp: inherit parent's env, but override TERM /
+        // RUSH_CONFIG_DIR / RUSH_TRACE and strip RUST_BACKTRACE so
+        // panic noise doesn't pollute the test output.
+        let envp_strings = build_envp(&config_dir);
+        let envp_ptrs: Vec<*const libc::c_char> = envp_strings
+            .iter()
+            .map(|s| s.as_ptr())
+            .chain(std::iter::once(std::ptr::null()))
+            .collect();
 
-        // Stash the *original* slave's raw fd for the TIOCSCTTY ioctl
-        // inside pre_exec. After the closure returns, std installs the
-        // Stdio handles via dup2 — which is fine, ioctl already ran.
-        let slave_raw_for_ctty = slave.as_raw_fd();
-
-        let mut cmd = Command::new(bin);
-        cmd.env("TERM", "xterm-256color")
-            .env("RUSH_CONFIG_DIR", &config_dir)
-            .env("RUSH_TRACE", "0")
-            .env_remove("RUST_BACKTRACE")
-            .stdin(Stdio::from(File::from(slave_for_stdin)))
-            .stdout(Stdio::from(File::from(slave_for_stdout)))
-            .stderr(Stdio::from(File::from(slave_for_stderr)));
-
-        unsafe {
-            cmd.pre_exec(move || {
-                // New session — drops controlling tty inherited from the
-                // test runner. Required before TIOCSCTTY can succeed.
-                if libc::setsid() < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                // Make the slave end of the pty our controlling tty.
-                // Passing 0 as third arg is safe on Linux (where
-                // TIOCSCTTY takes a flag) and macOS (where it ignores
-                // extra varargs).
-                if libc::ioctl(slave_raw_for_ctty, libc::TIOCSCTTY as _, 0) < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
+        // forkpty: atomic master/slave + fork + setsid + ctty + dup2.
+        // Returns 0 in child, child pid in parent, -1 on error.
+        let mut master_fd: libc::c_int = -1;
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let pid = unsafe {
+            libc::forkpty(
+                &mut master_fd,
+                std::ptr::null_mut(), // don't need slave name
+                std::ptr::null(),     // default termios for slave
+                &ws as *const _,
+            )
+        };
+        if pid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if pid == 0 {
+            // Child: replace this process with rush. execve only
+            // returns on failure, in which case the child must exit
+            // immediately — it shares pages with parent until that
+            // happens. Use _exit (not exit) to skip atexit handlers.
+            unsafe {
+                libc::execve(argv0.as_ptr(), argv.as_ptr(), envp_ptrs.as_ptr());
+                // execve returned ⇒ failure. errno tells us why; best
+                // we can do is signal it via exit code 127 (POSIX
+                // "command not found" convention).
+                let _ = libc::write(2, b"forkpty child: execve failed\n".as_ptr() as *const _, 29);
+                libc::_exit(127);
+            }
         }
 
-        let child = cmd.spawn()?;
-        // Parent doesn't need the slave end; closing it lets EOF
-        // propagate to the master if the child exits abnormally.
-        drop(slave);
-
-        Ok(Self { master, child, config_dir })
+        let master = unsafe { OwnedFd::from_raw_fd(master_fd) };
+        Ok(Self {
+            master,
+            pid,
+            waited: false,
+            config_dir,
+        })
     }
 
     /// Write bytes verbatim to the master end. Anything written here
@@ -127,9 +146,8 @@ impl PtySession {
         Ok(())
     }
 
-    /// Read whatever is available on the master end, polling with the
-    /// given deadline. Returns whatever was received before the deadline
-    /// expired (possibly empty).
+    /// Read whatever is available on the master end before the deadline.
+    /// Returns whatever was received (possibly empty).
     pub fn read_chunk(&mut self, deadline: Instant) -> io::Result<Vec<u8>> {
         let mut buf = [0u8; 4096];
         let mut out = Vec::new();
@@ -153,7 +171,6 @@ impl PtySession {
                 return Err(err);
             }
             if rc == 0 {
-                // Timeout — nothing more available right now.
                 if !out.is_empty() {
                     break;
                 }
@@ -182,9 +199,8 @@ impl PtySession {
                 break; // EOF
             }
             out.extend_from_slice(&buf[..n as usize]);
-            // Safety cap so a runaway child can't wedge a test forever.
             if out.len() > 1 << 20 {
-                break;
+                break; // safety cap
             }
         }
         Ok(out)
@@ -230,23 +246,21 @@ impl PtySession {
         })
     }
 
-    /// Send a line followed by a CR (which the line editor sees as
-    /// Enter). No automatic newline-coercion or echo handling.
+    /// Send a line followed by CR (which the line editor sees as Enter).
     pub fn send_line(&mut self, line: &str) -> io::Result<()> {
         self.write(line.as_bytes())?;
         self.write(b"\r")
     }
 
-    /// Send raw bytes without any newline. For sending escape sequences,
-    /// bracketed-paste markers, signals-as-control-chars, etc.
+    /// Send raw bytes without any newline. For escape sequences,
+    /// bracketed-paste markers, etc.
     pub fn send_raw(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.write(bytes)
     }
 
-    /// Send a Unix signal to the child process.
+    /// Send a Unix signal to the child.
     pub fn send_signal(&mut self, sig: libc::c_int) -> io::Result<()> {
-        let pid = self.child.id() as libc::pid_t;
-        if unsafe { libc::kill(pid, sig) } < 0 {
+        if unsafe { libc::kill(self.pid, sig) } < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -254,19 +268,29 @@ impl PtySession {
 
     /// Resize the pty (delivers SIGWINCH to the child).
     pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
-        unsafe { set_winsize(self.master.as_raw_fd(), cols, rows) }
+        let ws = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let rc = unsafe { libc::ioctl(self.master.as_raw_fd(), libc::TIOCSWINSZ, &ws as *const _) };
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// Wait for the child to exit, or kill it on deadline.
-    pub fn expect_exit_within(&mut self, timeout: Duration) -> io::Result<ExitStatus> {
+    pub fn expect_exit_within(&mut self, timeout: Duration) -> io::Result<ExitOutcome> {
         let deadline = Instant::now() + timeout;
         loop {
-            if let Some(status) = self.child.try_wait()? {
-                return Ok(status);
+            if let Some(outcome) = self.try_wait()? {
+                return Ok(outcome);
             }
             if Instant::now() >= deadline {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
+                let _ = unsafe { libc::kill(self.pid, libc::SIGKILL) };
+                let _ = self.try_wait_blocking();
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("child did not exit within {timeout:?}"),
@@ -275,94 +299,81 @@ impl PtySession {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
+
+    /// Non-blocking waitpid: returns Some(outcome) if child has exited,
+    /// None if still running.
+    fn try_wait(&mut self) -> io::Result<Option<ExitOutcome>> {
+        if self.waited {
+            return Ok(None);
+        }
+        let mut status: libc::c_int = 0;
+        let rc = unsafe { libc::waitpid(self.pid, &mut status, libc::WNOHANG) };
+        if rc == 0 {
+            return Ok(None);
+        }
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.waited = true;
+        Ok(Some(decode_status(status)))
+    }
+
+    fn try_wait_blocking(&mut self) -> io::Result<ExitOutcome> {
+        if self.waited {
+            // Already reaped; we don't have the prior status. Fake one.
+            return Ok(ExitOutcome::Code(-1));
+        }
+        let mut status: libc::c_int = 0;
+        let rc = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.waited = true;
+        Ok(decode_status(status))
+    }
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
         // Best-effort cleanup. SIGKILL → wait → remove tempdir.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if !self.waited {
+            let _ = unsafe { libc::kill(self.pid, libc::SIGKILL) };
+            let _ = self.try_wait_blocking();
+        }
         let _ = std::fs::remove_dir_all(&self.config_dir);
     }
 }
 
-/// Duplicate a raw fd into a fresh OwnedFd. Used to give each child
-/// stdio handle its own copy of the slave end.
-fn dup_owned_fd(fd: RawFd) -> io::Result<OwnedFd> {
-    let new = unsafe { libc::dup(fd) };
-    if new < 0 {
-        return Err(io::Error::last_os_error());
+fn decode_status(status: libc::c_int) -> ExitOutcome {
+    // POSIX: WIFEXITED + WEXITSTATUS, WIFSIGNALED + WTERMSIG. The libc
+    // crate provides macro wrappers as functions on most platforms but
+    // not all; do the bit math directly so we don't fight feature-flag
+    // surface.
+    if libc_wif_exited(status) {
+        ExitOutcome::Code(libc_wexit_status(status))
+    } else if libc_wif_signaled(status) {
+        ExitOutcome::Signal(libc_wterm_sig(status))
+    } else {
+        ExitOutcome::Code(-1)
     }
-    Ok(unsafe { OwnedFd::from_raw_fd(new) })
 }
 
-unsafe fn open_pty_pair() -> io::Result<(OwnedFd, OwnedFd)> {
-    let master = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
-    if master < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    if libc::grantpt(master) < 0 {
-        let err = io::Error::last_os_error();
-        libc::close(master);
-        return Err(err);
-    }
-    if libc::unlockpt(master) < 0 {
-        let err = io::Error::last_os_error();
-        libc::close(master);
-        return Err(err);
-    }
-
-    // The libc crate exposes `ptsname_r` on Linux (the thread-safe form
-    // glibc provides) but only `ptsname` on macOS / *BSD (the legacy
-    // form returning a pointer to a static buffer). Single-threaded
-    // test harness, so the static buffer is fine — but we still copy it
-    // into a CString immediately so the caller can pass a stable
-    // pointer to `open()`.
-    let slave_name: std::ffi::CString = {
-        #[cfg(target_os = "linux")]
-        {
-            let mut buf = [0 as libc::c_char; 256];
-            let rc = libc::ptsname_r(master, buf.as_mut_ptr(), buf.len());
-            if rc != 0 {
-                let err = io::Error::from_raw_os_error(rc);
-                libc::close(master);
-                return Err(err);
-            }
-            std::ffi::CStr::from_ptr(buf.as_ptr()).to_owned()
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let p = libc::ptsname(master);
-            if p.is_null() {
-                let err = io::Error::last_os_error();
-                libc::close(master);
-                return Err(err);
-            }
-            std::ffi::CStr::from_ptr(p).to_owned()
-        }
-    };
-
-    let slave = libc::open(slave_name.as_ptr(), libc::O_RDWR | libc::O_NOCTTY);
-    if slave < 0 {
-        let err = io::Error::last_os_error();
-        libc::close(master);
-        return Err(err);
-    }
-    Ok((OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)))
+#[allow(non_snake_case)]
+fn libc_wif_exited(status: libc::c_int) -> bool {
+    (status & 0x7f) == 0
 }
-
-unsafe fn set_winsize(fd: RawFd, cols: u16, rows: u16) -> io::Result<()> {
-    let ws = libc::winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let rc = unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &ws as *const _) };
-    if rc < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
+#[allow(non_snake_case)]
+fn libc_wexit_status(status: libc::c_int) -> i32 {
+    (status >> 8) & 0xff
+}
+#[allow(non_snake_case)]
+fn libc_wif_signaled(status: libc::c_int) -> bool {
+    let lo = status & 0x7f;
+    lo != 0 && lo != 0x7f
+}
+#[allow(non_snake_case)]
+fn libc_wterm_sig(status: libc::c_int) -> i32 {
+    status & 0x7f
 }
 
 fn make_tmp_config_dir() -> io::Result<PathBuf> {
@@ -375,6 +386,48 @@ fn make_tmp_config_dir() -> io::Result<PathBuf> {
     let dir = base.join(format!("rush-pty-test-{pid}-{nanos}"));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+/// Build the child's environment: inherit parent's env, override the
+/// shell-test essentials, strip RUST_BACKTRACE so panic prints don't
+/// pollute test output. Returns CStrings (kept alive by the caller)
+/// from which we'll take pointers for execve.
+fn build_envp(config_dir: &PathBuf) -> Vec<CString> {
+    let overrides: &[(&str, OsString)] = &[
+        ("TERM", OsString::from("xterm-256color")),
+        ("RUSH_CONFIG_DIR", config_dir.as_os_str().to_owned()),
+        ("RUSH_TRACE", OsString::from("0")),
+    ];
+    let strip: &[&str] = &["RUST_BACKTRACE"];
+
+    let mut entries: Vec<CString> = Vec::new();
+    for (k, v) in env::vars_os() {
+        let key_str = k.to_string_lossy();
+        let key_ref: &str = &key_str;
+        if strip.contains(&key_ref) {
+            continue;
+        }
+        if overrides.iter().any(|(ok, _)| *ok == key_ref) {
+            continue; // we'll re-add the override below
+        }
+        if let Some(c) = make_kv_cstring(&k, &v) {
+            entries.push(c);
+        }
+    }
+    for (k, v) in overrides {
+        if let Some(c) = make_kv_cstring(OsStr::new(*k), v) {
+            entries.push(c);
+        }
+    }
+    entries
+}
+
+fn make_kv_cstring(key: &OsStr, value: &OsStr) -> Option<CString> {
+    let mut bytes = Vec::with_capacity(key.len() + 1 + value.len());
+    bytes.extend_from_slice(key.as_bytes());
+    bytes.push(b'=');
+    bytes.extend_from_slice(value.as_bytes());
+    CString::new(bytes).ok()
 }
 
 /// Strip ANSI escape sequences from a byte slice, returning the visible
@@ -414,12 +467,11 @@ pub fn strip_ansi(bytes: &[u8]) -> String {
                 }
             }
             Some(_) => {
-                // Single-char escape (e.g. \x1b 7, \x1b 8, \x1b=, \x1b>).
+                // Single-char escape (\x1b 7, \x1b 8, \x1b=, \x1b>, etc.)
                 chars.next();
             }
             None => break,
         }
     }
-    let _ = CString::default(); // keep CString import live for future use
     out
 }
