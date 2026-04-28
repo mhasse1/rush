@@ -187,6 +187,19 @@ pub fn dispatch_with_jobs_and_builtins(
             eprintln!("+ {segment}");
         }
 
+        // Bare-dot shortcut: `..` → `cd ..`, `...` → `cd ../..`,
+        // `....` → `cd ../../..`, etc. Carried over from the .NET
+        // version of rush. Only triggers on a segment that is *only*
+        // dots (no whitespace, no other chars), so a literal `.foo`
+        // command or `cd ..` itself is unaffected.
+        let dot_expanded;
+        let segment: &str = if let Some(replacement) = expand_bare_dots(segment) {
+            dot_expanded = replacement;
+            &dot_expanded
+        } else {
+            segment
+        };
+
         let first_word = segment.split_whitespace().next().unwrap_or("");
 
         // Core builtins handled directly in dispatch (work in chains)
@@ -622,6 +635,33 @@ pub fn dispatch_simple(line: &str, evaluator: &mut Evaluator) -> i32 {
 /// Expand `#{...}` interpolation in a shell-command segment, respecting
 /// single-quote vs double-quote boundaries. Single-quoted runs pass
 /// through literally; double-quoted and unquoted runs are handed to
+/// Bare-dot shortcut: `..` → `cd ..`, `...` → `cd ../..`, etc.
+/// Returns `Some(replacement)` if the trimmed segment is *only* dots
+/// (>=2), `None` otherwise. Carried over from the .NET version of rush.
+///
+/// Triggers only when the entire segment after trim is dots — so
+/// `cd ..` (which starts with `c`), `.foo` (mixed), and `..rs` (mixed)
+/// are unaffected. A single `.` is *not* expanded; that's the POSIX
+/// "source" builtin and the no-op cd-here, both of which we don't want
+/// to override.
+fn expand_bare_dots(segment: &str) -> Option<String> {
+    let trimmed = segment.trim();
+    if trimmed.len() < 2 {
+        return None;
+    }
+    if !trimmed.bytes().all(|b| b == b'.') {
+        return None;
+    }
+    // N dots → (N-1) levels up, joined with `/`. `..` = `..`, `...` =
+    // `../..`, `....` = `../../..`.
+    let levels = trimmed.len() - 1;
+    let path = std::iter::repeat("..")
+        .take(levels)
+        .collect::<Vec<_>>()
+        .join("/");
+    Some(format!("cd {path}"))
+}
+
 /// `Evaluator::expand_interpolation` which substitutes `#{expr}` with
 /// `expr`'s evaluated value.
 ///
@@ -1656,6 +1696,65 @@ mod tests {
                 std::path::PathBuf::from(&home).canonicalize().unwrap(),
             );
         }
+        std::env::set_current_dir(saved).ok();
+    }
+
+    // ── Bare-dot shortcut: .. → cd .., ... → cd ../.., etc. ─────────
+
+    #[test]
+    fn expand_bare_dots_double() {
+        assert_eq!(expand_bare_dots(".."), Some("cd ..".to_string()));
+    }
+
+    #[test]
+    fn expand_bare_dots_triple() {
+        assert_eq!(expand_bare_dots("..."), Some("cd ../..".to_string()));
+    }
+
+    #[test]
+    fn expand_bare_dots_quadruple() {
+        assert_eq!(expand_bare_dots("...."), Some("cd ../../..".to_string()));
+    }
+
+    #[test]
+    fn expand_bare_dots_with_surrounding_whitespace() {
+        // The line goes through trim/split before reaching us, but
+        // tolerating whitespace on either side keeps behavior stable
+        // if a caller passes a sloppy segment.
+        assert_eq!(expand_bare_dots("  ..  "), Some("cd ..".to_string()));
+    }
+
+    #[test]
+    fn expand_bare_dots_single_dot_is_not_expanded() {
+        // POSIX `.` is "source"; rewriting it would shadow that and
+        // the no-op cd-here behavior. Stay out of the way.
+        assert_eq!(expand_bare_dots("."), None);
+    }
+
+    #[test]
+    fn expand_bare_dots_mixed_chars_not_expanded() {
+        assert_eq!(expand_bare_dots(".foo"), None);
+        assert_eq!(expand_bare_dots("..rs"), None);
+        assert_eq!(expand_bare_dots("cd .."), None);
+        assert_eq!(expand_bare_dots(".. ."), None);
+    }
+
+    #[test]
+    fn bare_dots_actually_change_directory() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::current_dir().unwrap();
+        // Start somewhere with a known parent.
+        let tmp = std::env::temp_dir();
+        std::env::set_current_dir(&tmp).expect("cd to temp");
+
+        let (code, _) = run("..");
+        assert_eq!(code, 0);
+        let now = std::env::current_dir().unwrap();
+        let expected = tmp.parent().unwrap_or(&tmp);
+        assert_eq!(
+            now.canonicalize().unwrap_or(now),
+            expected.canonicalize().unwrap_or_else(|_| expected.to_path_buf()),
+        );
         std::env::set_current_dir(saved).ok();
     }
 

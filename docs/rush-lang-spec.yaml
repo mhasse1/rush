@@ -348,7 +348,7 @@ builtin_vars:
 
 # ── SHELL BUILTINS ───────────────────────────────────────────────
 shell_builtins:
-  cd: "cd [path] — change directory"
+  cd: "cd [path] — change directory. Bare-dot shortcut: `..` = `cd ..`, `...` = `cd ../..`, `....` = `cd ../../..`, etc."
   cat: "cat [-n] file — read/concatenate files"
   export: "export FOO=bar [--save] — set env var"
   alias: "alias name=value [--save] — create command alias"
