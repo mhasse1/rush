@@ -2,7 +2,133 @@
 
 This is a self-contained brief for a Claude Code session running on
 **rocinante** (mark's macOS dev box) to investigate issue [#295](https://github.com/mhasse1/rush/issues/295)
-hands-on. Read the whole file before starting. Then dig in.
+hands-on.
+
+If you're picking this up cold, **start at the next section** — it
+tells you exactly what to run and how to interpret the result. The
+rest of the file is historical context (TL;DR, prior findings, code
+pointers) for when you need to dig deeper.
+
+## ▶ Next session: pull, run, decide
+
+You're inheriting a sequence of fixes that build on each other. Each
+round of investigation lands a fix; you re-run and either confirm
+success or pinpoint the next wedge.
+
+**1. Pull and run.**
+
+```sh
+cd ~/src/mcp/rush       # adjust if your checkout lives elsewhere
+git pull origin main
+RUSH_TRACE=1 ./scripts/macos-pty-investigate.sh
+```
+
+This temporarily flips `pty_smoke.rs` + `pty_paint_no_absolute.rs`
+from `cfg(target_os = "linux")` to `cfg(unix)`, builds, runs the
+smoke test with a 60-second wall timeout, and writes
+`.macos-pty-log.txt` at the repo root. The cfg flip is reverted via
+`trap` on exit (success or failure) — your working tree stays clean.
+
+The harness has a bounded reap (commit `01399ba`), so even if rush
+wedges, the test process panics with a real `TimedOut` message in
+~12 seconds. No more multi-hour hangs.
+
+**2. Read the result.**
+
+Three possible outcomes:
+
+| Outcome                                          | What it means                                                                 |
+|--------------------------------------------------|-------------------------------------------------------------------------------|
+| ✅ Test passes (`test result: ok. 1 passed; ...`) | TIOCNOTTY (commit `3e0b95d`) fixed it. **Go to step 3a.**                     |
+| ❌ Test fails with `TimedOut` after `SIGHUP`      | The wedge moved. **Go to step 3b.**                                            |
+| ❌ Test fails for any other reason                | Something regressed independently. Triage from the panic message; see the historical Findings sections below for context on what's known good. |
+
+**3a. If the test passed — promote macOS to full coverage.**
+
+Flip the cfg gates back to `cfg(unix)` permanently. Three files:
+
+- `crates/rush-cli/tests/pty_smoke.rs` — change `#![cfg(target_os = "linux")]`
+  to `#![cfg(unix)]` and drop the "Gated to Linux only" comment block
+  in the file header.
+- `crates/rush-cli/tests/pty_paint_no_absolute.rs` — same change, same
+  cleanup of the linux-only note.
+- `crates/rush-cli/tests/pty/mod.rs` — already `#![cfg(unix)]` at the
+  top; **leave the inner `#[cfg(target_os = "linux")]` on
+  `forkpty_compat` alone** — it's a function-definition gate that
+  must stay or you'll hit E0428.
+
+Run `cargo test -p rush-cli --tests` locally to confirm both pty
+tests still pass. Then commit + push:
+
+```sh
+git add crates/rush-cli/tests/pty_smoke.rs \
+        crates/rush-cli/tests/pty_paint_no_absolute.rs
+git commit -m "pty: re-enable on macOS; #295 fixed by TIOCNOTTY at exit"
+git push
+```
+
+CI on macos-aarch64 will now run the pty tests and should be green.
+Close [#295](https://github.com/mhasse1/rush/issues/295) with a
+comment pointing at the trace + the TIOCNOTTY commit.
+
+**3b. If the test still wedges — chase the wedge one more level.**
+
+Open `/tmp/rush-trace.log` and find the **last line emitted**. Match
+it against this table:
+
+| Last trace line                                        | Wedge location                                          | Fix to try                                                                                                                                                                              |
+|--------------------------------------------------------|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `repl returned — main exiting`                         | Between that and `TIOCNOTTY done` — the ioctl itself    | TIOCNOTTY blocked. Try moving it earlier — to `crates/rush-cli/src/repl_v2.rs`'s `Err` arm (right after `read_line Err — breaking loop` trace), wrapping in `#[cfg(unix)] unsafe { ... }`. |
+| `TIOCNOTTY done — falling off main`                    | Past TIOCNOTTY, in libc atexit / Rust runtime epilogue   | TIOCNOTTY didn't help. Fallback: accept the kernel-side wedge, keep `cfg(target_os = "linux")`, document the orphan-child trade-off. The bounded reap already protects CI from hangs.    |
+| Any earlier line (e.g. `tcsetattr done`, etc.)         | A regression from this round's changes                   | Revert `3e0b95d` locally, re-run, compare. The trace points themselves shouldn't break anything; if they do, that's the bug.                                                            |
+
+For 3b's first row, the patch shape is:
+
+```rust
+// in repl_v2.rs, inside the Err arm:
+Err(e) => {
+    rush_line::trace!("repl_v2", "read_line Err — breaking loop: {e}");
+    #[cfg(unix)]
+    unsafe {
+        libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY);
+    }
+    rush_line::trace!("repl_v2", "TIOCNOTTY done in Err branch");
+    eprintln!("rush: input error: {e}");
+    break;
+}
+```
+
+…and remove the TIOCNOTTY block from `main.rs` so we don't call it
+twice. Then re-run.
+
+For 3b's second row, the relevant cfg flip is just on the two test
+files — same as 3a's commit message but instead say
+"document macOS orphan-child trade-off; bounded reap is durable".
+Update this doc's Findings section to reflect that we accept it.
+
+**4. Append your findings.**
+
+Whatever you find, append a fresh `## Findings (YYYY-MM-DD)` section
+at the bottom of this file with:
+
+- What the trace's last line was.
+- Whether the test passed, timed out, or failed otherwise.
+- What you changed (cfg flip / TIOCNOTTY relocation / etc).
+- Recommended next step if you didn't fully close it out.
+
+Then commit + push:
+
+```sh
+git add docs/investigations/2026-04-29-macos-pty-hang.md \
+        .macos-pty-log.txt \
+        # plus any test or src files you touched
+git commit -m "investigate #295 — <one-line summary>"
+git push
+```
+
+The Linux-side investigator will pick it up on `git pull`.
+
+---
 
 ## TL;DR
 
