@@ -33,7 +33,7 @@
 use std::env;
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -374,30 +374,34 @@ fn libc_wterm_sig(status: libc::c_int) -> i32 {
 }
 
 /// libc::forkpty signature differs across kernels: Linux takes
-/// `*const termios` / `*const winsize`, macOS / *BSD take `*mut`. Wrap
-/// the call so the platform difference is captured in one place.
+/// `*const termios` / `*const winsize`, macOS / *BSD take `*mut`.
+///
+/// We use cfg on two separate function definitions (only one compiled
+/// per platform) rather than cfg on block expressions inside one
+/// function. The latter is unreliable in non-tail position — some
+/// rustc versions exclude the disabled block, others type-check it
+/// anyway, which produces confusing E0308 errors against the
+/// platform-specific libc signature.
+
+#[cfg(target_os = "linux")]
 unsafe fn forkpty_compat(
     master_fd: *mut libc::c_int,
     ws: *mut libc::winsize,
 ) -> libc::pid_t {
-    #[cfg(target_os = "linux")]
-    {
-        libc::forkpty(
-            master_fd,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            ws as *const _,
-        )
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        libc::forkpty(
-            master_fd,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            ws,
-        )
-    }
+    libc::forkpty(
+        master_fd,
+        std::ptr::null_mut(),
+        std::ptr::null(),
+        ws as *const _,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe fn forkpty_compat(
+    master_fd: *mut libc::c_int,
+    ws: *mut libc::winsize,
+) -> libc::pid_t {
+    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)
 }
 
 fn make_tmp_config_dir() -> io::Result<PathBuf> {
