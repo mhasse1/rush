@@ -1,9 +1,9 @@
 ====================================================================
-macos-pty-investigate — 2026-04-29T02:51:09Z
+macos-pty-investigate — 2026-04-29T03:04:20Z
 host:   rocinante
 uname:  Darwin rocinante 25.4.0 Darwin Kernel Version 25.4.0: Thu Mar 19 19:30:44 PDT 2026; root:xnu-12377.101.15~1/RELEASE_ARM64_T6000 arm64
 rust:   rustc 1.89.0 (29483883e 2025-08-04)
-git:    01399ba (main)
+git:    b3e71ca (main)
 ====================================================================
 
 [step] flipping cfg(target_os = "linux") → cfg(unix) in 3 files
@@ -12,55 +12,14 @@ git:    01399ba (main)
  2 files changed, 2 insertions(+), 2 deletions(-)
 
 [step] cargo build -p rush-cli --tests
-[1m[32m   Compiling[0m rush-line v0.1.0 (/Users/mark/src/mcp/rush/crates/rush-line)
 [1m[32m   Compiling[0m rush-cli v0.1.0 (/Users/mark/src/mcp/rush/crates/rush-cli)
-[0m[1m[33mwarning[E0133][0m[0m[1m: call to unsafe function `libc::forkpty` is unsafe and requires unsafe block[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:424:5[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m424[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[33mcall to unsafe function[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: consult the function's documentation for information on how to avoid undefined behavior[0m
-[0m[1m[38;5;10mnote[0m[0m: an unsafe function restricts its caller, but its body is safe by default[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:420:1[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m420[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m/[0m[0m [0m[0munsafe fn forkpty_compat([0m
-[0m[1m[38;5;12m421[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    master_fd: *mut libc::c_int,[0m
-[0m[1m[38;5;12m422[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    ws: *mut libc::winsize,[0m
-[0m[1m[38;5;12m423[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m) -> libc::pid_t {[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|________________^[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `#[warn(unsafe_op_in_unsafe_fn)]` on by default[0m
-
-[0m[1mFor more information about this error, try `rustc --explain E0133`.[0m
-[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_paint_no_absolute") generated 1 warning (run `cargo fix --test "pty_paint_no_absolute"` to apply 1 suggestion)
-[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_smoke") generated 1 warning (1 duplicate)
-[1m[32m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 6.98s
+[1m[32m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 2.63s
 
 [step] cargo test pty_smoke (timeout: 60s)
        NB: smoke test has 5s internal deadlines, so should finish in ~5s.
 
-[0m[1m[33mwarning[E0133][0m[0m[1m: call to unsafe function `libc::forkpty` is unsafe and requires unsafe block[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:424:5[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m424[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[33mcall to unsafe function[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: consult the function's documentation for information on how to avoid undefined behavior[0m
-[0m[1m[38;5;10mnote[0m[0m: an unsafe function restricts its caller, but its body is safe by default[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:420:1[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m420[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m/[0m[0m [0m[0munsafe fn forkpty_compat([0m
-[0m[1m[38;5;12m421[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    master_fd: *mut libc::c_int,[0m
-[0m[1m[38;5;12m422[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    ws: *mut libc::winsize,[0m
-[0m[1m[38;5;12m423[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m) -> libc::pid_t {[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|________________^[0m
-[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `#[warn(unsafe_op_in_unsafe_fn)]` on by default[0m
-
-[0m[1mFor more information about this error, try `rustc --explain E0133`.[0m
-[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_smoke") generated 1 warning (run `cargo fix --test "pty_smoke"` to apply 1 suggestion)
-[1m[32m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+[1m[32m   Compiling[0m rush-cli v0.1.0 (/Users/mark/src/mcp/rush/crates/rush-cli)
+[1m[32m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1.10s
 [1m[32m     Running[0m tests/pty_smoke.rs (target/debug/deps/pty_smoke-e07c210c5e98efaa)
 
 running 1 test
@@ -75,12 +34,12 @@ failures:
 failures:
     rush_starts_runs_echo_and_exits_on_sighup
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.04s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.05s
 
 [1m[31merror[0m[1m:[0m test failed, to rerun pass `-p rush-cli --test pty_smoke`
 
 ====================================================================
-RESULT: FAILED (rc=101) in 8s — fast failure is the good case.
+RESULT: FAILED (rc=101) in 9s — fast failure is the good case.
         Look at the panic message above to identify which step blocked.
 ====================================================================
 

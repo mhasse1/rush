@@ -697,3 +697,125 @@ Next investigator should:
      section: bounded reap is durable, orphan child is cleaned up
      by the script's pkill, flip cfg gates with a comment explaining.
 
+## Findings (2026-04-29 round 2 run)
+
+Re-ran on rocinante at HEAD `b3e71ca` (with the round-2 TIOCNOTTY fix
+from `3e0b95d` already in tree) via `RUSH_TRACE=1
+./scripts/macos-pty-investigate.sh`.
+
+### Build regression in 3e0b95d
+
+First run aborted at the build step:
+
+```
+error[E0308]: mismatched types
+ --> crates/rush-cli/src/main.rs:275:41
+  |
+275 |         libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY);
+  |                                          ^^^^^^^^^^^^^^^ expected `u64`, found `u32`
+```
+
+`libc::TIOCNOTTY` is platform-typed: `c_uint` on Apple, `Ioctl`
+(`c_ulong`) on Linux, `c_ulong` on FreeBSD, `c_int` on Solarish/AIX.
+`libc::ioctl`'s second arg is always `c_ulong` on macOS. Linux happens
+to type-match because `Ioctl` is `c_ulong` there, so `3e0b95d` built on
+Linux but not macOS — exactly the inverse of what we needed.
+
+Fix: cast at the call site — `libc::TIOCNOTTY as libc::c_ulong`.
+Numeric `as`-cast widens/narrows uniformly across all platforms libc
+supports, so this builds clean on Linux, macOS, BSD, and Solarish
+without further cfg gates.
+
+### Test result with build fixed
+
+`TimedOut` after SIGHUP, again — `8s` total (vs. `≥3h` before bounded
+reap). Trace from `/tmp/rush-trace.log`:
+
+```
+0.000410 [tid=1] [main]      rush start argv=[".../target/debug/rush-cli"]
+0.063593 [tid=1] [read_line] enter
+   …'echo hello-from-pty\n' echoed and processed (bytes 0x65 0x63 0x68…)…
+0.335076 [tid=1] [fill_queue] EOF                           ← SIGHUP delivered
+0.339031 [tid=1] [read_line] inner returned ok=false err_kind=Some(UnexpectedEof)
+0.344065 [tid=1] [read_line] DisableBracketedPaste sent
+0.349032 [tid=1] [read_line] exit ok=false
+0.354074 [tid=1] [tty]       RawTty::drop start
+0.359044 [tid=1] [tty]       RawTty::drop tcsetattr done
+0.364093 [tid=1] [tty]       RawTty::drop sigaction restores done
+0.368998 [tid=1] [tty]       RawTty::drop end
+0.373032 [tid=1] [repl_v2]   read_line Err — breaking loop: stdin closed (controlling pty destroyed or signal received)
+0.377100 [tid=1] [repl_v2]   loop break — running exit trap if any
+0.382067 [tid=1] [repl_v2]   run() returning
+0.386057 [tid=1] [main]      repl returned — main exiting
+0.391059 [tid=1] [main]      TIOCNOTTY done — falling off main      ← LAST LINE
+```
+
+`TIOCNOTTY done — falling off main` **does** emit (0.391s). The ioctl
+returned. So the wedge is **past `fn main`'s closing brace**, in the
+Rust runtime exit epilogue → libc `exit(3)` → atexit handlers →
+`__cxa_finalize` → `_exit`. TIOCNOTTY at end of main was not the
+fix — it dropped into the same kernel teardown wedge.
+
+This matches row 2 of §3b's decision table exactly: "`TIOCNOTTY done
+— falling off main` → past TIOCNOTTY, in libc atexit / Rust runtime
+epilogue → fallback: accept the kernel-side wedge."
+
+### Why TIOCNOTTY didn't help
+
+Hypothesis: the kernel-side wedge isn't about session-leader status.
+It's about the slave pty's pending output buffer. When the kernel
+closes the slave fd during process teardown, it does an implicit
+`tty_revoke` / `ttyflush_input` that waits for any buffered output to
+drain (or for the master to be readable). The harness's
+`expect_exit_within(2s)` is in a poll-waitpid loop *not draining the
+master*, so the buffer doesn't drain, the kernel close-path waits
+forever, and the process sits in state `?NEs`.
+
+TIOCNOTTY only changes the rush process's relationship to the tty
+session — it doesn't drain the slave's output buffer. So even with
+TIOCNOTTY, the close-time revoke still wedges.
+
+A real fix would need to either (a) drain stdout/stderr explicitly
+before exit (Rust's runtime doesn't expose a reliable way to do this
+for the static singletons), or (b) have the harness drain the master
+in a background thread during `expect_exit_within`. Both are
+significantly more invasive than the current bounded-reap shield.
+
+### Verdict: accept the macOS pty quirk
+
+Per §3b row 2's prescription:
+
+- **Keep `cfg(target_os = "linux")`** on `pty_smoke.rs` and
+  `pty_paint_no_absolute.rs`. macOS pty tests stay disabled in CI.
+- **Bounded reap is the durable fix.** CI fails fast (~12s) with a
+  real `TimedOut` if the pty path ever wedges. No more 3+h hangs.
+- **Orphan child is cleaned up.** The script's trap calls
+  `pkill -9 -f 'target/debug/rush-cli'`; in CI, init reaps after
+  the test process exits. Verified: `pgrep` after this run returned
+  no debug rush-cli children.
+- **TIOCNOTTY stays in `main.rs`** as a defensive measure. It's
+  harmless on Linux and on non-pty stdin (ENOTTY ignored), and on
+  macOS pty exits it executes cleanly even though it doesn't fix
+  the kernel-revoke wedge.
+
+The c_ulong cast fix should ship on its own — it's a real cross-
+platform build bug independent of the macOS hang.
+
+#295 should be **closed as wontfix** (or "accepted limitation") with
+a comment linking to this Findings section. The bug is not in rush; it
+is a macOS kernel pty-revoke-on-session-leader-exit interaction that
+has been investigated to a clean stopping point.
+
+### Recommended next step
+
+None for #295 itself. If macOS CI coverage of the pty paths becomes
+important, the work shifts to the harness:
+
+- Spawn a background thread in `PtySession` that `read`s and discards
+  master output during `expect_exit_within`. This drains the slave
+  buffer, allowing the kernel-side revoke to complete.
+- Or: switch the test from "expect rush to exit on SIGHUP within 2s"
+  to "send SIGHUP, then drain the master while polling waitpid". Same
+  observable behaviour, but the pty stays drained.
+
+Either is a one-evening project; not in scope for this round.

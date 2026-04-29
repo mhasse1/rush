@@ -272,7 +272,7 @@ fn main() {
     // observable effect is the explicit detach.
     #[cfg(unix)]
     unsafe {
-        libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY);
+        libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY as libc::c_ulong);
     }
     rush_line::trace!("main", "TIOCNOTTY done — falling off main");
 }
