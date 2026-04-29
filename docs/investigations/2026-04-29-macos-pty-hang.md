@@ -517,3 +517,57 @@ Build emits a single warning at `crates/rush-cli/tests/pty/mod.rs:424`
 inside `forkpty_compat` (which is itself `unsafe fn`). Wrap the
 `libc::forkpty` call in an explicit `unsafe { … }` to clear it. Cosmetic.
 
+### Follow-up — done from the Linux side (round 2)
+
+Picked up after the rocinante 2026-04-29 follow-up trace landed (commit
+`2cf26e6`).
+
+1. **TIOCNOTTY on Unix exit.** Added `libc::ioctl(STDIN_FILENO,
+   TIOCNOTTY)` immediately before `fn main` falls off, after the
+   `repl returned — main exiting` trace point. Disowns the controlling
+   tty before the kernel's session-leader-exit teardown path runs. New
+   trace point `TIOCNOTTY done — falling off main` after the ioctl
+   confirms it returned.
+
+   Safe in both modes:
+   - **Under forkpty / login shell** (rush IS the session leader):
+     TIOCNOTTY sends SIGHUP/SIGCONT to the foreground process group
+     and disowns. The original SIGHUP handler has already been
+     restored by `RawTty::Drop` (`sigaction restores done` line in
+     trace), so SIGHUP at this point hits SIG_DFL → terminates. That's
+     what we want anyway — we're already on the way out.
+   - **Under interactive rush from bash/zsh** (rush is NOT the session
+     leader): TIOCNOTTY just makes rush disown the terminal as its
+     own ctty. Bash retains its session leadership and its ctty. No
+     SIGHUP is sent. Safe.
+
+   ENOTTY is ignored (return value not checked) — happens if stdin
+   isn't a terminal, which means the wedge couldn't have happened
+   anyway.
+
+2. **`unsafe_op_in_unsafe_fn` warning.** Wrapped the `libc::forkpty`
+   calls in explicit `unsafe { … }` blocks inside the cfg-gated
+   `forkpty_compat` definitions. Cosmetic; build is now warning-clean
+   for these test files.
+
+### Follow-up — for the next macOS session (round 2)
+
+Next investigator should:
+
+1. Pull main, re-run `RUSH_TRACE=1 ./scripts/macos-pty-investigate.sh`.
+2. **If the test passes**: great. Flip the cfg gates from
+   `cfg(target_os = "linux")` to `cfg(unix)` in `pty_smoke.rs` and
+   `pty_paint_no_absolute.rs`, drop the Linux-only header notes, and
+   close #295. CI will then run pty tests on macos-aarch64 too.
+3. **If the test still fails with TimedOut on SIGHUP**: the kernel
+   wedge is happening *before* `fn main` returns — i.e. somewhere
+   between `repl_v2 run() returning` and our new `TIOCNOTTY done`
+   trace line. Most likely a libc TLS destructor or another atexit
+   handler running on Rust's main-thread shutdown. In that case:
+   - Try moving TIOCNOTTY *earlier* — to `repl_v2.rs` right after
+     the read_line `Err` break, before `eprintln!`. That fires at
+     0.364 in the previous trace, well before any teardown.
+   - If still wedged, accept option (2) from the previous Findings
+     section: bounded reap is durable, orphan child is cleaned up
+     by the script's pkill, flip cfg gates with a comment explaining.
+

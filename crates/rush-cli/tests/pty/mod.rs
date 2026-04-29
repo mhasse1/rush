@@ -408,12 +408,14 @@ unsafe fn forkpty_compat(
     master_fd: *mut libc::c_int,
     ws: *mut libc::winsize,
 ) -> libc::pid_t {
-    libc::forkpty(
-        master_fd,
-        std::ptr::null_mut(),
-        std::ptr::null(),
-        ws as *const _,
-    )
+    unsafe {
+        libc::forkpty(
+            master_fd,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            ws as *const _,
+        )
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -421,7 +423,7 @@ unsafe fn forkpty_compat(
     master_fd: *mut libc::c_int,
     ws: *mut libc::winsize,
 ) -> libc::pid_t {
-    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)
+    unsafe { libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws) }
 }
 
 fn make_tmp_config_dir() -> io::Result<PathBuf> {

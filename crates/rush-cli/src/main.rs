@@ -254,6 +254,27 @@ fn main() {
         repl_v2::run(is_login);
     }
     rush_line::trace!("main", "repl returned — main exiting");
+
+    // #295: relinquish the controlling tty before exit. Rush is the
+    // session leader on a forkpty-attached pty (and similarly inside
+    // tmux / a real terminal that allocated a session for us). On
+    // macOS, when a session leader calls _exit, the kernel's
+    // controlling-pty teardown can wedge the process in state E with
+    // signals undeliverable — see the #295 investigation trace for
+    // the symptom (3+ hours hung in CI before manual cancel; harness
+    // bounded reap from 01399ba caps it at ~12 s but the orphan
+    // child still has to be reaped externally).
+    //
+    // TIOCNOTTY on STDIN_FILENO disowns the controlling tty before we
+    // hit that kernel path. Harmless if stdin isn't actually our ctty
+    // (returns ENOTTY, which we ignore). Linux runs the same code; on
+    // Linux the session-leader exit path doesn't wedge, so the only
+    // observable effect is the explicit detach.
+    #[cfg(unix)]
+    unsafe {
+        libc::ioctl(libc::STDIN_FILENO, libc::TIOCNOTTY);
+    }
+    rush_line::trace!("main", "TIOCNOTTY done — falling off main");
 }
 
 /// True if `line` contains a `|` outside of single- or double-quoted
