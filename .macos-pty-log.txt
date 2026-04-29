@@ -1,102 +1,94 @@
 ====================================================================
-macos-pty-investigate (manual) — 2026-04-29T01:56:00Z
-host:   rocinante (Darwin 25.4.0 arm64, macOS 26.4.1)
+macos-pty-investigate — 2026-04-29T02:51:09Z
+host:   rocinante
+uname:  Darwin rocinante 25.4.0 Darwin Kernel Version 25.4.0: Thu Mar 19 19:30:44 PDT 2026; root:xnu-12377.101.15~1/RELEASE_ARM64_T6000 arm64
 rust:   rustc 1.89.0 (29483883e 2025-08-04)
-git:    5227966 (main) — at HEAD when this run started
+git:    01399ba (main)
 ====================================================================
 
-NB: ./scripts/macos-pty-investigate.sh has a sed bug that prevents the
-test from ever running on macOS. Its sed pattern matches the harness's
-own `#[cfg(target_os = "linux")]` on `forkpty_compat`
-(crates/rush-cli/tests/pty/mod.rs:386), turning it into `#[cfg(unix)]`,
-which then collides with the macOS variant at line 399 ⇒ E0428
-duplicate-definition. Build aborts before any test runs. The script
-needs a more specific pattern, e.g.
-`s/^#!\[cfg(target_os = "linux")\]$/#![cfg(unix)]/` (inner attribute
-only), or it should restrict its FILES list to the two test files
-(pty_smoke.rs, pty_paint_no_absolute.rs) and skip pty/mod.rs.
+[step] flipping cfg(target_os = "linux") → cfg(unix) in 3 files
+ crates/rush-cli/tests/pty_paint_no_absolute.rs | 2 +-
+ crates/rush-cli/tests/pty_smoke.rs             | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
 
-Workaround for this run: hand-flip the gates in the two test files
-only (pty_smoke.rs:12, pty_paint_no_absolute.rs:19), build, run.
-
-====================================================================
 [step] cargo build -p rush-cli --tests
-====================================================================
-Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.69s
-(One unsafe_op_in_unsafe_fn warning; harmless.)
+[1m[32m   Compiling[0m rush-line v0.1.0 (/Users/mark/src/mcp/rush/crates/rush-line)
+[1m[32m   Compiling[0m rush-cli v0.1.0 (/Users/mark/src/mcp/rush/crates/rush-cli)
+[0m[1m[33mwarning[E0133][0m[0m[1m: call to unsafe function `libc::forkpty` is unsafe and requires unsafe block[0m
+[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:424:5[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m424[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)[0m
+[0m    [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[33mcall to unsafe function[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: consult the function's documentation for information on how to avoid undefined behavior[0m
+[0m[1m[38;5;10mnote[0m[0m: an unsafe function restricts its caller, but its body is safe by default[0m
+[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:420:1[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m420[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m/[0m[0m [0m[0munsafe fn forkpty_compat([0m
+[0m[1m[38;5;12m421[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    master_fd: *mut libc::c_int,[0m
+[0m[1m[38;5;12m422[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    ws: *mut libc::winsize,[0m
+[0m[1m[38;5;12m423[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m) -> libc::pid_t {[0m
+[0m    [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|________________^[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `#[warn(unsafe_op_in_unsafe_fn)]` on by default[0m
+
+[0m[1mFor more information about this error, try `rustc --explain E0133`.[0m
+[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_paint_no_absolute") generated 1 warning (run `cargo fix --test "pty_paint_no_absolute"` to apply 1 suggestion)
+[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_smoke") generated 1 warning (1 duplicate)
+[1m[32m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 6.98s
+
+[step] cargo test pty_smoke (timeout: 60s)
+       NB: smoke test has 5s internal deadlines, so should finish in ~5s.
+
+[0m[1m[33mwarning[E0133][0m[0m[1m: call to unsafe function `libc::forkpty` is unsafe and requires unsafe block[0m
+[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:424:5[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m424[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    libc::forkpty(master_fd, std::ptr::null_mut(), std::ptr::null_mut(), ws)[0m
+[0m    [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[33mcall to unsafe function[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: consult the function's documentation for information on how to avoid undefined behavior[0m
+[0m[1m[38;5;10mnote[0m[0m: an unsafe function restricts its caller, but its body is safe by default[0m
+[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/rush-cli/tests/pty/mod.rs:420:1[0m
+[0m    [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m420[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m/[0m[0m [0m[0munsafe fn forkpty_compat([0m
+[0m[1m[38;5;12m421[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    master_fd: *mut libc::c_int,[0m
+[0m[1m[38;5;12m422[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    ws: *mut libc::winsize,[0m
+[0m[1m[38;5;12m423[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m) -> libc::pid_t {[0m
+[0m    [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|________________^[0m
+[0m    [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `#[warn(unsafe_op_in_unsafe_fn)]` on by default[0m
+
+[0m[1mFor more information about this error, try `rustc --explain E0133`.[0m
+[1m[33mwarning[0m[1m:[0m `rush-cli` (test "pty_smoke") generated 1 warning (run `cargo fix --test "pty_smoke"` to apply 1 suggestion)
+[1m[32m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+[1m[32m     Running[0m tests/pty_smoke.rs (target/debug/deps/pty_smoke-e07c210c5e98efaa)
+
+running 1 test
+test rush_starts_runs_echo_and_exits_on_sighup ... 
+thread 'rush_starts_runs_echo_and_exits_on_sighup' panicked at crates/rush-cli/tests/pty_smoke.rs:47:10:
+rush should exit within 2s of SIGHUP: Custom { kind: TimedOut, error: "child did not exit within 2s" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    rush_starts_runs_echo_and_exits_on_sighup
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.04s
+
+[1m[31merror[0m[1m:[0m test failed, to rerun pass `-p rush-cli --test pty_smoke`
 
 ====================================================================
-[step] cargo test -p rush-cli --test pty_smoke -- --nocapture --test-threads=1
+RESULT: FAILED (rc=101) in 8s — fast failure is the good case.
+        Look at the panic message above to identify which step blocked.
 ====================================================================
-Started: 2026-04-29T01:56:57Z
-Test:    rush_starts_runs_echo_and_exits_on_sighup
-Result:  HUNG (forcibly killed at ~01:58:28Z, ~90s in)
 
-The test reached "running 1 test" then never completed. ps showed a
-single rush-cli child (pid 87359) parented to the test binary (87358)
-in state `?NEs`:
-    PID  PPID STAT WCHAN  COMMAND
-   87359 87358 ?NEs -      (rush-cli)
+Log written to: /Users/mark/src/mcp/rush/.macos-pty-log.txt
 
-`E` = exit-in-progress per macOS ps(1). `(rush-cli)` parens + empty
-COMMAND + empty lsof = the kernel has already torn down the process's
-fds and is in the kernel-side teardown phase. `sample 87359` reports
-"cannot examine process for unknown reasons" — kernel-only state.
+Next: send the log back so I can analyze it.
+  git add .macos-pty-log.txt
+  git commit -m 'macos pty investigation log'
+  git push
 
------ sample of test binary (pid 87358) at the moment of the hang -----
-1765 Thread_X: rush_starts_runs_echo_and_exits_on_sighup
-  ...
-  1765 pty_smoke::rush_starts_runs_echo_and_exits_on_sighup ... pty_smoke.rs:46
-    1765 PtySession::expect_exit_within ... mod.rs:290
-      1765 PtySession::try_wait_blocking ... mod.rs:324
-        1765 __wait4  (in libsystem_kernel.dylib)
-
-So the harness reached pty_smoke.rs:46 — that's the
-`s.expect_exit_within(Duration::from_secs(2))` call after
-`s.send_signal(libc::SIGHUP)`. The 2s expect_exit_within elapsed
-without the child exiting via try_wait, the deadline branch sent
-SIGKILL via `libc::kill(self.pid, libc::SIGKILL)` and called
-`try_wait_blocking` (waitpid with options=0). That waitpid is
-indefinitely blocked on a child stuck in kernel state E.
-
-Inference: the harness setup itself works on macOS — first prompt was
-seen within 5s, "echo hello-from-pty" was sent, the echoed output and
-second prompt were captured (otherwise expect_prompt or read_until
-would have errored well before line 46). Hang is purely on the
-SIGHUP-driven teardown path of rush-cli plus the harness's reliance
-on a blocking waitpid after SIGKILL.
-
-====================================================================
-[probe] rerun the same test with SIGKILL instead of SIGHUP
-====================================================================
-Modification: line 44 send_signal(SIGHUP) → send_signal(SIGKILL).
-Started: 2026-04-29T02:01:31Z
-Result:  PASSED in 1.04s.
-
-    running 1 test
-    test rush_starts_runs_echo_and_exits_on_sighup ... ok
-    test result: ok. 1 passed; ...; finished in 1.04s
-    TEST_RC=0
-
-This isolates the bug. SIGKILL → kernel terminates rush-cli before
-any userspace teardown runs → waitpid returns immediately → harness
-exits cleanly. SIGHUP → rush's signal handler fires → userspace
-teardown begins → something wedges → process enters state E → SIGKILL
-sent later is silently ignored (kernel doesn't deliver new signals to
-processes already in exit teardown) → waitpid blocks forever.
-
-So:
-  - The macOS forkpty pty harness is correct.
-  - rush-cli starts, paints a prompt, runs an echo, repaints — all
-    fine on a forkpty-attached pty on macOS.
-  - The bug is in rush-cli's SIGHUP teardown path on macOS only
-    (SIGHUP works correctly on Linux: pty_smoke passes there in <0.5s).
-  - As a secondary issue, the harness's expect_exit_within Drop /
-    SIGKILL path uses a *blocking* waitpid; if the SIGKILL'd child is
-    already in kernel state E, that waitpid never returns. Should be
-    bounded with WNOHANG + sleep loop, or the harness should accept
-    "process is unreachable" as a terminal state.
-
-====================================================================
-[cleanup] all probe edits reverted; cfg gates restored.
-====================================================================
+[cleanup] restoring cfg gates

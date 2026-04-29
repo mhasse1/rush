@@ -422,3 +422,98 @@ Next investigator (probably another rocinante session) should:
      watchdog thread's `nanosleep` racing with thread-pool teardown.
 3. Add findings under a fresh `## Findings (2026-04-NN)` section.
 
+## Findings (2026-04-29 follow-up run)
+
+Re-ran on rocinante (same box, Darwin 25.4.0 arm64) at HEAD `01399ba`
+with `RUSH_TRACE=1 ./scripts/macos-pty-investigate.sh`. Bounded reap
+worked: harness panicked with the real `TimedOut` message in **8s**
+total (vs. 3+h before). See `.macos-pty-log.txt` and the trace below.
+
+### Trace from `/tmp/rush-trace.log`
+
+```
+0.000420 [tid=1] [main]      rush start argv=[".../target/debug/rush-cli"]
+0.061713 [tid=1] [read_line] enter
+0.157677 [tid=1] [fill_queue] byte 0x65   ← 'e'
+0.218716 [tid=1] [fill_queue] byte 0x63   ← 'c'
+0.272729 [tid=1] [fill_queue] byte 0x68   ← 'h'
+   …'echo hello-from-pty\n' echoed and processed…
+0.324692 [tid=1] [fill_queue] EOF                                       ← SIGHUP arrived
+0.329868 [tid=1] [read_line] inner returned ok=false err_kind=Some(UnexpectedEof)
+0.334706 [tid=1] [read_line] DisableBracketedPaste sent
+0.338687 [tid=1] [read_line] exit ok=false
+0.343687 [tid=1] [tty]       RawTty::drop start
+0.348720 [tid=1] [tty]       RawTty::drop tcsetattr done
+0.353672 [tid=1] [tty]       RawTty::drop sigaction restores done
+0.358704 [tid=1] [tty]       RawTty::drop end
+0.363728 [tid=1] [repl_v2]   read_line Err — breaking loop: stdin closed (controlling pty destroyed or signal received)
+0.368737 [tid=1] [repl_v2]   loop break — running exit trap if any
+0.373751 [tid=1] [repl_v2]   run() returning
+0.377714 [tid=1] [main]      repl returned — main exiting
+```
+
+Userspace teardown is **clean and fast**: 53 ms from EOF (0.325) to the
+last instrumented line (0.378). Every checkpoint fires in order, on the
+main thread, with no gap. The watchdog thread (`signals.rs:39`) is
+asleep on a 30 s `thread::sleep` and never participates — confirmed by
+`tid=1` throughout (the watchdog would have a different tid if it
+emitted, which it doesn't anyway).
+
+### Where the wedge actually is
+
+**After `fn main` returns.** The trace's last line is emitted on
+`main.rs:256`, immediately before `fn main` falls off its closing brace.
+What runs next is the Rust runtime's exit epilogue — drop of `main`'s
+locals, `lang_start` cleanup, then libc `exit(3)` → atexit handlers →
+`__cxa_finalize` → `_exit`. None of that is rush code; none of it is
+instrumentable from inside `fn main`.
+
+Combine with the prior session's `ps -o stat = ?NEs` + empty `lsof` +
+`(rush-cli)` parens: by the time the harness samples the wedged child,
+the kernel has already begun process teardown — closed all fds and
+revoked the slave pty. The "stuck" phase is the **kernel's
+controlling-pty disconnect path**, triggered by the session leader
+(rush-cli, made one by `forkpty` via `setsid` + `TIOCSCTTY`) calling
+`_exit`. That path is what holds the process in state `E`, and it's
+the same reason the prior-run SIGKILL was silently dropped.
+
+So none of the three priority candidates from the previous "for the
+next session" list match:
+
+| Priority candidate                                | Verdict                                |
+|---------------------------------------------------|----------------------------------------|
+| Stuck before `RawTty::drop start` (Disable write) | **Out** — `DisableBracketedPaste sent` fires at 0.335. |
+| Stuck between drop start and `tcsetattr done`     | **Out** — `tcsetattr done` fires at 0.349. |
+| Stuck after `run() returning` (atexit/watchdog)   | **Closer, but not it** — `main exiting` fires at 0.378. The watchdog hasn't woken. The wedge is past *all* of rush's user code. |
+
+### Recommended next fix
+
+The wedge is in the kernel's session-leader exit path interacting with
+the slave pty. Two non-mutually-exclusive directions:
+
+1. **Have rush-cli relinquish its controlling terminal before `main`
+   returns.** Add `unsafe { libc::ioctl(STDIN_FILENO, libc::TIOCNOTTY); }`
+   in the EOF/SIGHUP teardown branch (or just before `main` returns).
+   This converts the kernel-side hangup-on-session-leader-exit path
+   into a "process exits with no controlling tty" path, which on
+   macOS doesn't go through the same teardown wedge.
+
+2. **Accept the kernel-side wedge as a macOS pty quirk** and document
+   that the harness's bounded reap is the durable fix. The orphan
+   child is harmless: the cleanup trap's `pkill -9 -f 'target/debug/rush-cli'`
+   reaps it (verified — `pgrep` after this run returned no debug
+   rush-cli children). CI runs would let init reap it after the test
+   process exits.
+
+Recommend trying (1) first — it's a one-line change in `repl_v2.rs`'s
+exit-trap branch or `main.rs` immediately before the final trace line.
+If it works, the test passes outright on macOS; if it doesn't change
+behavior, fall back to (2) and flip the cfg gates to `cfg(unix)`
+permanently with a note explaining the orphan-child trade-off.
+
+### Minor follow-up: `unsafe_op_in_unsafe_fn` warning
+
+Build emits a single warning at `crates/rush-cli/tests/pty/mod.rs:424`
+inside `forkpty_compat` (which is itself `unsafe fn`). Wrap the
+`libc::forkpty` call in an explicit `unsafe { … }` to clear it. Cosmetic.
+
