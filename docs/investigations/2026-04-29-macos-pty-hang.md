@@ -217,4 +217,152 @@ who picks up the thread.
 
 ## Findings
 
-(append here as you investigate)
+Investigated 2026-04-29 on rocinante (Darwin 25.4.0 arm64, macOS 26.4.1)
+at HEAD `5227966`. See `.macos-pty-log.txt` for raw output.
+
+### Where it hangs
+
+The harness reaches `pty_smoke.rs:46` — the `expect_exit_within(2s)`
+call **after** `send_signal(SIGHUP)`. So the prompt-render hypothesis
+in TL;DR is **wrong**: rush starts, paints the prompt, runs `echo
+hello-from-pty`, and paints a second prompt all correctly on a
+forkpty-attached macOS pty. The smoke test's pre-SIGHUP assertions all
+pass (`expect_prompt`, `read_until` predicate including `» ` ×2 and
+`hello-from-pty`).
+
+After SIGHUP, the harness sees no exit within 2s, sends SIGKILL, then
+calls `try_wait_blocking` (waitpid with options=0). That waitpid blocks
+indefinitely. Sample:
+
+```
+pty_smoke::rush_starts_runs_echo_and_exits_on_sighup ... pty_smoke.rs:46
+  PtySession::expect_exit_within ... mod.rs:290
+    PtySession::try_wait_blocking ... mod.rs:324
+      __wait4  (libsystem_kernel.dylib)
+```
+
+`ps -o stat` of the rush-cli child shows `?NEs` — `E` = "exit-in-progress"
+per macOS `ps(1)`. The process has already started kernel-side teardown
+(empty `lsof`, `(rush-cli)` parens, `sample` rejects with "cannot examine
+process for unknown reasons"). On macOS, signals do not get delivered to
+processes already in kernel exit teardown, so the SIGKILL the harness sent
+2s in is silently ignored, and waitpid waits for an exit that has stalled.
+
+### What this rules in / out
+
+| Hypothesis (from brief)              | Verdict                                    |
+|--------------------------------------|--------------------------------------------|
+| Prompt rendering blocks (OSC 11 etc) | **Out.** Prompt + echo + 2nd prompt all OK. |
+| `isatty` returns 0 in forkpty child  | **Out.** Same: rush is in the interactive read loop. |
+| Drop / waitpid hang                  | **In, but a symptom.** The blocking waitpid never returns *because* the SIGKILL'd child is already mid-exit. |
+| TIOCSCTTY semantics                  | **Out** (already ruled out, confirmed). |
+
+The new finding is hypothesis 4: **SIGHUP itself wedges rush-cli's
+userspace teardown on macOS**, putting the process in kernel state E
+where neither SIGKILL nor any other signal can expedite it.
+
+### Isolation: SIGKILL-only variant passes
+
+Probe: temporarily change `pty_smoke.rs:44` from
+`send_signal(SIGHUP)` to `send_signal(SIGKILL)`, leave everything else
+identical. Test passes in **1.04s**:
+
+```
+running 1 test
+test rush_starts_runs_echo_and_exits_on_sighup ... ok
+test result: ok. 1 passed; ...; finished in 1.04s
+```
+
+So:
+- The forkpty harness is correct on macOS.
+- waitpid on a properly SIGKILL'd child reaps immediately.
+- The bug is squarely in rush-cli's **SIGHUP exit path** on macOS — i.e.,
+  in something that runs between the SIGHUP handler firing and the
+  process completing exit.
+
+### Where the SIGHUP teardown likely wedges
+
+Code path on SIGHUP (per `crates/rush-line/src/tty.rs` and `engine.rs`):
+
+1. `handle_exit` SA — sets `EXIT_PENDING.store(true, Relaxed)`.
+2. `RawTty::read_byte` returns `RawByte::Eof`.
+3. `engine.rs::read_line` writes `DisableBracketedPaste` to stderr
+   (line 297) — note this is during teardown with the harness *not*
+   reading the master.
+4. `UnixInput` / `RawTty` drop: `tcsetattr` + 3× `sigaction` restore.
+5. `read_line` returns to `repl_v2`; main loop sees `should_exit` and breaks.
+6. `main` returns; Rust runtime calls `lang_start_internal::exit()` → atexit /
+   thread destruction → `_exit`.
+
+Likely culprits, in priority order:
+
+1. **PTY back-pressure on a write during teardown.** Once
+   `expect_exit_within` enters its poll loop, nothing reads the master.
+   If anything in steps 3–5 writes to stdout/stderr — DisableBracketedPaste,
+   theme/colour reset on Drop somewhere, a goodbye newline, etc. — and the
+   slave's output buffer fills, the write blocks forever. macOS pty buffers
+   are small; even a few hundred bytes during teardown could trip this.
+2. **The orphan-watchdog thread (`crates/rush-cli/src/signals.rs:39`)**
+   doing something during exit. It's a sleep-loop daemon; on a healthy
+   `_exit` it would be reaped by the kernel. But if Rust's runtime exit
+   is doing something other than `_exit` (atexit handlers, TLS dtors, etc.)
+   that races with the watchdog's syscalls, that could wedge. Linux's
+   `nptl` and macOS's `pthread` have different exit semantics for
+   sleeping threads.
+3. **A blocking `tcsetattr` on a half-broken pty in `RawTty::Drop`** —
+   less likely since termios ioctls are usually instant, but possible
+   if the slave is in a state where TCSADRAIN-equivalent semantics fire
+   under macOS. The Drop uses TCSANOW which shouldn't drain, but worth
+   verifying.
+
+### Secondary bug: harness `try_wait_blocking` after SIGKILL
+
+`crates/rush-cli/tests/pty/mod.rs:289-290` (and Drop) calls
+`try_wait_blocking` *after* sending SIGKILL. On macOS this can block
+indefinitely when the child is already mid-exit. The harness should:
+- Use a bounded WNOHANG poll loop with a deadline (say 1s extra), and
+  if the child still hasn't exited, return without reaping (let init
+  inherit the orphan after the test process itself exits).
+- Or, document that `expect_exit_within` is best-effort on macOS.
+
+The same blocking waitpid sits in `Drop` for `PtySession`. A
+PtySession Drop on a wedged child will hang the entire test process
+on test teardown — exactly what happened in CI runs 24965360454 and
+24971101349 (3+ hours each). Even without fixing rush's SIGHUP, fixing
+this Drop would let CI fail fast with a real assertion message.
+
+### Investigation-script bug (separate, but reported here)
+
+`scripts/macos-pty-investigate.sh` cannot run a successful build on
+macOS as committed. Its `sed -i '' 's/cfg(target_os = "linux")/cfg(unix)/'`
+matches the harness's internal `#[cfg(target_os = "linux")]` on
+`forkpty_compat` (`tests/pty/mod.rs:386`), turning it into
+`#[cfg(unix)]`, which then collides with the macOS variant at
+`tests/pty/mod.rs:399` (`#[cfg(not(target_os = "linux"))]`) → E0428
+duplicate-definition, build aborts. Two fixes possible:
+- Remove `tests/pty/mod.rs` from the script's `FILES` array (it
+  doesn't need a flip — it already has `#![cfg(unix)]` at line 30 and
+  internal cfg gates on `forkpty_compat`).
+- Or use a tighter sed pattern that only matches the inner attribute
+  `#![cfg(target_os = "linux")]` (with the leading `#!` and bracketing).
+
+### Recommended next steps
+
+In priority order:
+
+1. **Fix the harness's blocking waitpid** in `expect_exit_within` / `Drop`
+   so a hung CI run fails fast with a real assertion instead of timing
+   out at the 6h GitHub-actions cap. Use bounded WNOHANG. Low risk.
+2. **Instrument rush-cli's SIGHUP teardown** with `eprintln!`s at:
+   - SIGHUP handler entry,
+   - return-from-`read_line` post-Drop,
+   - just before `repl_v2`'s loop break,
+   - just before `main` returns,
+   then re-run on macOS to find the last log line printed before the
+   process enters state E. Strong candidates per priority list above.
+3. **Fix the investigate-script sed pattern.** Cheap and unblocks
+   future investigators.
+4. Once SIGHUP teardown is fixed, flip the test cfg gates from
+   `cfg(target_os = "linux")` to `cfg(unix)` in pty_smoke.rs and
+   pty_paint_no_absolute.rs and remove the Linux-only header notes.
+

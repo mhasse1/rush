@@ -1,0 +1,102 @@
+====================================================================
+macos-pty-investigate (manual) — 2026-04-29T01:56:00Z
+host:   rocinante (Darwin 25.4.0 arm64, macOS 26.4.1)
+rust:   rustc 1.89.0 (29483883e 2025-08-04)
+git:    5227966 (main) — at HEAD when this run started
+====================================================================
+
+NB: ./scripts/macos-pty-investigate.sh has a sed bug that prevents the
+test from ever running on macOS. Its sed pattern matches the harness's
+own `#[cfg(target_os = "linux")]` on `forkpty_compat`
+(crates/rush-cli/tests/pty/mod.rs:386), turning it into `#[cfg(unix)]`,
+which then collides with the macOS variant at line 399 ⇒ E0428
+duplicate-definition. Build aborts before any test runs. The script
+needs a more specific pattern, e.g.
+`s/^#!\[cfg(target_os = "linux")\]$/#![cfg(unix)]/` (inner attribute
+only), or it should restrict its FILES list to the two test files
+(pty_smoke.rs, pty_paint_no_absolute.rs) and skip pty/mod.rs.
+
+Workaround for this run: hand-flip the gates in the two test files
+only (pty_smoke.rs:12, pty_paint_no_absolute.rs:19), build, run.
+
+====================================================================
+[step] cargo build -p rush-cli --tests
+====================================================================
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.69s
+(One unsafe_op_in_unsafe_fn warning; harmless.)
+
+====================================================================
+[step] cargo test -p rush-cli --test pty_smoke -- --nocapture --test-threads=1
+====================================================================
+Started: 2026-04-29T01:56:57Z
+Test:    rush_starts_runs_echo_and_exits_on_sighup
+Result:  HUNG (forcibly killed at ~01:58:28Z, ~90s in)
+
+The test reached "running 1 test" then never completed. ps showed a
+single rush-cli child (pid 87359) parented to the test binary (87358)
+in state `?NEs`:
+    PID  PPID STAT WCHAN  COMMAND
+   87359 87358 ?NEs -      (rush-cli)
+
+`E` = exit-in-progress per macOS ps(1). `(rush-cli)` parens + empty
+COMMAND + empty lsof = the kernel has already torn down the process's
+fds and is in the kernel-side teardown phase. `sample 87359` reports
+"cannot examine process for unknown reasons" — kernel-only state.
+
+----- sample of test binary (pid 87358) at the moment of the hang -----
+1765 Thread_X: rush_starts_runs_echo_and_exits_on_sighup
+  ...
+  1765 pty_smoke::rush_starts_runs_echo_and_exits_on_sighup ... pty_smoke.rs:46
+    1765 PtySession::expect_exit_within ... mod.rs:290
+      1765 PtySession::try_wait_blocking ... mod.rs:324
+        1765 __wait4  (in libsystem_kernel.dylib)
+
+So the harness reached pty_smoke.rs:46 — that's the
+`s.expect_exit_within(Duration::from_secs(2))` call after
+`s.send_signal(libc::SIGHUP)`. The 2s expect_exit_within elapsed
+without the child exiting via try_wait, the deadline branch sent
+SIGKILL via `libc::kill(self.pid, libc::SIGKILL)` and called
+`try_wait_blocking` (waitpid with options=0). That waitpid is
+indefinitely blocked on a child stuck in kernel state E.
+
+Inference: the harness setup itself works on macOS — first prompt was
+seen within 5s, "echo hello-from-pty" was sent, the echoed output and
+second prompt were captured (otherwise expect_prompt or read_until
+would have errored well before line 46). Hang is purely on the
+SIGHUP-driven teardown path of rush-cli plus the harness's reliance
+on a blocking waitpid after SIGKILL.
+
+====================================================================
+[probe] rerun the same test with SIGKILL instead of SIGHUP
+====================================================================
+Modification: line 44 send_signal(SIGHUP) → send_signal(SIGKILL).
+Started: 2026-04-29T02:01:31Z
+Result:  PASSED in 1.04s.
+
+    running 1 test
+    test rush_starts_runs_echo_and_exits_on_sighup ... ok
+    test result: ok. 1 passed; ...; finished in 1.04s
+    TEST_RC=0
+
+This isolates the bug. SIGKILL → kernel terminates rush-cli before
+any userspace teardown runs → waitpid returns immediately → harness
+exits cleanly. SIGHUP → rush's signal handler fires → userspace
+teardown begins → something wedges → process enters state E → SIGKILL
+sent later is silently ignored (kernel doesn't deliver new signals to
+processes already in exit teardown) → waitpid blocks forever.
+
+So:
+  - The macOS forkpty pty harness is correct.
+  - rush-cli starts, paints a prompt, runs an echo, repaints — all
+    fine on a forkpty-attached pty on macOS.
+  - The bug is in rush-cli's SIGHUP teardown path on macOS only
+    (SIGHUP works correctly on Linux: pty_smoke passes there in <0.5s).
+  - As a secondary issue, the harness's expect_exit_within Drop /
+    SIGKILL path uses a *blocking* waitpid; if the SIGKILL'd child is
+    already in kernel state E, that waitpid never returns. Should be
+    bounded with WNOHANG + sleep loop, or the harness should accept
+    "process is unreachable" as a terminal state.
+
+====================================================================
+[cleanup] all probe edits reverted; cfg gates restored.
+====================================================================
