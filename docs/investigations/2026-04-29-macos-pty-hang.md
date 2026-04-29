@@ -11,6 +11,19 @@ pointers) for when you need to dig deeper.
 
 ## ▶ Next session: pull, run, decide
 
+> **Round 3 quick-recap** (state at HEAD): the rocinante round-2
+> session confirmed userspace teardown is clean and TIOCNOTTY didn't
+> resolve the wedge — but produced a sharp hypothesis: the kernel pty
+> revoke path on session-leader exit blocks until the master drains
+> the slave's output queue. The harness's poll loop now drains the
+> master between each waitpid (commit `<this commit>`). If that's the
+> right hypothesis, the SIGHUP test should now pass on macOS without
+> any rush-side change. Verify with the procedure below; if it still
+> wedges, the round-2 fallback (accept the macOS limitation, keep
+> Linux-only gate, close as wontfix) is the durable answer.
+
+
+
 You're inheriting a sequence of fixes that build on each other. Each
 round of investigation lands a fix; you re-run and either confirm
 success or pinpoint the next wedge.

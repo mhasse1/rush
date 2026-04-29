@@ -288,12 +288,24 @@ impl PtySession {
     /// bounded poll, and if even SIGKILL doesn't take effect we give
     /// up and return — the orphaned child will be inherited by init
     /// once this test process itself exits.
+    ///
+    /// This loop also drains the master end while polling waitpid.
+    /// The kernel's pty teardown on session-leader exit on macOS
+    /// blocks until the master has drained the slave's output queue
+    /// (per rocinante's #295 round-2 finding). Without the drain, the
+    /// kernel revoke wedges and the child can't progress past _exit
+    /// even though all userspace teardown has run. Linux doesn't gate
+    /// session-leader exit on master drain, so this is a no-op there.
     pub fn expect_exit_within(&mut self, timeout: Duration) -> io::Result<ExitOutcome> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(outcome) = self.try_wait()? {
                 return Ok(outcome);
             }
+            // Drain whatever the slave has queued so the kernel pty
+            // revoke path can complete. Tiny window; if there's no
+            // data ready, this returns ~immediately.
+            self.drain_master_briefly();
             if Instant::now() >= deadline {
                 let _ = unsafe { libc::kill(self.pid, libc::SIGKILL) };
                 // Bounded reap so a wedged-in-state-E child can't hang us.
@@ -305,6 +317,30 @@ impl PtySession {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    /// Best-effort non-blocking read of whatever the master has
+    /// queued, capped to a single 4 KiB buffer. Used during exit
+    /// polling so the slave's output queue can drain — see
+    /// `expect_exit_within`'s docs.
+    fn drain_master_briefly(&mut self) {
+        let mut buf = [0u8; 4096];
+        let mut pfd = libc::pollfd {
+            fd: self.master.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut pfd, 1, 0) };
+        if rc <= 0 {
+            return;
+        }
+        let _ = unsafe {
+            libc::read(
+                self.master.as_raw_fd(),
+                buf.as_mut_ptr() as *mut _,
+                buf.len(),
+            )
+        };
     }
 
     /// Non-blocking waitpid: returns Some(outcome) if child has exited,
@@ -331,12 +367,16 @@ impl PtySession {
     /// macOS-safe: `waitpid` with `0` flags blocks indefinitely if the
     /// child is wedged in kernel state `E`, which is exactly the
     /// failure mode #295 exposes for rush-cli on SIGHUP.
+    ///
+    /// Like `expect_exit_within`, drains the master each iteration so
+    /// the kernel pty revoke path can complete on macOS.
     fn reap_with_deadline(&mut self, timeout: Duration) -> io::Result<Option<ExitOutcome>> {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(outcome) = self.try_wait()? {
                 return Ok(Some(outcome));
             }
+            self.drain_master_briefly();
             if Instant::now() >= deadline {
                 return Ok(None);
             }
