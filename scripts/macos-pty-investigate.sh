@@ -32,8 +32,12 @@ TIMEOUT_SECS=60
 FILES=(
   "crates/rush-cli/tests/pty_smoke.rs"
   "crates/rush-cli/tests/pty_paint_no_absolute.rs"
-  "crates/rush-cli/tests/pty/mod.rs"
 )
+# Note: tests/pty/mod.rs is NOT in the list. Its top-level gate is
+# already `#![cfg(unix)]`. Its internal `#[cfg(target_os = "linux")]`
+# on `forkpty_compat` must stay as-is — flipping it to `cfg(unix)`
+# would activate both the Linux and non-Linux forkpty_compat
+# definitions and produce E0428 (duplicate definition).
 
 cleanup() {
   echo "" | tee -a "$LOG"

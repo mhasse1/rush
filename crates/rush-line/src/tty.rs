@@ -274,11 +274,15 @@ impl Drop for RawTty {
         // Best-effort restore: termios first, then signal handlers.
         // If anything fails (terminal already gone), Drop can't
         // propagate errors and we're in teardown anyway.
+        crate::trace!("tty", "RawTty::drop start");
         unsafe {
             let _ = libc::tcsetattr(self.fd, libc::TCSANOW, &self.original);
+            crate::trace!("tty", "RawTty::drop tcsetattr done");
             libc::sigaction(libc::SIGWINCH, &self.prev_winch, std::ptr::null_mut());
             libc::sigaction(libc::SIGHUP, &self.prev_hup, std::ptr::null_mut());
             libc::sigaction(libc::SIGTERM, &self.prev_term, std::ptr::null_mut());
+            crate::trace!("tty", "RawTty::drop sigaction restores done");
         }
+        crate::trace!("tty", "RawTty::drop end");
     }
 }

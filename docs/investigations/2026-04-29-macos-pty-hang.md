@@ -366,3 +366,59 @@ In priority order:
    `cfg(target_os = "linux")` to `cfg(unix)` in pty_smoke.rs and
    pty_paint_no_absolute.rs and remove the Linux-only header notes.
 
+### Follow-up — done from the Linux side
+
+Picked up after the rocinante session reported back. All three #1-#3
+items shipped before the next macOS run.
+
+1. **Bounded waitpid in `expect_exit_within` / `Drop`.** `try_wait_blocking`
+   was the wedge — replaced with `reap_with_deadline(2s)`, a WNOHANG
+   poll loop. After timeout, the test process gives up and returns;
+   the orphaned child is inherited by init when this process itself
+   exits. CI runs should now fail in <10 s with a real `TimedOut`
+   message instead of hanging 3+ hours. Linux runs unchanged.
+
+2. **Investigation script `sed` scope tightened.** Dropped
+   `tests/pty/mod.rs` from the `FILES` array entirely — its top-level
+   gate is already `#![cfg(unix)]`, and the inner `#[cfg(target_os =
+   "linux")]` on `forkpty_compat` (line 406) must stay as-is to avoid
+   E0428 on the parallel non-Linux definition.
+
+3. **SIGHUP teardown instrumented via `crate::trace!`.** New trace
+   points at:
+   - `tty.rs::RawTty::drop` — entry, post-tcsetattr, post-sigaction
+     restores, exit. Each is fsync'd by trace.rs so a kernel-state-E
+     wedge doesn't lose the trail.
+   - `engine.rs::read_line` — `inner returned ok=… err_kind=…`,
+     `DisableBracketedPaste sent`, exit.
+   - `repl_v2::run` — `read_line Err — breaking loop`, `loop break —
+     running exit trap`, `run() returning`.
+   - `main.rs::main` — `repl returned — main exiting`.
+
+   Signal handlers themselves are NOT instrumented (signal-handler
+   safety: Mutex/format/write_all aren't async-signal-safe). The
+   handler just sets `EXIT_PENDING`; the trace fires when the read
+   loop checks the flag and returns `RawByte::Eof`.
+
+### Follow-up — for the next macOS session
+
+Next investigator (probably another rocinante session) should:
+
+1. Pull main and re-run `./scripts/macos-pty-investigate.sh` with
+   `RUSH_TRACE=1` exported. The harness now gives up at 12 s with a
+   real error; full teardown trace will be in `/tmp/rush-trace.log`.
+2. The last trace line in `/tmp/rush-trace.log` names the wedge
+   point. Likely candidates per priority:
+   - **Stuck before `RawTty::drop start`** → wedge is in something
+     that runs *before* read_line's drop chain. Probably the
+     `DisableBracketedPaste` write at engine.rs (the master isn't
+     being read; pty buffer fills). If so, the fix is to either
+     skip Disable on EOF teardown or drain async.
+   - **Stuck between `RawTty::drop start` and `tcsetattr done`** →
+     `tcsetattr` blocking. Try TCSAFLUSH or TCSANOW with explicit
+     buffer drain.
+   - **Stuck after `repl_v2 run() returning`** → main()'s atexit /
+     TLS dtors / orphan-watchdog thread. Most likely culprit: the
+     watchdog thread's `nanosleep` racing with thread-pool teardown.
+3. Add findings under a fresh `## Findings (2026-04-NN)` section.
+

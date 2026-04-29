@@ -253,6 +253,7 @@ fn main() {
     } else {
         repl_v2::run(is_login);
     }
+    rush_line::trace!("main", "repl returned — main exiting");
 }
 
 /// True if `line` contains a `|` outside of single- or double-quoted

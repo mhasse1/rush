@@ -294,7 +294,14 @@ impl LineEditor {
             #[cfg(unix)]
             &mut input,
         );
+        crate::trace!(
+            "read_line",
+            "inner returned ok={} err_kind={:?}",
+            result.is_ok(),
+            result.as_ref().err().map(|e| e.kind())
+        );
         let _ = execute!(io::stderr(), DisableBracketedPaste);
+        crate::trace!("read_line", "DisableBracketedPaste sent");
         #[cfg(windows)]
         let _ = terminal::disable_raw_mode();
         // Unix: `input` drops here, restoring termios + handlers.

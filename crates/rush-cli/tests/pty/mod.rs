@@ -279,6 +279,15 @@ impl PtySession {
     }
 
     /// Wait for the child to exit, or kill it on deadline.
+    ///
+    /// On macOS, a process whose userspace teardown wedges (e.g.
+    /// rush-cli on SIGHUP — see #295) enters kernel state `E` (exit-
+    /// in-progress), where signals are no longer delivered. SIGKILL
+    /// is silently ignored and a *blocking* `waitpid(pid, 0)` waits
+    /// forever. So after the timeout we send SIGKILL but reap with a
+    /// bounded poll, and if even SIGKILL doesn't take effect we give
+    /// up and return — the orphaned child will be inherited by init
+    /// once this test process itself exits.
     pub fn expect_exit_within(&mut self, timeout: Duration) -> io::Result<ExitOutcome> {
         let deadline = Instant::now() + timeout;
         loop {
@@ -287,7 +296,8 @@ impl PtySession {
             }
             if Instant::now() >= deadline {
                 let _ = unsafe { libc::kill(self.pid, libc::SIGKILL) };
-                let _ = self.try_wait_blocking();
+                // Bounded reap so a wedged-in-state-E child can't hang us.
+                let _ = self.reap_with_deadline(Duration::from_secs(2));
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!("child did not exit within {timeout:?}"),
@@ -315,27 +325,37 @@ impl PtySession {
         Ok(Some(decode_status(status)))
     }
 
-    fn try_wait_blocking(&mut self) -> io::Result<ExitOutcome> {
-        if self.waited {
-            // Already reaped; we don't have the prior status. Fake one.
-            return Ok(ExitOutcome::Code(-1));
+    /// Bounded reap. Polls WNOHANG every 20 ms until the child exits or
+    /// the deadline expires. On deadline, leaves the child as a zombie /
+    /// orphan rather than blocking forever in `waitpid(pid, 0)`.
+    /// macOS-safe: `waitpid` with `0` flags blocks indefinitely if the
+    /// child is wedged in kernel state `E`, which is exactly the
+    /// failure mode #295 exposes for rush-cli on SIGHUP.
+    fn reap_with_deadline(&mut self, timeout: Duration) -> io::Result<Option<ExitOutcome>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(outcome) = self.try_wait()? {
+                return Ok(Some(outcome));
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
-        let mut status: libc::c_int = 0;
-        let rc = unsafe { libc::waitpid(self.pid, &mut status, 0) };
-        if rc < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        self.waited = true;
-        Ok(decode_status(status))
     }
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
-        // Best-effort cleanup. SIGKILL → wait → remove tempdir.
+        // Best-effort cleanup: SIGKILL → bounded reap → tempdir cleanup.
+        // The bounded reap matters on macOS: a child wedged in kernel
+        // state `E` (rush-cli on SIGHUP, #295) doesn't respond to
+        // SIGKILL, and a plain blocking `waitpid` would hang the test
+        // process for hours — exactly the CI failure mode we saw on
+        // runs 24965360454 / 24971101349 before this change.
         if !self.waited {
             let _ = unsafe { libc::kill(self.pid, libc::SIGKILL) };
-            let _ = self.try_wait_blocking();
+            let _ = self.reap_with_deadline(Duration::from_secs(2));
         }
         let _ = std::fs::remove_dir_all(&self.config_dir);
     }

@@ -273,15 +273,18 @@ pub fn run(is_login: bool) {
                 }
             }
             Err(e) => {
+                rush_line::trace!("repl_v2", "read_line Err — breaking loop: {e}");
                 eprintln!("rush: input error: {e}");
                 break;
             }
         }
     }
+    rush_line::trace!("repl_v2", "loop break — running exit trap if any");
 
     if let Some(action) = rush_core::trap::get_exit_trap()
         && !action.is_empty()
     {
         crate::run_line(&mut evaluator, &action);
     }
+    rush_line::trace!("repl_v2", "run() returning");
 }
