@@ -15,8 +15,8 @@
 //! 1172 still emitted the save/restore pair. After the Phase 4 fix it
 //! passes.
 //!
-//! Linux-only for the same reason as pty_smoke.rs (see header there): #295.
-#![cfg(target_os = "linux")]
+//! Cross-platform on Unix as of #295's resolution. See pty_smoke.rs.
+#![cfg(unix)]
 
 mod pty;
 
