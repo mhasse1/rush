@@ -23,6 +23,12 @@
 set -u
 # Note: no `set -e` — we want to capture failures, not bail on them.
 
+# Non-interactive shells (e.g. `ssh host script`) don't load the user's
+# rc files, so cargo/rustc from rustup aren't on PATH. Add the standard
+# locations explicitly so the script works under both interactive use
+# and ssh-driven runs.
+export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+
 REPO="$(git -C "$(dirname "$0")/.." rev-parse --show-toplevel)"
 cd "$REPO"
 
