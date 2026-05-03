@@ -1,13 +1,16 @@
-# macOS pty harness hang — investigation brief (#295)
+# macOS pty harness hang — investigation postmortem (#295)
 
-This is a self-contained brief for a Claude Code session running on
+> **Status: RESOLVED.** Closed 2026-05-03 with CI run [25283325385](https://github.com/mhasse1/rush/actions/runs/25283325385) green on macos-aarch64 + ubuntu-x86_64 + windows. Verified end-to-end on rocinante (macOS 26.4.1, aarch64) over ssh.
+>
+> **The fix** was a combination of three commits, in order: bounded reap ([`01399ba`](https://github.com/mhasse1/rush/commit/01399ba)) caps test wall time; TIOCNOTTY ([`3e0b95d`](https://github.com/mhasse1/rush/commit/3e0b95d)) relinquishes the controlling pty before kernel teardown; **master-drain ([`952e8fc`](https://github.com/mhasse1/rush/commit/952e8fc)) was the actual unblock** — macOS kernel pty revoke on session-leader exit waits for the slave's output queue to drain. Round 2's "TIOCNOTTY didn't help" verdict was tested before master-drain landed.
+>
+> Test gates flipped back to `#![cfg(unix)]` permanently in [`2d2ac52`](https://github.com/mhasse1/rush/commit/2d2ac52). pty harness now has full Unix coverage in CI.
+>
+> The rest of this file is preserved as the investigation transcript — useful as a worked example of multi-round Linux↔macOS handoff, plus a reference for the macOS pty teardown semantics if a similar issue surfaces.
+
+This was a self-contained brief for a Claude Code session running on
 **rocinante** (mark's macOS dev box) to investigate issue [#295](https://github.com/mhasse1/rush/issues/295)
 hands-on.
-
-If you're picking this up cold, **start at the next section** — it
-tells you exactly what to run and how to interpret the result. The
-rest of the file is historical context (TL;DR, prior findings, code
-pointers) for when you need to dig deeper.
 
 ## ▶ Next session: pull, run, decide
 
