@@ -918,6 +918,18 @@ fn split_chains(input: &str) -> Vec<ChainSegment> {
         if ch == '\'' { in_single = true; current.push(ch); i += 1; continue; }
         if ch == '"' { in_double = true; current.push(ch); i += 1; continue; }
 
+        // Backslash escape: copy `\` + the following char verbatim so
+        // the next char doesn't get interpreted as a chain operator.
+        // The canonical case is `find ... -exec ... \;` (#296), where
+        // `;` would otherwise terminate the segment and find errors out.
+        // Trailing `\` at end of input is left as-is.
+        if ch == '\\' && i + 1 < chars.len() {
+            current.push(ch);
+            current.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+
         // Track brace/paren depth for { } and ( )
         if ch == '{' { brace_depth += 1; }
         if ch == '}' { brace_depth -= 1; }
@@ -1553,6 +1565,47 @@ mod tests {
         let chains = split_chains("echo \"a && b\" ; echo c");
         assert_eq!(chains.len(), 2);
         assert!(chains[0].command.contains("a && b"));
+    }
+
+    // ── #296: backslash-escaped chain operators ─────────────────────
+
+    #[test]
+    fn split_chains_backslash_escaped_semicolon_kept_in_segment() {
+        // The canonical `find -exec` form. Without the escape arm,
+        // rush splits on the bare `;` and find errors with
+        // "missing argument to `-exec'".
+        let chains = split_chains(r"find . -exec ls {} \; ; echo done");
+        assert_eq!(chains.len(), 2);
+        assert!(chains[0].command.contains(r"\;"));
+        assert!(chains[0].command.contains("-exec ls"));
+        assert_eq!(chains[1].command.trim(), "echo done");
+    }
+
+    #[test]
+    fn split_chains_single_quoted_semicolon_kept() {
+        // Alternative form. Single-quote arm should already preserve.
+        let chains = split_chains(r"find . -exec ls {} ';' ; echo done");
+        assert_eq!(chains.len(), 2);
+        assert!(chains[0].command.contains("';'"));
+        assert_eq!(chains[1].command.trim(), "echo done");
+    }
+
+    #[test]
+    fn split_chains_backslash_escaped_ampersand_kept() {
+        // Pathological but symmetric: `\&\&` shouldn't be parsed as
+        // a chain `&&`. (No real-world idiom uses this; included for
+        // consistency with the escape rule.)
+        let chains = split_chains(r"echo a \&\& echo b");
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].command.contains(r"\&\&"));
+    }
+
+    #[test]
+    fn split_chains_trailing_backslash_left_alone() {
+        // A bare `\` at end of input shouldn't panic; just keep it.
+        let chains = split_chains(r"echo hi \");
+        assert_eq!(chains.len(), 1);
+        assert!(chains[0].command.contains(r"\"));
     }
 
     // ── Exit ────────────────────────────────────────────────────────
