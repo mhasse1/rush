@@ -1025,6 +1025,7 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                         match next {
                             '"' | '\\' | '$' | '`' => {
                                 current.push(chars.next().unwrap());
+                                // Inside "...", was_quoted is already true.
                             }
                             _ => current.push('\\'),
                         }
@@ -1034,6 +1035,13 @@ fn parse_command_line_with_quote_info(line: &str) -> Vec<(String, bool)> {
                         // by normalize_path_separators() during expansion, so this is
                         // consistent across platforms.
                         current.push(chars.next().unwrap());
+                        // The escape protects this character (and the
+                        // resulting token) from later word-splitting,
+                        // glob, and brace expansion — same effect as if
+                        // it had been quoted. #271: `ls hello\ world`
+                        // produced two tokens because IFS splitting
+                        // didn't see this flag.
+                        was_quoted = true;
                     }
                 }
             }
@@ -1788,6 +1796,47 @@ mod tests {
     #[test]
     fn parse_backslash_space() {
         assert_eq!(parse_command_line(r"echo hello\ world"), vec!["echo", "hello world"]);
+    }
+
+    // ── #271: backslash-escaped paths must survive IFS / glob /
+    //         brace expansion in parse_and_expand ───────────────────────
+    //
+    // The escape arm in parse_command_line_with_quote_info builds the
+    // word correctly (single token containing the literal space), but
+    // parse_and_expand then runs IFS field-splitting / glob / brace
+    // expansion using the `was_quoted` flag — and was_quoted was being
+    // left at false for backslash-escaped chars, so the literal space
+    // got IFS-split right back into two tokens. Setting was_quoted=true
+    // on any backslash-escape (outside single quotes) makes those
+    // post-passes treat the token as protected.
+
+    #[test]
+    fn parse_backslash_space_marks_token_quoted() {
+        let parts = parse_command_line_with_quote_info(r"ls /tmp/My\ File.app/");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], ("ls".to_string(), false));
+        // The token survives as one piece AND is marked quoted so
+        // downstream IFS / glob / brace expansion leave it alone.
+        assert_eq!(parts[1].0, "/tmp/My File.app/");
+        assert!(parts[1].1, "backslash-escaped token must report was_quoted=true");
+    }
+
+    #[test]
+    fn parse_backslash_in_word_is_quoted() {
+        // Even a single escaped char in the middle of a word is enough.
+        let parts = parse_command_line_with_quote_info(r"echo a\bc");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1].0, "abc");
+        assert!(parts[1].1);
+    }
+
+    #[test]
+    fn parse_unescaped_word_is_unquoted() {
+        // Sanity: no backslash, no quotes → was_quoted stays false so
+        // $VAR-expansion-style IFS splitting can still apply.
+        let parts = parse_command_line_with_quote_info("echo hello");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[1], ("hello".to_string(), false));
     }
 
     #[test]

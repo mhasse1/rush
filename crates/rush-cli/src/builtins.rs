@@ -1376,13 +1376,10 @@ fn handle_which(name: &str) {
         return;
     }
 
-    // Check builtins
-    let builtins = [
-        "cd", "export", "unset", "source", "clear", "exit", "quit", "pwd",
-        "alias", "unalias", "pushd", "popd", "dirs", "history", "path",
-        "help", "set", "setbg", "which", "type",
-    ];
-    if builtins.contains(&name) {
+    // Check builtins. Use the canonical BUILTIN_NAMES list rather than
+    // a stale hand-maintained subset — was missing `o`/`open`/`ai`/`sql`/
+    // `reload`/`printf`/etc. (#297 discoverability gap).
+    if BUILTIN_NAMES.contains(&name) {
         println!("{name}: shell builtin");
         return;
     }
@@ -1807,20 +1804,27 @@ fn handle_init(args: &str) {
 // ── o (open) — cross-platform open ──────────────────────────────────
 
 fn handle_open(args: &str) {
-    if args.is_empty() {
+    if args.trim().is_empty() {
         #[cfg(target_os = "macos")]
         { std::process::Command::new("open").arg(".").status().ok(); }
         #[cfg(target_os = "linux")]
         { std::process::Command::new("xdg-open").arg(".").status().ok(); }
+        #[cfg(target_os = "windows")]
+        { std::process::Command::new("cmd").args(["/C", "start", "", "."]).status().ok(); }
         return;
     }
 
-    // Open each argument separately
-    for target in args.split_whitespace() {
+    // Use the shell tokenizer so quoted paths and `\<space>` escapes
+    // survive. Naive split_whitespace was the #297 bug — `o "Sub Text"`
+    // opened two failed targets ("Sub and Text"). Tokenizer also strips
+    // outer quotes and applies backslash escape per POSIX, matching
+    // what's already done for external commands.
+    let targets = rush_core::process::parse_command_line(args);
+    for target in targets {
         let target = if let Some(rest) = target.strip_prefix("~/") {
             format!("{}/{}", std::env::var("HOME").unwrap_or_default(), rest)
         } else {
-            target.to_string()
+            target
         };
 
         #[cfg(target_os = "macos")]
