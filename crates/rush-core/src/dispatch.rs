@@ -99,11 +99,28 @@ pub fn dispatch_with_jobs_and_builtins(
             _ => {}
         }
 
-        // Step 2: Extract inline env vars (VAR=val cmd)
+        // Step 2: Extract inline env vars (VAR=val cmd) and pure
+        // assignments (VAR=val with no command).
         let (inline_vars, segment) = extract_inline_env_vars(segment);
+        // Pure assignment: set the vars *permanently* (for the rest of
+        // the dispatch session) and move on to the next chain segment.
+        // POSIX `foo=hello` without a following command sets the
+        // variable for the shell session. This branch is also what
+        // makes `foo="hello"; echo $foo` work — without it, the
+        // assignment got set/restored in the same segment and was
+        // gone before the next segment ran.
+        if !inline_vars.is_empty() && segment.trim().is_empty() {
+            for (key, val) in &inline_vars {
+                unsafe { std::env::set_var(key, val) };
+            }
+            last_exit = 0;
+            last_failed = false;
+            evaluator.exit_code = 0;
+            continue;
+        }
         let segment = segment.as_str();
 
-        // Set inline vars
+        // Set inline vars (scoped to this segment only)
         let mut saved_vars: Vec<(String, Option<String>)> = Vec::new();
         for (key, val) in &inline_vars {
             saved_vars.push((key.clone(), std::env::var(key).ok()));
@@ -804,8 +821,14 @@ fn find_heredoc(line: &str) -> Option<usize> {
 /// Extract leading VAR=val assignments from a command.
 /// `LANG=C sort file` → vars=[("LANG","C")], remaining="sort file"
 pub fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String) {
+    // Use the proper shell tokenizer so quoted values like `foo="a b c"`
+    // tokenize as one token, not three. The naive split_whitespace
+    // version treated `foo="a b c"` as `["foo=\"a", "b", "c\""]` and
+    // recorded `foo=a` as the inline var, then ran `b c"` as a command
+    // — i.e. every shell-style assignment with a quoted multi-word
+    // value was silently broken.
+    let words = crate::process::parse_command_line(segment);
     let mut vars = Vec::new();
-    let words: Vec<&str> = segment.split_whitespace().collect();
     let mut cmd_start = 0;
 
     for word in &words {
@@ -817,8 +840,10 @@ pub fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String)
                 if left.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                     && left.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
                 {
+                    // parse_command_line has already stripped the
+                    // quoting from the value side, so we don't need
+                    // the trim_matches dance.
                     let val = &word[eq_pos + 1..];
-                    let val = val.trim_matches('"').trim_matches('\'');
                     vars.push((left.to_string(), val.to_string()));
                     cmd_start += 1;
                     continue;
@@ -828,13 +853,52 @@ pub fn extract_inline_env_vars(segment: &str) -> (Vec<(String, String)>, String)
         break; // First non-assignment word = start of command
     }
 
-    if cmd_start == 0 || cmd_start >= words.len() {
-        // No inline vars, or all words are assignments (no command)
+    if cmd_start == 0 {
+        // No inline vars at all — return the original segment as-is.
         return (vars, segment.to_string());
     }
+    if cmd_start >= words.len() {
+        // Pure assignment(s) with no command. Caller distinguishes by
+        // checking for an empty remaining segment. Without this branch,
+        // dispatch would re-run the original `foo=val` segment as a
+        // command and either crash or print "command not found", which
+        // also broke `foo="quoted multiword"` because the leftover
+        // contains an unclosed quote.
+        return (vars, String::new());
+    }
 
-    let remaining = words[cmd_start..].join(" ");
+    // Re-quote remaining tokens so any literal whitespace they contain
+    // survives downstream re-tokenization. Single-quote unless the
+    // value itself contains a single quote, in which case fall back to
+    // double quotes (good enough for common cases; this code path is
+    // reached only after inline vars and is meant to preserve the
+    // command exactly as the user wrote it).
+    let remaining: String = words[cmd_start..]
+        .iter()
+        .map(|w| reshell_quote(w))
+        .collect::<Vec<_>>()
+        .join(" ");
     (vars, remaining)
+}
+
+/// Re-emit a token with shell quoting so a downstream tokenizer sees
+/// the same structure. Plain tokens (no whitespace, no shell metachars)
+/// are returned as-is. Tokens with whitespace get single-quoted (or
+/// double-quoted if they contain a single quote already).
+fn reshell_quote(token: &str) -> String {
+    let needs_quoting = token.is_empty()
+        || token.chars().any(|c| matches!(c,
+            ' ' | '\t' | '\n' | '|' | '&' | ';' | '<' | '>' | '(' | ')' | '$' | '`' | '"' | '\'' | '\\'
+        ));
+    if !needs_quoting {
+        return token.to_string();
+    }
+    if !token.contains('\'') {
+        return format!("'{token}'");
+    }
+    // Escape `\` and `"` for double-quoted form.
+    let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 // ── Chain Splitting ─────────────────────────────────────────────────
@@ -1644,8 +1708,31 @@ mod tests {
     #[test]
     fn extract_assignment_not_inline() {
         // "x=5" alone is an assignment, not an inline var
-        let (vars, _cmd) = extract_inline_env_vars("x=5");
-        assert_eq!(vars.len(), 1); // It's extracted but no command follows
+        let (vars, cmd) = extract_inline_env_vars("x=5");
+        assert_eq!(vars.len(), 1);
+        // Pure-assignment case returns an empty remainder so dispatch
+        // doesn't re-run the original `x=5` as a command.
+        assert!(cmd.is_empty(), "pure assignment must return empty remainder, got {cmd:?}");
+    }
+
+    #[test]
+    fn extract_inline_quoted_multiword_value() {
+        // The whole point of switching extract_inline_env_vars to use
+        // parse_command_line: `foo="a b c"` must be one assignment, not
+        // three split tokens (which would yield foo=a + leftover `b c"`
+        // as a bogus command). #298 was the ticket.
+        let (vars, cmd) = extract_inline_env_vars(r#"foo="a b c""#);
+        assert_eq!(vars, vec![("foo".to_string(), "a b c".to_string())]);
+        assert!(cmd.is_empty());
+    }
+
+    #[test]
+    fn extract_inline_quoted_with_following_command() {
+        let (vars, cmd) = extract_inline_env_vars(r#"FOO="hello world" echo done"#);
+        assert_eq!(vars, vec![("FOO".to_string(), "hello world".to_string())]);
+        // Command leftover must survive re-quote so the downstream
+        // tokenizer sees the original structure.
+        assert_eq!(cmd, "echo done");
     }
 
     // ── Brace group ─────────────────────────────────────────────────

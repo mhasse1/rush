@@ -1798,6 +1798,7 @@ mod tests {
         assert_eq!(parse_command_line(r"echo hello\ world"), vec!["echo", "hello world"]);
     }
 
+
     // ── #271: backslash-escaped paths must survive IFS / glob /
     //         brace expansion in parse_and_expand ───────────────────────
     //
