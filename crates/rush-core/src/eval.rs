@@ -915,6 +915,11 @@ impl<'a> Evaluator<'a> {
                 let expanded = self.expand_interpolation(command);
                 let result = process::run_native_capture(&expanded);
                 self.exit_code = result.exit_code;
+                // #274 secondary bug: $? was reading the thread-local
+                // LAST_EXIT_CODE which only the main dispatch loop updated,
+                // so `out = $(cmd); $?` read whatever was set before the
+                // capture (often empty). Update the thread-local here too.
+                process::set_last_exit_code(result.exit_code);
                 Ok(Value::String(result.stdout.trim_end().to_string()))
             }
 
@@ -1647,6 +1652,12 @@ impl<'a> Evaluator<'a> {
             "zero?" => Value::Bool(n == 0),
             "positive?" => Value::Bool(n > 0),
             "negative?" => Value::Bool(n < 0),
+            // Exit-status accessors for $? (#274). They're meaningful on
+            // any int — POSIX semantics treat zero as success, non-zero
+            // as failure — but they're documented as the $? interface.
+            "ok?" => Value::Bool(n == 0),
+            "failed?" => Value::Bool(n != 0),
+            "code" => Value::Int(n),
             "times" => {
                 if let Some(block) = block {
                     for i in 0..n {
@@ -1815,6 +1826,10 @@ impl<'a> Evaluator<'a> {
             "zero?" => Value::Bool(n == 0),
             "positive?" => Value::Bool(n > 0),
             "negative?" => Value::Bool(n < 0),
+            // Exit-status accessors for $? (#274).
+            "ok?" => Value::Bool(n == 0),
+            "failed?" => Value::Bool(n != 0),
+            "code" => Value::Int(n),
             _ => Value::Nil,
         }
     }
@@ -2530,6 +2545,20 @@ mod tests {
         // Receivers that aren't bare variables have nothing to mutate;
         // the returned value is the only handle on the result.
         assert_eq!(eval_val("[1, 2].push(3).count"), Value::Int(3));
+    }
+
+    #[test]
+    fn dollar_question_predicates() {
+        // #274: $?.ok? / .failed? / .code on the exit-status int.
+        crate::process::set_last_exit_code(0);
+        assert_eq!(eval_val("$?.ok?"), Value::Bool(true));
+        assert_eq!(eval_val("$?.failed?"), Value::Bool(false));
+        assert_eq!(eval_val("$?.code"), Value::Int(0));
+        crate::process::set_last_exit_code(7);
+        assert_eq!(eval_val("$?.ok?"), Value::Bool(false));
+        assert_eq!(eval_val("$?.failed?"), Value::Bool(true));
+        assert_eq!(eval_val("$?.code"), Value::Int(7));
+        crate::process::set_last_exit_code(0);
     }
 
     #[test]
