@@ -857,7 +857,21 @@ impl<'a> Evaluator<'a> {
                     .iter()
                     .map(|a| self.eval_node(a))
                     .collect::<Result<_, _>>()?;
-                Ok(self.call_method(&recv, method, &arg_vals, block.as_deref()))
+                let result = self.call_method(&recv, method, &arg_vals, block.as_deref());
+
+                // Mutating array methods (#275): if the receiver is a bare
+                // variable reference, write the new array back so the
+                // mutation is visible to subsequent reads. For receivers
+                // that aren't variables (literals, expressions), there's
+                // nothing to mutate — the returned value is the only
+                // result the caller gets.
+                if matches!(&recv, Value::Array(_))
+                    && matches!(method.as_str(), "push" | "append")
+                    && let Node::VariableRef { name } = receiver.as_ref()
+                {
+                    self.env.set(name, result.clone());
+                }
+                Ok(result)
             }
 
             Node::PropertyAccess { receiver, property } => {
@@ -2501,6 +2515,21 @@ mod tests {
         assert_eq!(eval_val("[1, 2, 3].last"), Value::Int(3));
         assert_eq!(eval_val("[].empty?"), Value::Bool(true));
         assert_eq!(eval_val("[1, 2, 3].sum"), Value::Int(6));
+    }
+
+    #[test]
+    fn array_push_mutates_variable() {
+        // #275: .push on a bare variable mutates in place; subsequent
+        // reads see the appended value.
+        assert_eq!(eval_val("arr = []; arr.push(1); arr.push(2); arr.count"), Value::Int(2));
+        assert_eq!(eval_val("arr = [1]; arr.append(2, 3); arr.count"), Value::Int(3));
+    }
+
+    #[test]
+    fn array_push_on_literal_returns_new() {
+        // Receivers that aren't bare variables have nothing to mutate;
+        // the returned value is the only handle on the result.
+        assert_eq!(eval_val("[1, 2].push(3).count"), Value::Int(3));
     }
 
     #[test]
