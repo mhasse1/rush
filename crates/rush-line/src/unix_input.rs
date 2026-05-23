@@ -61,19 +61,10 @@ impl UnixInput {
     /// Block until at least one event is available, then return it.
     /// Mirrors `crossterm::event::read()` for the engine's perspective.
     pub fn next_event(&mut self) -> io::Result<Event> {
-        let mut iters = 0u64;
         loop {
             if let Some(evt) = self.queue.pop_front() {
-                crate::trace!("next_event", "emit qlen={} iters={iters}", self.queue.len());
+                crate::trace!("next_event", "emit qlen={}", self.queue.len());
                 return Ok(evt);
-            }
-            iters += 1;
-            // Defensive: if we somehow loop without making progress for
-            // an absurd number of iterations, the trace will surface it
-            // and we'll bail rather than hang the world.
-            if iters > 10_000 {
-                crate::trace!("next_event", "BAIL: 10k iters without emit");
-                return Err(io::Error::other("next_event spin guard tripped"));
             }
             self.fill_queue()?;
         }
