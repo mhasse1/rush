@@ -221,7 +221,7 @@ file_stdlib:
 
 # ── STDLIB: Dir ──────────────────────────────────────────────────
 dir_stdlib:
-  - "Dir.list(path, type:nil, recursive:false, hidden:false) — list entries"
+  - "Dir.list(path, type:nil, recursive:false, hidden:false) — list entries; each entry is a hash {name, path, full_path, is_dir, size}"
   - "Dir.list(path, :files) — shorthand for type:'file'"
   - "Dir.list(path, :dirs) — shorthand for type:'dir'"
   - "Dir.list(path, :recurse) — shorthand for recursive:true"

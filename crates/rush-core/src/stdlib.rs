@@ -278,16 +278,22 @@ fn collect_dir_entries(
         if dirs_only && !is_dir {
             continue;
         }
-        // Non-recursive mode returns basenames (the caller knows the dir);
-        // recursive mode returns full joined paths so each entry carries
-        // its parent chain and scripts can reconstruct the file's location
-        // without a parallel bookkeeping pass (#257).
-        let display = if recurse {
-            entry.path().to_string_lossy().to_string()
-        } else {
-            name.clone()
-        };
-        entries.push(Value::String(display));
+        // Per spec (#276): each entry is a hash with name/path/is_dir/size,
+        // not a plain string. The chaining example `... .each |f| puts f.name`
+        // assumes object entries. `path` is the joined location (basename
+        // in non-recurse mode, full path in recurse mode — preserves the
+        // #257 fix where recursive entries carry their parent chain).
+        let full_path = entry.path().to_string_lossy().to_string();
+        let size = entry.metadata().map(|m| m.len() as i64).unwrap_or(0);
+        let path_for_display = if recurse { full_path.clone() } else { name.clone() };
+
+        let mut hash = std::collections::HashMap::new();
+        hash.insert("name".to_string(), Value::String(name.clone()));
+        hash.insert("path".to_string(), Value::String(path_for_display));
+        hash.insert("full_path".to_string(), Value::String(full_path));
+        hash.insert("is_dir".to_string(), Value::Bool(is_dir));
+        hash.insert("size".to_string(), Value::Int(size));
+        entries.push(Value::Hash(hash));
         if recurse && is_dir {
             collect_dir_entries(
                 &entry.path().to_string_lossy(),
