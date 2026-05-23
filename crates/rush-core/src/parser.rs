@@ -236,6 +236,17 @@ impl Parser {
         };
 
         self.skip_newlines();
+        // #259: catch the Ruby/JS habit of writing `for x in y do ... end`
+        // before parse_body's generic error eats it as "unexpected Do".
+        if self.check(TokenType::Do) {
+            return Err(ParseError {
+                message: "'do' is not used in a 'for' loop. Use \
+                          `for item in collection ... end`, or chain \
+                          `.each do |item| ... end` on the collection."
+                    .into(),
+                position: self.current().position,
+            });
+        }
         let body = self.parse_body(&[TokenType::End])?;
         self.expect(TokenType::End)?;
         Ok(Node::For {
@@ -1882,6 +1893,17 @@ mod tests {
     fn for_loop() {
         let nodes = parse("for x in [1,2,3]\n  puts x\nend").unwrap();
         assert!(matches!(&nodes[0], Node::For { variable, .. } if variable == "x"));
+    }
+
+    #[test]
+    fn for_with_do_gives_targeted_hint() {
+        // #259: Ruby/JS habit — make the error point at the actual fix
+        // rather than the generic "unexpected token Do".
+        let err = parse("for x in [1,2,3] do\n  puts x\nend").unwrap_err();
+        assert!(
+            err.message.contains("'do' is not used in a 'for' loop"),
+            "want pointed hint, got: {}", err.message
+        );
     }
 
     #[test]
