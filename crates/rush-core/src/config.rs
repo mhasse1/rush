@@ -35,6 +35,11 @@ pub struct RushConfig {
     pub accent: String,
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// If true, a bare directory path at the prompt (e.g. `~/src/mcp/rush`
+    /// or `../foo`) is treated as `cd <path>`. Default off until soaked.
+    /// Toggle at runtime with `set -o autocd` / `set +o autocd`. See #277.
+    #[serde(default)]
+    pub auto_cd: bool,
 }
 
 fn default_vi() -> String { "vi".to_string() }
@@ -59,6 +64,7 @@ impl Default for RushConfig {
             flavor: "muted".into(),
             accent: String::new(),
             aliases: HashMap::new(),
+            auto_cd: false,
         }
     }
 }

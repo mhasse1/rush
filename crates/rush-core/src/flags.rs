@@ -14,6 +14,7 @@ static NOTIFY: AtomicBool = AtomicBool::new(false);      // set -b
 static NOUNSET: AtomicBool = AtomicBool::new(false);     // set -u
 static NOEXEC: AtomicBool = AtomicBool::new(false);      // set -n
 static MONITOR: AtomicBool = AtomicBool::new(false);     // set -m
+static AUTOCD: AtomicBool = AtomicBool::new(false);      // set -o autocd (#277)
 
 /// set -e: exit on non-zero pipeline status
 pub fn errexit() -> bool { ERREXIT.load(Ordering::Relaxed) }
@@ -55,8 +56,27 @@ pub fn set_noexec(val: bool) { NOEXEC.store(val, Ordering::Relaxed); }
 pub fn monitor() -> bool { MONITOR.load(Ordering::Relaxed) }
 pub fn set_monitor(val: bool) { MONITOR.store(val, Ordering::Relaxed); }
 
+/// set -o autocd: bare directory path acts as `cd <path>` (#277).
+pub fn autocd() -> bool { AUTOCD.load(Ordering::Relaxed) }
+pub fn set_autocd(val: bool) { AUTOCD.store(val, Ordering::Relaxed); }
+
 /// Handle POSIX `set` flag arguments. Returns true if handled.
 pub fn handle_set_flag(flag: &str) -> bool {
+    // `set -o NAME` / `set +o NAME` — normalize to a single token so the
+    // match below can pattern-match the option name. Currently autocd is
+    // the only named option; add more as they appear.
+    if let Some(name) = flag.strip_prefix("-o ") {
+        return match name.trim() {
+            "autocd" => { set_autocd(true); true }
+            _ => false,
+        };
+    }
+    if let Some(name) = flag.strip_prefix("+o ") {
+        return match name.trim() {
+            "autocd" => { set_autocd(false); true }
+            _ => false,
+        };
+    }
     match flag {
         "-e" => { set_errexit(true); true }
         "+e" => { set_errexit(false); true }
@@ -78,6 +98,13 @@ pub fn handle_set_flag(flag: &str) -> bool {
         "+n" => { set_noexec(false); true }
         "-m" => { set_monitor(true); true }
         "+m" => { set_monitor(false); true }
+        // `-o NAME` / `+o NAME` long-form options. Caller splits on
+        // whitespace, so `-o` may arrive alone; handle that in the
+        // dispatch layer where the next token is in reach. Here we only
+        // recognise the explicit form `set -o autocd` users sometimes
+        // write as one shell-word.
+        "-oautocd" | "-o:autocd" => { set_autocd(true); true }
+        "+oautocd" | "+o:autocd" => { set_autocd(false); true }
         _ => false,
     }
 }

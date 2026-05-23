@@ -54,6 +54,11 @@ pub fn run(is_login: bool) {
     // Record the session baseline bg so `.rushbg` autoload (on cd) can
     // revert to it when leaving an override directory.
     builtins::set_baseline_bg(&config.bg);
+    // #277: initialize autocd from config; `set -o autocd` overrides at
+    // runtime.
+    if config.auto_cd {
+        rush_core::flags::set_autocd(true);
+    }
 
     let detected_theme = theme::initialize();
 

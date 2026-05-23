@@ -128,6 +128,11 @@ pub fn run(is_login: bool) {
         unsafe { std::env::set_var("RUSH_ACCENT", &config.accent) };
     }
     builtins::set_baseline_bg(&config.bg);
+    // #277: autocd flag initial state is config-controlled. The runtime
+    // toggle `set -o autocd` overrides for the session.
+    if config.auto_cd {
+        rush_core::flags::set_autocd(true);
+    }
 
     let detected_theme = theme::initialize();
 

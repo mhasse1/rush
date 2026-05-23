@@ -594,6 +594,36 @@ pub fn dispatch_with_jobs_and_builtins(
                     evaluator.exit_code = 1;
                 }
             }
+        } else if flags::autocd() && segment_resolves_to_directory(segment) {
+            // #277: bare directory path acts as `cd <path>`. Only applies
+            // when:
+            //   - autocd is enabled (config or `set -o autocd`)
+            //   - the segment is a single token (no args / pipes / etc.)
+            //   - that token resolves to an existing directory (NOT a
+            //     regular file — avoids "I typed a filename and somehow
+            //     cd'd" surprises)
+            // PATH resolution is *not* re-tried here, so a directory
+            // named "mv" can't hijack the binary.
+            let target = segment.trim();
+            let (path, via_cdpath) = process::resolve_cd_target(target);
+            match std::env::set_current_dir(&path) {
+                Ok(()) => {
+                    last_exit = 0;
+                    last_failed = false;
+                    evaluator.exit_code = 0;
+                    if via_cdpath {
+                        if let Ok(abs) = std::env::current_dir() {
+                            println!("{}", abs.display());
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("cd: {path}: {e}");
+                    last_exit = 1;
+                    last_failed = true;
+                    evaluator.exit_code = 1;
+                }
+            }
         } else {
             // External command — fork/exec with inherited TTY
             let result = process::run_native(segment);
@@ -662,6 +692,34 @@ pub fn dispatch_simple(line: &str, evaluator: &mut Evaluator) -> i32 {
 /// Triggers only when the entire segment after trim is dots — so
 /// `cd ..` (which starts with `c`), `.foo` (mixed), and `..rs` (mixed)
 /// are unaffected. A single `.` is *not* expanded; that's the POSIX
+/// #277: returns true if the segment is a single bare path token that
+/// resolves to an existing directory. Used to gate autocd. Rejects
+/// anything that looks like a command-with-args, a pipeline, or a
+/// rush-syntax expression so we don't mis-route real commands.
+fn segment_resolves_to_directory(segment: &str) -> bool {
+    let trimmed = segment.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Reject anything multi-token / piped / redirected / chained. The
+    // caller will already have split chains at this point, but defense
+    // in depth — if any of these chars are in the trimmed segment, this
+    // isn't a bare path.
+    if trimmed.chars().any(|c| matches!(c, '|' | '>' | '<' | ';' | '&' | '`')) {
+        return false;
+    }
+    // Tokenize to confirm exactly one word (allows quoted/escaped paths
+    // like `"My Documents"` or `My\ Documents`).
+    let tokens = process::parse_command_line(trimmed);
+    if tokens.len() != 1 {
+        return false;
+    }
+    let (path, _) = process::resolve_cd_target(&tokens[0]);
+    // Must be a *directory*, not a regular file — typing a filename
+    // shouldn't cd anywhere.
+    std::path::Path::new(&path).is_dir()
+}
+
 /// "source" builtin and the no-op cd-here, both of which we don't want
 /// to override.
 fn expand_bare_dots(segment: &str) -> Option<String> {
