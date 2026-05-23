@@ -1125,9 +1125,17 @@ impl<'a> Evaluator<'a> {
                 }
             }
 
+            Node::PlatformBlock { platform, body, property, operator, property_value } => {
+                if platform_block_matches(platform, property.as_deref(), operator.as_deref(), property_value.as_deref()) {
+                    if let Some(stmts) = body {
+                        return self.exec(stmts);
+                    }
+                }
+                Ok(Value::Nil)
+            }
+
             Node::StaticMember { .. }
             | Node::SuperCall { .. }
-            | Node::PlatformBlock { .. }
             | Node::ShellPassthrough { .. }
             | Node::NamedArg { .. } => Ok(Value::Nil),
         }
@@ -2227,6 +2235,72 @@ impl<'a> Evaluator<'a> {
     }
 }
 
+/// #301: decide whether a `macos`/`linux`/`win64`/`win32`/`isssh` block
+/// should execute on the current system. Reads RUSH_OS / RUSH_ARCH /
+/// RUSH_OS_VERSION (set by `inject_env_vars` at REPL startup). When a
+/// property/operator/value are supplied (e.g. `macos.version >= 14`),
+/// the property value on the host is compared with the requested value
+/// using the operator; numeric values use numeric comparison, otherwise
+/// string comparison.
+fn platform_block_matches(
+    platform: &str,
+    property: Option<&str>,
+    operator: Option<&str>,
+    property_value: Option<&str>,
+) -> bool {
+    let rush_os = std::env::var("RUSH_OS").unwrap_or_default();
+    let rush_arch = std::env::var("RUSH_ARCH").unwrap_or_default();
+
+    let os_matches = match platform {
+        "macos" => rush_os == "macos",
+        "linux" => rush_os == "linux",
+        "win64" | "win32" => rush_os == "windows",
+        "isssh" => std::env::var("SSH_CONNECTION").is_ok()
+            || std::env::var("SSH_CLIENT").is_ok()
+            || std::env::var("SSH_TTY").is_ok(),
+        _ => false,
+    };
+    if !os_matches {
+        return false;
+    }
+
+    let (Some(prop), Some(op), Some(val)) = (property, operator, property_value) else {
+        // No property guard — bare platform match.
+        return true;
+    };
+    let host = match prop {
+        "version" => std::env::var("RUSH_OS_VERSION").unwrap_or_default(),
+        "arch" => rush_arch,
+        _ => return false,
+    };
+    compare_strings(&host, op, val)
+}
+
+fn compare_strings(host: &str, op: &str, want: &str) -> bool {
+    // Try numeric first — `macos.version >= 14` should compare as
+    // numbers even though the env var is a string like "14.5".
+    if let (Ok(h), Ok(w)) = (host.parse::<f64>(), want.parse::<f64>()) {
+        return match op {
+            "==" => (h - w).abs() < f64::EPSILON,
+            "!=" => (h - w).abs() >= f64::EPSILON,
+            "<" => h < w,
+            "<=" => h <= w,
+            ">" => h > w,
+            ">=" => h >= w,
+            _ => false,
+        };
+    }
+    match op {
+        "==" => host == want,
+        "!=" => host != want,
+        "<" => host < want,
+        "<=" => host <= want,
+        ">" => host > want,
+        ">=" => host >= want,
+        _ => false,
+    }
+}
+
 /// Wrap `s` in an ANSI SGR color code unless NO_COLOR is set. The method
 /// name picks the color; unknown names return the input unchanged.
 fn ansi_wrap(s: &str, method: &str) -> String {
@@ -2545,6 +2619,49 @@ mod tests {
         // Receivers that aren't bare variables have nothing to mutate;
         // the returned value is the only handle on the result.
         assert_eq!(eval_val("[1, 2].push(3).count"), Value::Int(3));
+    }
+
+    #[test]
+    fn platform_block_runs_on_match() {
+        // #301: macos/linux/win64/isssh blocks execute their body when
+        // RUSH_OS matches.
+        let prev = std::env::var("RUSH_OS").ok();
+        unsafe { std::env::set_var("RUSH_OS", "macos"); }
+        let output = eval_output("macos\n  puts \"ran\"\nend\nputs \"after\"");
+        assert_eq!(output, vec!["ran", "after"]);
+
+        unsafe { std::env::set_var("RUSH_OS", "linux"); }
+        let output = eval_output("macos\n  puts \"should-not-run\"\nend\nputs \"after\"");
+        assert_eq!(output, vec!["after"]);
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("RUSH_OS", v); }
+            None => unsafe { std::env::remove_var("RUSH_OS"); }
+        }
+    }
+
+    #[test]
+    fn platform_block_version_guard() {
+        // #301: `macos.version >= 14` compares numerically when possible.
+        let prev_os = std::env::var("RUSH_OS").ok();
+        let prev_ver = std::env::var("RUSH_OS_VERSION").ok();
+        unsafe { std::env::set_var("RUSH_OS", "macos"); }
+        unsafe { std::env::set_var("RUSH_OS_VERSION", "15"); }
+        let output = eval_output("macos.version >= 14\n  puts \"new-enough\"\nend");
+        assert_eq!(output, vec!["new-enough"]);
+
+        unsafe { std::env::set_var("RUSH_OS_VERSION", "13"); }
+        let output = eval_output("macos.version >= 14\n  puts \"too-old\"\nend\nputs \"after\"");
+        assert_eq!(output, vec!["after"]);
+
+        match prev_os {
+            Some(v) => unsafe { std::env::set_var("RUSH_OS", v); }
+            None => unsafe { std::env::remove_var("RUSH_OS"); }
+        }
+        match prev_ver {
+            Some(v) => unsafe { std::env::set_var("RUSH_OS_VERSION", v); }
+            None => unsafe { std::env::remove_var("RUSH_OS_VERSION"); }
+        }
     }
 
     #[test]

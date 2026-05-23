@@ -881,7 +881,10 @@ impl Parser {
         let value = if self.check(TokenType::StringLiteral) {
             let raw = self.advance_clone().value;
             raw.trim_matches('"').trim_matches('\'').to_string()
-        } else if self.check(TokenType::Identifier) {
+        } else if self.check(TokenType::Identifier)
+            || self.check(TokenType::Integer)
+            || self.check(TokenType::Float)
+        {
             self.advance_clone().value
         } else {
             return Err(self.err(format!("Expected value after .{property} {op}")));
