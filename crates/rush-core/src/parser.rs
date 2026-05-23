@@ -145,10 +145,11 @@ impl Parser {
             TokenType::Return => self.parse_return()?,
             TokenType::Try | TokenType::Begin => self.parse_try()?,
             TokenType::Case => self.parse_case()?,
-            TokenType::Macos | TokenType::Win64 | TokenType::Linux | TokenType::Isssh => {
-                self.parse_platform_block()?
-            }
-            TokenType::Win32 => self.parse_win32_block()?,
+            TokenType::Macos
+            | TokenType::Win64
+            | TokenType::Linux
+            | TokenType::Win32
+            | TokenType::Isssh => self.parse_platform_block()?,
             TokenType::Plugin => self.parse_plugin_block()?,
             TokenType::Next | TokenType::Continue | TokenType::Break => {
                 self.parse_loop_control()?
@@ -811,25 +812,9 @@ impl Parser {
         Ok(Node::PlatformBlock {
             platform,
             body: Some(body),
-            raw_body: None,
             property,
             operator,
             property_value,
-        })
-    }
-
-    fn parse_win32_block(&mut self) -> ParseResult<Node> {
-        self.pos += 1; // skip 'win32'
-        self.skip_newlines();
-        let raw_body = self.capture_raw_body();
-        self.expect(TokenType::End)?;
-        Ok(Node::PlatformBlock {
-            platform: "win32".to_string(),
-            body: None,
-            raw_body: Some(raw_body),
-            property: None,
-            operator: None,
-            property_value: None,
         })
     }
 

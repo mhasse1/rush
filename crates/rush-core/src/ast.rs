@@ -250,11 +250,10 @@ pub enum Node {
         method_name: Option<String>,
     },
 
-    /// Platform block: `macos/win64/linux ... end` or `win32/ps/ps5 ... end`
+    /// Platform block: `macos/win64/linux/win32/isssh ... end`
     PlatformBlock {
         platform: String,
-        body: Option<Vec<Node>>,     // parsed (macos/win64/linux)
-        raw_body: Option<String>,     // raw PS (win32/ps/ps5)
+        body: Option<Vec<Node>>,
         property: Option<String>,     // ".version", ".arch"
         operator: Option<String>,     // "==", ">=", etc.
         property_value: Option<String>,
