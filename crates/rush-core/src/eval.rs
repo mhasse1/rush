@@ -1185,9 +1185,14 @@ impl<'a> Evaluator<'a> {
             }
             TokenType::Float => Value::Float(value.parse().unwrap_or(0.0)),
             TokenType::StringLiteral => {
-                // Strip quotes
-                let s = if (value.starts_with('"') && value.ends_with('"'))
-                    || (value.starts_with('\'') && value.ends_with('\''))
+                // Strip quotes. The `len >= 2` guard is load-bearing: a
+                // single `"` or `'` matches both `starts_with` and
+                // `ends_with` of the same quote, and `[1..0]` panics.
+                // Surfaces on Windows where `puts $PATH` can produce a
+                // bare `"` token through the cmd.exe handoff.
+                let s = if value.len() >= 2
+                    && ((value.starts_with('"') && value.ends_with('"'))
+                        || (value.starts_with('\'') && value.ends_with('\'')))
                 {
                     &value[1..value.len() - 1]
                 } else {
