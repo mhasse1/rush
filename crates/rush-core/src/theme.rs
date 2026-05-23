@@ -1094,15 +1094,72 @@ pub fn initialize() -> Theme {
 
 // ── .rushbg support ─────────────────────────────────────────────────
 
-/// Check for .rushbg file in current directory (per-project background).
+/// Check for a `.rushbg` file in the current directory or any ancestor
+/// up to the home dir / filesystem root, returning the first match.
+/// Walking upward is what makes "set a project bg at the project root
+/// and have it apply in all subfolders" work (#298). Stops at HOME (or
+/// root if HOME isn't in the ancestor chain) so we don't unexpectedly
+/// inherit a `.rushbg` from somewhere outside the user's tree.
 pub fn load_rushbg() -> Option<String> {
-    std::fs::read_to_string(".rushbg").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    let cwd = std::env::current_dir().ok()?;
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(std::path::PathBuf::from);
+
+    let mut dir = cwd.as_path();
+    loop {
+        let candidate = dir.join(".rushbg");
+        if let Ok(contents) = std::fs::read_to_string(&candidate) {
+            let trimmed = contents.trim().to_string();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+        // Stop at HOME so .rushbg from outside the user's tree doesn't
+        // leak in (an enterprise multi-user box could have a `.rushbg`
+        // in `/` that we don't want to inherit).
+        if let Some(h) = home.as_deref() && dir == h {
+            return None;
+        }
+        dir = match dir.parent() {
+            Some(parent) => parent,
+            None => return None,
+        };
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::approx_constant)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rushbg_walks_to_ancestor() {
+        // #298: .rushbg in a parent should be picked up from subdirs.
+        let root = std::env::temp_dir().join(format!("rush_rushbg_{}", std::process::id()));
+        let sub = root.join("sub/deep");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(root.join(".rushbg"), "#2D6A4F\n").unwrap();
+
+        let prev = std::env::current_dir().ok();
+        let prev_home = std::env::var("HOME").ok();
+        // Disable HOME-stop by pointing it elsewhere so the walk goes
+        // all the way up if needed; the .rushbg lives within /tmp so we
+        // hit it before the HOME boundary.
+        unsafe { std::env::set_var("HOME", "/tmp/rush_rushbg_nowhere"); }
+        std::env::set_current_dir(&sub).unwrap();
+
+        let found = load_rushbg();
+        assert_eq!(found.as_deref(), Some("#2D6A4F"));
+
+        if let Some(c) = prev { let _ = std::env::set_current_dir(c); }
+        match prev_home {
+            Some(v) => unsafe { std::env::set_var("HOME", v); }
+            None => unsafe { std::env::remove_var("HOME"); }
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     #[test]
     fn luminance_black() {
