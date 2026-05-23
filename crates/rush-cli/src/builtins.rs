@@ -449,22 +449,44 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
     let unquoted = tokens.first().map(String::as_str).unwrap_or("").to_string();
     let target = unquoted.as_str();
 
-    let path = if target.is_empty() || target == "~" {
-        home_dir()
-    } else if target == "-" {
+    // `cd -` swaps with OLDPWD and prints the destination — handled here
+    // rather than in resolve_cd_target so the print is local to cd.
+    if target == "-" {
         let prev = OLDPWD.with(|p| p.borrow().clone()).unwrap_or_else(home_dir);
         println!("{prev}");
-        prev
-    } else if let Some(rest) = target.strip_prefix("~/") {
-        format!("{}/{rest}", home_dir())
-    } else {
-        target.to_string()
-    };
+        let (path, via_cdpath) = (prev, false);
+        match std::env::set_current_dir(&path) {
+            Ok(()) => {
+                OLDPWD.with(|p| *p.borrow_mut() = Some(current));
+                evaluator.exit_code = 0;
+                if via_cdpath {
+                    if let Ok(abs) = std::env::current_dir() {
+                        println!("{}", abs.display());
+                    }
+                }
+                apply_rushbg_for_cwd();
+            }
+            Err(e) => {
+                eprintln!("cd: {path}: {e}");
+                evaluator.exit_code = 1;
+            }
+        }
+        return;
+    }
+
+    let (path, via_cdpath) = rush_core::process::resolve_cd_target(target);
 
     match std::env::set_current_dir(&path) {
         Ok(()) => {
             OLDPWD.with(|p| *p.borrow_mut() = Some(current));
             evaluator.exit_code = 0;
+            // POSIX: when CDPATH resolved the lookup, print the absolute
+            // path so the user knows which root matched.
+            if via_cdpath {
+                if let Ok(abs) = std::env::current_dir() {
+                    println!("{}", abs.display());
+                }
+            }
             apply_rushbg_for_cwd();
         }
         Err(e) => {
@@ -473,6 +495,9 @@ fn handle_cd(evaluator: &mut Evaluator, target: &str) {
         }
     }
 }
+
+// resolve_cd_target lives in rush_core::process so dispatch.rs's chain-
+// aware cd handler and this builtin share the same CDPATH logic (#278).
 
 // ── export / unset ──────────────────────────────────────────────────
 

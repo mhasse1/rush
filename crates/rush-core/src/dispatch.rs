@@ -351,15 +351,18 @@ pub fn dispatch_with_jobs_and_builtins(
             #[allow(clippy::useless_asref)]
             let parts = process::parse_command_line(parse_input.as_ref());
             let target = parts.get(1).map(String::as_str).unwrap_or("");
-            let path = if target.is_empty() || target == "~" {
-                std::env::var("HOME").unwrap_or_else(|_| ".".into())
-            } else if let Some(rest) = target.strip_prefix("~/") {
-                format!("{}/{rest}", std::env::var("HOME").unwrap_or_default())
-            } else {
-                target.to_string()
-            };
+            // CDPATH-aware resolution (#278). Absolute/tilde/./../ targets
+            // bypass CDPATH per POSIX.
+            let (path, via_cdpath) = process::resolve_cd_target(target);
             match std::env::set_current_dir(&path) {
-                Ok(()) => { last_exit = 0; last_failed = false; }
+                Ok(()) => {
+                    last_exit = 0; last_failed = false;
+                    if via_cdpath {
+                        if let Ok(abs) = std::env::current_dir() {
+                            println!("{}", abs.display());
+                        }
+                    }
+                }
                 Err(e) => { eprintln!("cd: {path}: {e}"); last_exit = 1; last_failed = true; }
             }
             evaluator.exit_code = last_exit;

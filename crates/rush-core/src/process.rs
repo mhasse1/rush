@@ -1226,6 +1226,64 @@ pub fn set_last_exit_code(code: i32) {
 /// Public wrapper for IFS split tests.
 pub fn ifs_split_pub(word: &str, ifs: &str) -> Vec<String> { ifs_split(word, ifs) }
 
+// ── cd / CDPATH resolution (#278) ───────────────────────────────────
+//
+// Both dispatch.rs's chain-aware cd handler and rush-cli's handle_cd
+// builtin call this. POSIX rule: CDPATH applies only to bare names —
+// absolute paths, `~`-prefixed paths, and `./` / `../` targets bypass
+// it entirely. Empty CDPATH entries are treated as cwd. On a CDPATH
+// hit the caller prints the absolute path (matches bash); we return
+// `via_cdpath = true` to signal that.
+pub fn resolve_cd_target(target: &str) -> (String, bool) {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    if target.is_empty() || target == "~" {
+        return (home, false);
+    }
+    if let Some(rest) = target.strip_prefix("~/") {
+        return (format!("{home}/{rest}"), false);
+    }
+
+    let is_absolute = std::path::Path::new(target).is_absolute();
+    let is_explicit_relative = target.starts_with("./")
+        || target.starts_with("../")
+        || target == "."
+        || target == "..";
+    if is_absolute || is_explicit_relative {
+        return (target.to_string(), false);
+    }
+
+    // Plain name. Try cwd first.
+    if std::path::Path::new(target).is_dir() {
+        return (target.to_string(), false);
+    }
+    let cdpath = std::env::var("CDPATH").unwrap_or_default();
+    if cdpath.is_empty() {
+        return (target.to_string(), false);
+    }
+    let sep = if cfg!(windows) { ';' } else { ':' };
+    for entry in cdpath.split(sep) {
+        let candidate = if entry.is_empty() {
+            target.to_string()
+        } else {
+            let entry_expanded = if let Some(rest) = entry.strip_prefix("~/") {
+                format!("{home}/{rest}")
+            } else if entry == "~" {
+                home.clone()
+            } else {
+                entry.to_string()
+            };
+            format!("{entry_expanded}/{target}")
+        };
+        if std::path::Path::new(&candidate).is_dir() {
+            return (candidate, !entry.is_empty());
+        }
+    }
+    (target.to_string(), false)
+}
+
 /// Normalize a path-like value for Rush's internal representation.
 /// On Windows, converts backslashes to forward slashes so paths are
 /// consistent across platforms. On Unix, this is a no-op.
@@ -2016,6 +2074,60 @@ mod tests {
         let result = run_native_capture("echo hello");
         assert_eq!(result.stdout.trim(), "hello");
         assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cdpath_hit_returns_full_path() {
+        // #278: bare name found via CDPATH returns the joined path and
+        // signals via_cdpath=true.
+        let root = std::env::temp_dir().join(format!("rush_cdpath_{}", std::process::id()));
+        std::fs::create_dir_all(root.join("hit")).unwrap();
+        // Need to set CDPATH and cwd; do it in a guarded scope.
+        let prev_cdpath = std::env::var("CDPATH").ok();
+        let prev_cwd = std::env::current_dir().ok();
+        unsafe { std::env::set_var("CDPATH", root.to_string_lossy().as_ref()); }
+        std::env::set_current_dir(std::env::temp_dir()).unwrap();
+
+        let (path, via) = resolve_cd_target("hit");
+        let expected = root.join("hit").to_string_lossy().to_string();
+        assert_eq!(path, expected);
+        assert!(via);
+
+        match prev_cdpath {
+            Some(v) => unsafe { std::env::set_var("CDPATH", v); }
+            None => unsafe { std::env::remove_var("CDPATH"); }
+        }
+        if let Some(c) = prev_cwd { let _ = std::env::set_current_dir(c); }
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cdpath_absolute_bypasses() {
+        // #278: absolute targets bypass CDPATH (no via_cdpath, path unchanged).
+        let prev_cdpath = std::env::var("CDPATH").ok();
+        unsafe { std::env::set_var("CDPATH", "/tmp/somewhere"); }
+        let (path, via) = resolve_cd_target("/usr");
+        assert_eq!(path, "/usr");
+        assert!(!via);
+        match prev_cdpath {
+            Some(v) => unsafe { std::env::set_var("CDPATH", v); }
+            None => unsafe { std::env::remove_var("CDPATH"); }
+        }
+    }
+
+    #[test]
+    fn cdpath_explicit_relative_bypasses() {
+        // #278: ./foo and ../foo bypass CDPATH per POSIX.
+        let prev_cdpath = std::env::var("CDPATH").ok();
+        unsafe { std::env::set_var("CDPATH", "/tmp/somewhere"); }
+        let (path, via) = resolve_cd_target("./foo");
+        assert_eq!(path, "./foo");
+        assert!(!via);
+        match prev_cdpath {
+            Some(v) => unsafe { std::env::set_var("CDPATH", v); }
+            None => unsafe { std::env::remove_var("CDPATH"); }
+        }
     }
 
     #[test]
