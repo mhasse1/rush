@@ -298,9 +298,136 @@ pub fn run_native_capture(line: &str) -> CommandResult {
         return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
     }
 
+    // Extract redirections — without this, tokens like `2>&1` would be
+    // passed as literal args to the command (#273).
+    let (parts, redirects) = extract_redirections(parts);
+    if parts.is_empty() {
+        return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
+    }
+
     let program = &parts[0];
     let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
-    run_command_capture(program, &args)
+
+    if redirects.is_empty() {
+        run_command_capture(program, &args)
+    } else {
+        run_with_redirects_capture(program, &args, &redirects)
+    }
+}
+
+/// Capture-context redirection handling: stdout is piped by default
+/// (the caller wants the output), and `2>&1` merges stderr into the
+/// captured stream. File redirects on stdout/stderr divert away from
+/// the capture as expected.
+fn run_with_redirects_capture(program: &str, args: &[&str], redirects: &[Redirect]) -> CommandResult {
+    let mut stdin_cfg = Stdio::inherit();
+    let mut stdout_cfg = Stdio::piped();
+    let mut stderr_cfg = Stdio::inherit();
+    let mut merge_stderr = false;
+
+    let mut stdin_file: Option<std::fs::File> = None;
+    let mut stdout_file: Option<std::fs::File> = None;
+    let mut stderr_file: Option<std::fs::File> = None;
+
+    for redirect in redirects {
+        match redirect {
+            Redirect::StdoutWrite(path) => {
+                if flags::noclobber() && std::path::Path::new(path).exists() {
+                    return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: cannot overwrite existing file (noclobber)"), exit_code: 1 };
+                }
+                match std::fs::File::create(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StdoutClobber(path) => {
+                match std::fs::File::create(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StdoutAppend(path) => {
+                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(f) => stdout_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StdinRead(path) => {
+                match std::fs::File::open(path) {
+                    Ok(f) => stdin_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StderrWrite(path) => {
+                match std::fs::File::create(path) {
+                    Ok(f) => stderr_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StderrAppend(path) => {
+                match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(f) => stderr_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::StderrToStdout => {
+                // Capture context: pipe stderr separately and append it
+                // to stdout after collection. Ordering between the two
+                // streams isn't guaranteed at byte-level the way a true
+                // fd-level dup2 would give — but for the common case
+                // (`$(cmd 2>&1)`) the merged content is what callers want.
+                merge_stderr = true;
+                stderr_cfg = Stdio::piped();
+            }
+            Redirect::ReadWrite(path) => {
+                match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path) {
+                    Ok(f) => stdin_file = Some(f),
+                    Err(e) => return CommandResult { stdout: String::new(), stderr: format!("rush: {path}: {e}"), exit_code: 1 },
+                }
+            }
+            Redirect::FdDup(_, _) => {}
+            Redirect::FdClose(fd) => {
+                match fd {
+                    0 => { stdin_file = None; stdin_cfg = Stdio::null(); }
+                    1 => { stdout_file = None; stdout_cfg = Stdio::null(); }
+                    2 => { stderr_file = None; stderr_cfg = Stdio::null(); }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    if let Some(f) = stdin_file { stdin_cfg = Stdio::from(f); }
+    if let Some(f) = stdout_file { stdout_cfg = Stdio::from(f); }
+    if let Some(f) = stderr_file { stderr_cfg = Stdio::from(f); }
+
+    let mut cmd = Command::new(program);
+    fixup_argv0(&mut cmd, program);
+    match cmd
+        .args(args)
+        .stdin(stdin_cfg)
+        .stdout(stdout_cfg)
+        .stderr(stderr_cfg)
+        .output()
+    {
+        Ok(output) => {
+            let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            if merge_stderr {
+                stdout.push_str(&stderr);
+            }
+            CommandResult {
+                stdout,
+                stderr: if merge_stderr { String::new() } else { stderr },
+                exit_code: output.status.code().unwrap_or(-1),
+            }
+        }
+        Err(e) => CommandResult {
+            stdout: String::new(),
+            stderr: format!("rush: {program}: {e}"),
+            exit_code: 127,
+        },
+    }
 }
 
 // ── Pipe Chains ─────────────────────────────────────────────────────
@@ -1897,6 +2024,27 @@ mod tests {
         let result = run_native_capture("echo hello | wc -c");
         let count: i32 = result.stdout.trim().parse().unwrap_or(0);
         assert!(count > 0, "expected byte count > 0, got {count}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn capture_strips_redirect_token() {
+        // #273: `2>&1` was being passed as a literal arg to echo.
+        let result = run_native_capture("echo hello 2>&1");
+        assert_eq!(result.stdout.trim(), "hello");
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn capture_merges_stderr_with_2to1() {
+        // #273: stderr should land in the captured stream when 2>&1 is set.
+        let result = run_native_capture(
+            "sh -c \"echo to-stderr 1>&2; echo to-stdout\" 2>&1"
+        );
+        assert!(result.stdout.contains("to-stdout"));
+        assert!(result.stdout.contains("to-stderr"));
+        assert_eq!(result.exit_code, 0);
     }
 
     #[test]
