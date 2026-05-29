@@ -2203,7 +2203,7 @@ impl<'a> Evaluator<'a> {
 
     /// Parse + evaluate a Rush expression source. Used by the interpolation
     /// helper; factored out so dispatch-side callers (export=) can reuse it.
-    fn eval_interpolated_expr(&mut self, src: &str) -> Result<Value, String> {
+    pub(crate) fn eval_interpolated_expr(&mut self, src: &str) -> Result<Value, String> {
         let nodes = crate::parser::parse(src).map_err(|e| format!("parse error: {e:?}"))?;
         if nodes.is_empty() {
             return Ok(Value::Nil);

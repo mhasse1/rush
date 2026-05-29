@@ -750,33 +750,75 @@ fn expand_bare_dots(segment: &str) -> Option<String> {
 /// double-quote interpolation rule.
 fn expand_shell_interpolation(segment: &str, evaluator: &mut crate::eval::Evaluator) -> String {
     let mut out = String::with_capacity(segment.len());
-    let mut buf = String::new();
     let mut in_single = false;
     let mut in_double = false;
-    for c in segment.chars() {
+    let mut chars = segment.chars().peekable();
+
+    while let Some(c) = chars.next() {
         if c == '\'' && !in_double {
-            if !in_single {
-                if !buf.is_empty() {
-                    out.push_str(&evaluator.expand_interpolation(&buf));
-                    buf.clear();
-                }
-                in_single = true;
-                out.push('\'');
-            } else {
-                in_single = false;
-                out.push('\'');
-            }
+            in_single = !in_single;
+            out.push('\'');
         } else if c == '"' && !in_single {
             in_double = !in_double;
-            buf.push('"');
+            out.push('"');
         } else if in_single {
+            // Single-quoted region: everything literal, no interpolation.
             out.push(c);
+        } else if c == '#' && chars.peek() == Some(&'{') {
+            // `#{...}` — substitute, with quote-aware escaping (#160 follow-up).
+            chars.next(); // consume '{'
+            let mut expr = String::new();
+            let mut depth = 1;
+            let mut terminated = false;
+            for ec in chars.by_ref() {
+                if ec == '{' {
+                    depth += 1;
+                } else if ec == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        terminated = true;
+                        break;
+                    }
+                }
+                expr.push(ec);
+            }
+            if !terminated {
+                // Unterminated — leave literal so errors are diagnosable.
+                out.push_str("#{");
+                out.push_str(&expr);
+                continue;
+            }
+            let expanded = match evaluator.eval_interpolated_expr(&expr) {
+                Ok(val) => val.to_rush_string(),
+                Err(_) => format!("#{{{expr}}}"),
+            };
+            // Unquoted interpolation must not get word-split by the
+            // downstream tokenizer (#160 — `v = "a b"; ls #{v}` was
+            // splitting into two args). Backslash-escape whitespace and
+            // backslash so the tokenizer's was_quoted-on-backslash path
+            // (set by #271) keeps the expansion as one token.
+            //
+            // Inside double quotes, the surrounding `"` already protects
+            // from splitting; we only need to escape characters that
+            // would prematurely close the quote or trigger re-expansion.
+            if in_double {
+                for ch in expanded.chars() {
+                    if matches!(ch, '"' | '\\' | '$' | '`') {
+                        out.push('\\');
+                    }
+                    out.push(ch);
+                }
+            } else {
+                for ch in expanded.chars() {
+                    if ch == '\\' || ch.is_whitespace() {
+                        out.push('\\');
+                    }
+                    out.push(ch);
+                }
+            }
         } else {
-            buf.push(c);
+            out.push(c);
         }
-    }
-    if !buf.is_empty() {
-        out.push_str(&evaluator.expand_interpolation(&buf));
     }
     out
 }
@@ -2076,6 +2118,31 @@ mod tests {
         let mut eval = Evaluator::new(&mut output);
         let expanded = expand_shell_interpolation("echo \"#{never\"", &mut eval);
         assert_eq!(expanded, "echo \"#{never\"");
+    }
+
+    #[test]
+    fn shell_segment_unquoted_interp_escapes_whitespace() {
+        // #160 follow-up: `v = "a b"; ls #{v}/` was tokenizing the
+        // expansion into two args (`a` and `b/`). Unquoted interpolation
+        // must protect IFS chars so the result reaches dispatch as one
+        // token. The downstream tokenizer treats backslash-escape as
+        // was_quoted (#271), preserving the boundary.
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("v = \"a b\"", &mut eval, None);
+        let expanded = expand_shell_interpolation("ls #{v}/", &mut eval);
+        assert_eq!(expanded, "ls a\\ b/");
+    }
+
+    #[test]
+    fn shell_segment_double_quoted_interp_keeps_space() {
+        // Inside double quotes, the surrounding `"` protects from
+        // splitting — no extra backslash needed for spaces.
+        let mut output = TestOutput::new();
+        let mut eval = Evaluator::new(&mut output);
+        let _ = dispatch("v = \"a b\"", &mut eval, None);
+        let expanded = expand_shell_interpolation("ls \"#{v}/\"", &mut eval);
+        assert_eq!(expanded, "ls \"a b/\"");
     }
 
     #[test]
