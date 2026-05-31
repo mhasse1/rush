@@ -2081,9 +2081,9 @@ mod tests {
     fn cdpath_hit_returns_full_path() {
         // #278: bare name found via CDPATH returns the joined path and
         // signals via_cdpath=true.
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("rush_cdpath_{}", std::process::id()));
         std::fs::create_dir_all(root.join("hit")).unwrap();
-        // Need to set CDPATH and cwd; do it in a guarded scope.
         let prev_cdpath = std::env::var("CDPATH").ok();
         let prev_cwd = std::env::current_dir().ok();
         unsafe { std::env::set_var("CDPATH", root.to_string_lossy().as_ref()); }
@@ -2105,6 +2105,7 @@ mod tests {
     #[test]
     fn cdpath_absolute_bypasses() {
         // #278: absolute targets bypass CDPATH (no via_cdpath, path unchanged).
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_cdpath = std::env::var("CDPATH").ok();
         unsafe { std::env::set_var("CDPATH", "/tmp/somewhere"); }
         let (path, via) = resolve_cd_target("/usr");
@@ -2119,6 +2120,7 @@ mod tests {
     #[test]
     fn cdpath_explicit_relative_bypasses() {
         // #278: ./foo and ../foo bypass CDPATH per POSIX.
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_cdpath = std::env::var("CDPATH").ok();
         unsafe { std::env::set_var("CDPATH", "/tmp/somewhere"); }
         let (path, via) = resolve_cd_target("./foo");
@@ -2387,6 +2389,7 @@ mod tests {
 
     #[test]
     fn env_var_in_command() {
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_default()

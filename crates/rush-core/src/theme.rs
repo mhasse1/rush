@@ -1137,6 +1137,7 @@ mod tests {
     #[test]
     fn rushbg_walks_to_ancestor() {
         // #298: .rushbg in a parent should be picked up from subdirs.
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let root = std::env::temp_dir().join(format!("rush_rushbg_{}", std::process::id()));
         let sub = root.join("sub/deep");
         std::fs::create_dir_all(&sub).unwrap();

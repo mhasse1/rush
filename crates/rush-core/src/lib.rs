@@ -28,6 +28,8 @@ pub mod plugin;
 pub mod objectify_config;
 pub mod lang_spec;
 #[cfg(test)]
+pub(crate) mod test_locks;
+#[cfg(test)]
 mod posix_tests;
 #[cfg(test)]
 mod integration_tests;

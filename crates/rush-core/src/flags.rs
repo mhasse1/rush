@@ -131,6 +131,7 @@ mod tests {
 
     #[test]
     fn set_and_check_errexit() {
+        let _g = crate::test_locks::FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_errexit(false);
         assert!(!errexit());
         set_errexit(true);
@@ -140,6 +141,7 @@ mod tests {
 
     #[test]
     fn set_and_check_noglob() {
+        let _g = crate::test_locks::FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_noglob(false);
         assert!(!noglob());
         set_noglob(true);
@@ -149,6 +151,7 @@ mod tests {
 
     #[test]
     fn handle_flags() {
+        let _g = crate::test_locks::FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         assert!(handle_set_flag("-e"));
         assert!(errexit());
         assert!(handle_set_flag("+e"));
@@ -158,6 +161,7 @@ mod tests {
 
     #[test]
     fn current_flags_string() {
+        let _g = crate::test_locks::FLAGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         set_errexit(false);
         set_noglob(false);
         set_xtrace(false);

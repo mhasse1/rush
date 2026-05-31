@@ -2630,6 +2630,7 @@ mod tests {
     fn platform_block_runs_on_match() {
         // #301: macos/linux/win64/isssh blocks execute their body when
         // RUSH_OS matches.
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var("RUSH_OS").ok();
         unsafe { std::env::set_var("RUSH_OS", "macos"); }
         let output = eval_output("macos\n  puts \"ran\"\nend\nputs \"after\"");
@@ -2648,6 +2649,7 @@ mod tests {
     #[test]
     fn platform_block_version_guard() {
         // #301: `macos.version >= 14` compares numerically when possible.
+        let _g = crate::test_locks::ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_os = std::env::var("RUSH_OS").ok();
         let prev_ver = std::env::var("RUSH_OS_VERSION").ok();
         unsafe { std::env::set_var("RUSH_OS", "macos"); }

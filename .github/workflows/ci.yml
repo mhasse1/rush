@@ -93,11 +93,11 @@ jobs:
         run: cargo build
 
       - name: Unit Tests
-        # --test-threads=1 because several tests mutate process-global
-        # state (env vars like RUSH_FLAVOR/RUSH_ACCENT, libc::umask,
-        # shell flag bits) without a per-test mutex. Running serial
-        # keeps CI deterministic; #239 tracks the per-test cleanup.
-        run: cargo test -- --test-threads=1
+        # Default parallelism. #239 added per-family test mutexes
+        # (ENV_LOCK in test_locks.rs, plus existing UMASK_LOCK /
+        # THEME_ENV_LOCK / FD_LOCK / CWD_LOCK / RUSH_BG_LOCK) so the
+        # process-global-state races no longer flake.
+        run: cargo test
 
       - name: LLM Mode Tests
         if: runner.os != 'Windows'
