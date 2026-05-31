@@ -432,6 +432,37 @@ fn run_with_redirects_capture(program: &str, args: &[&str], redirects: &[Redirec
 
 // ── Pipe Chains ─────────────────────────────────────────────────────
 
+/// Make the child's stderr follow whatever stdout becomes via dup2(1, 2).
+/// Used for `2>&1` inside a pipe chain so stderr also flows to the pipe
+/// (#302). On Unix we do this in pre_exec — after Stdio::piped() wires
+/// the child's stdout to the pipe's write end, the dup2 in the forked
+/// child makes fd 2 alias fd 1.
+///
+/// On Windows the equivalent (CreateNamedPipe + DuplicateHandle and
+/// passing both as the spawn's stdout + stderr) is more involved and
+/// not implemented here; `2>&1` inside a Windows pipe falls back to
+/// inherited stderr until a follow-up addresses it. The single-segment
+/// `2>&1` path (`run_with_redirects_capture`) already merges stderr
+/// post-hoc and works on both platforms.
+fn apply_stderr_follows_stdout(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::dup2(1, 2) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = cmd;
+    }
+}
+
 /// Run a pipeline: cmd1 | cmd2 | cmd3
 /// Each segment is fork/exec'd with pipe connecting stdout→stdin.
 /// Last segment inherits TTY stdout (unless capture=true).
@@ -440,18 +471,27 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
         return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
     }
 
-    // Parse each segment
-    let commands: Vec<Vec<String>> = segments.iter()
-        .map(|s| parse_and_expand(s.trim()))
+    // Parse each segment, then extract per-segment redirects. Without
+    // the extract step, tokens like `2>&1` would be passed through to
+    // the child as literal args (#302). The redirects layer on top of
+    // the pipe-imposed stdio below.
+    let parsed: Vec<(Vec<String>, Vec<Redirect>)> = segments.iter()
+        .map(|s| extract_redirections(parse_and_expand(s.trim())))
         .collect();
 
-    if commands.len() == 1 {
-        let parts = &commands[0];
+    if parsed.len() == 1 {
+        let (parts, redirects) = &parsed[0];
         if parts.is_empty() {
             return CommandResult { stdout: String::new(), stderr: String::new(), exit_code: 0 };
         }
         let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
-        return if capture_last {
+        return if !redirects.is_empty() {
+            if capture_last {
+                run_with_redirects_capture(&parts[0], &args, redirects)
+            } else {
+                run_with_redirects(&parts[0], &args, redirects)
+            }
+        } else if capture_last {
             run_command_capture(&parts[0], &args)
         } else {
             run_command(&parts[0], &args)
@@ -462,32 +502,116 @@ fn run_pipe_chain(segments: &[String], capture_last: bool) -> CommandResult {
     let mut prev_stdout: Option<std::process::ChildStdout> = None;
     let mut children: Vec<std::process::Child> = Vec::new();
 
-    for (i, parts) in commands.iter().enumerate() {
+    for (i, (parts, redirects)) in parsed.iter().enumerate() {
         if parts.is_empty() { continue; }
 
-        let stdin = if let Some(prev) = prev_stdout.take() {
+        let pipe_stdin = if let Some(prev) = prev_stdout.take() {
             Stdio::from(prev)
         } else {
             Stdio::inherit()
         };
 
-        let is_last = i == commands.len() - 1;
-        let stdout = if is_last && !capture_last {
+        let is_last = i == parsed.len() - 1;
+        let pipe_stdout = if is_last && !capture_last {
             Stdio::inherit()
         } else {
             Stdio::piped()
         };
+
+        // Layer per-segment redirects on top of pipe-imposed stdio.
+        // File redirects override the pipe-imposed end; `2>&1` makes
+        // stderr follow stdout via a Unix dup2 in pre_exec (Windows
+        // path is a follow-up — see #302).
+        let mut stdin_cfg = pipe_stdin;
+        let mut stdout_cfg = pipe_stdout;
+        let mut stderr_cfg = Stdio::inherit();
+        let mut stderr_to_stdout = false;
+        let mut redirect_error: Option<String> = None;
+
+        for redirect in redirects {
+            match redirect {
+                Redirect::StdoutWrite(path) => {
+                    if flags::noclobber() && std::path::Path::new(path).exists() {
+                        redirect_error = Some(format!("rush: {path}: cannot overwrite existing file (noclobber)"));
+                        break;
+                    }
+                    match std::fs::File::create(path) {
+                        Ok(f) => stdout_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StdoutClobber(path) => {
+                    match std::fs::File::create(path) {
+                        Ok(f) => stdout_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StdoutAppend(path) => {
+                    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                        Ok(f) => stdout_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StdinRead(path) => {
+                    match std::fs::File::open(path) {
+                        Ok(f) => stdin_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StderrWrite(path) => {
+                    match std::fs::File::create(path) {
+                        Ok(f) => stderr_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StderrAppend(path) => {
+                    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                        Ok(f) => stderr_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::StderrToStdout => { stderr_to_stdout = true; }
+                Redirect::ReadWrite(path) => {
+                    match std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path) {
+                        Ok(f) => stdin_cfg = Stdio::from(f),
+                        Err(e) => { redirect_error = Some(format!("rush: {path}: {e}")); break; }
+                    }
+                }
+                Redirect::FdDup(_, _) => {}
+                Redirect::FdClose(fd) => match fd {
+                    0 => stdin_cfg = Stdio::null(),
+                    1 => stdout_cfg = Stdio::null(),
+                    2 => stderr_cfg = Stdio::null(),
+                    _ => {}
+                },
+            }
+        }
+
+        if let Some(msg) = redirect_error {
+            for mut c in children {
+                let _ = c.kill();
+                let _ = c.wait();
+            }
+            return CommandResult {
+                stdout: String::new(),
+                stderr: msg,
+                exit_code: 1,
+            };
+        }
 
         let program = &parts[0];
         let args: Vec<&str> = parts[1..].iter().map(|s| s.as_str()).collect();
 
         let mut child_cmd = Command::new(program);
         fixup_argv0(&mut child_cmd, program);
+        if stderr_to_stdout {
+            apply_stderr_follows_stdout(&mut child_cmd);
+        }
         let spawn_result = child_cmd
             .args(&args)
-            .stdin(stdin)
-            .stdout(stdout)
-            .stderr(Stdio::inherit())
+            .stdin(stdin_cfg)
+            .stdout(stdout_cfg)
+            .stderr(stderr_cfg)
             .spawn();
 
         let spawn_result = match spawn_result {
@@ -2159,6 +2283,32 @@ mod tests {
         assert!(result.stdout.contains("to-stdout"));
         assert!(result.stdout.contains("to-stderr"));
         assert_eq!(result.exit_code, 0);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pipe_segment_strips_redirect_token() {
+        // #302: `2>&1` followed by a pipe was passed as a literal arg
+        // to the upstream command. With extract_redirections wired into
+        // run_pipe_chain, the redirect is intercepted.
+        let result = run_native_capture("echo hello 2>&1 | wc -c");
+        let n: i32 = result.stdout.trim().parse().unwrap_or(-1);
+        // "hello\n" = 6 bytes. Without the fix, echo would see args
+        // ["hello", "2>&1"] and emit "hello 2>&1\n" = 11 bytes.
+        assert_eq!(n, 6, "got: {:?}", result.stdout);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pipe_segment_2to1_routes_stderr_through_pipe() {
+        // #302: with `cmd 2>&1 | next`, stderr of `cmd` should reach
+        // `next` over the pipe. Use sh -c so the stderr write happens
+        // inside a single process the pipe gets piped to.
+        let result = run_native_capture(
+            "sh -c \"echo to-stderr 1>&2; echo to-stdout\" 2>&1 | wc -l"
+        );
+        let n: i32 = result.stdout.trim().parse().unwrap_or(-1);
+        assert_eq!(n, 2, "expected 2 lines (stderr + stdout); got: {:?}", result.stdout);
     }
 
     #[test]
