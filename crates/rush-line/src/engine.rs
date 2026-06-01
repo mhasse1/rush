@@ -288,7 +288,15 @@ impl LineEditor {
         // `Event::Paste` instead of streaming each char (and each
         // embedded \n triggering Submit). Best-effort: not every
         // emulator supports it; ignore the error.
-        let _ = execute!(io::stderr(), EnableBracketedPaste);
+        //
+        // #305: emit to stdout, not stderr. Some terminal emulators
+        // (notably tmux on some hosts) only treat the stdout stream
+        // as DECSET-bearing, so writing `\x1b[?2004h` to stderr
+        // silently failed to engage bracketed paste — pastes arrived
+        // as raw keystrokes and rush did O(n²) work building the
+        // line. Under tmux this manifested as a multi-minute freeze
+        // on large pastes and, with enough volume, an OOM.
+        let _ = execute!(io::stdout(), EnableBracketedPaste);
         let result = self.read_line_inner(
             prompt,
             #[cfg(unix)]
@@ -300,7 +308,7 @@ impl LineEditor {
             result.is_ok(),
             result.as_ref().err().map(|e| e.kind())
         );
-        let _ = execute!(io::stderr(), DisableBracketedPaste);
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
         crate::trace!("read_line", "DisableBracketedPaste sent");
         #[cfg(windows)]
         let _ = terminal::disable_raw_mode();
