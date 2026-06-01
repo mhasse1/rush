@@ -1111,6 +1111,20 @@ impl LineEditor {
         let after = self.buffer.after_cursor().to_string();
         let width = self.painter.screen_width();
 
+        // #305: skip the expensive per-repaint work (autosuggestion
+        // history scan, syntax highlighter Vec<char>::collect()) when
+        // the buffer is large. A 100 KB paste turned each of those
+        // O(n) loops into multi-second work and the whole repaint
+        // sometimes pathologically exploded (multi-GB allocations,
+        // OOM). The cap is generous (64 KB) — well above any
+        // hand-typed line, well below the regime that triggers the
+        // explosion. The user still gets correct display; they just
+        // lose syntax color and the inline hint while the line is
+        // unusually long.
+        const HEAVY_REPAINT_THRESHOLD: usize = 64 * 1024;
+        let buffer_size = self.buffer.text().len();
+        let skip_heavy = buffer_size > HEAVY_REPAINT_THRESHOLD;
+
         // Compute the autosuggestion hint. Only meaningful when the
         // cursor is at the end of the buffer (otherwise the hint
         // would visually float in the middle of edited text). And
@@ -1119,7 +1133,8 @@ impl LineEditor {
         // recalled "ls -la /tmp". Disabled in Ctrl-R search mode
         // since the buffer there is the matched entry, not user
         // input.
-        let hint = if self.hint_enabled
+        let hint = if !skip_heavy
+            && self.hint_enabled
             && after.is_empty()
             && self.search.is_none()
             && self
@@ -1162,7 +1177,8 @@ impl LineEditor {
         // (the search-mode "buffer" is the matched history entry, not
         // user input — the highlighter would decorate the recall, not
         // the typing).
-        let highlight_active = self.highlighter.is_some() && self.search.is_none();
+        let highlight_active =
+            !skip_heavy && self.highlighter.is_some() && self.search.is_none();
         let before_to_print = if highlight_active {
             coerce_crlf(&self.highlighter.as_deref().unwrap().highlight(&before))
                 .into_owned()
