@@ -928,24 +928,160 @@ fn run_dispatch_captured(input: &str, env: &mut Environment) -> (String, String,
     (stdout, stderr, exit_code)
 }
 
-/// Windows fallback: the old split path (no fd redirection). Pipeline
-/// operators may not work on Windows until this is unified.
-#[cfg(not(unix))]
+/// Windows fd-redirect capture (#209). Mirrors the Unix path: pipe +
+/// dup + dup2 of fd 1 / 2, then drainer threads.
+///
+/// Windows-specific complication: `std::process::Command::stdout(
+/// Stdio::inherit())` passes the Win32 STD_OUTPUT_HANDLE to the child,
+/// not the C fd 1. So `dup2(1, pipe_w)` alone redirects Rust's
+/// `println!` (CRT-level) but spawned child processes still write to
+/// the original console. We also need `SetStdHandle` so children
+/// inherit the redirected stdout. Symmetric for stderr.
+#[cfg(windows)]
 fn run_dispatch_captured(input: &str, env: &mut Environment) -> (String, String, i32) {
-    // Try Rush syntax first via Evaluator with CaptureOutput.
-    if let Ok(nodes) = parser::parse(input) {
-        let mut capture = CaptureOutput::new();
-        let owned_env = std::mem::take(env);
-        let mut eval = Evaluator::with_env(owned_env, &mut capture);
-        let _ = eval.exec_toplevel(&nodes);
-        let exit = eval.exit_code;
-        *env = eval.into_env();
-        if !capture.stdout_buf.is_empty() || !capture.stderr_buf.is_empty() || exit == 0 {
-            return (capture.stdout_buf, capture.stderr_buf, exit);
+    use std::sync::Mutex;
+
+    // Same intent as the Unix FD_LOCK: serialize captured dispatches
+    // since both fd 1/2 and the Win32 std handles are process-global.
+    static FD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = FD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    // Win32 surface we need. Kept as raw externs to avoid pulling in
+    // windows-sys for two functions and two constants.
+    type HANDLE = isize;
+    const STD_OUTPUT_HANDLE: u32 = 0xFFFF_FFF5; // -11 as u32
+    const STD_ERROR_HANDLE: u32 = 0xFFFF_FFF4;  // -12 as u32
+    const INVALID_HANDLE_VALUE: HANDLE = -1;
+    unsafe extern "system" {
+        fn GetStdHandle(nStdHandle: u32) -> HANDLE;
+        fn SetStdHandle(nStdHandle: u32, hHandle: HANDLE) -> i32;
+    }
+    // `libc::pipe` on Windows is link-mangled to `_pipe(fds, psize,
+    // textmode)`. O_BINARY = 0x8000 keeps newlines from getting
+    // translated mid-capture.
+    const O_BINARY: i32 = 0x8000;
+    const PIPE_SIZE: u32 = 64 * 1024;
+
+    fn make_pipe() -> std::io::Result<(i32, i32)> {
+        let mut fds = [0i32; 2];
+        let rc = unsafe { libc::pipe(fds.as_mut_ptr(), PIPE_SIZE, O_BINARY) };
+        if rc != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((fds[0], fds[1]))
+    }
+
+    let (out_r, out_w) = match make_pipe() {
+        Ok(p) => p,
+        Err(_) => return (String::new(), "rush: _pipe() failed".into(), 1),
+    };
+    let (err_r, err_w) = match make_pipe() {
+        Ok(p) => p,
+        Err(_) => {
+            unsafe { libc::close(out_r); libc::close(out_w); }
+            return (String::new(), "rush: _pipe() failed".into(), 1);
+        }
+    };
+
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+
+    // Save both CRT fd state AND Win32 std handles so we can restore
+    // both layers after dispatch.
+    let saved_out_fd = unsafe { libc::dup(1) };
+    let saved_err_fd = unsafe { libc::dup(2) };
+    let saved_out_handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    let saved_err_handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    if saved_out_fd < 0 || saved_err_fd < 0 {
+        unsafe {
+            libc::close(out_r); libc::close(out_w);
+            libc::close(err_r); libc::close(err_w);
+            if saved_out_fd >= 0 { libc::close(saved_out_fd); }
+            if saved_err_fd >= 0 { libc::close(saved_err_fd); }
+        }
+        return (String::new(), "rush: _dup() failed".into(), 1);
+    }
+
+    unsafe {
+        libc::dup2(out_w, 1);
+        libc::dup2(err_w, 2);
+        // The pipe-write fds are now also held by fds 1 and 2; we can
+        // drop the originals so the only refs are via 1 and 2.
+        libc::close(out_w);
+        libc::close(err_w);
+
+        // Point the Win32 stdio handles at the same pipe write-ends
+        // so spawned children inherit the redirected handles.
+        let new_out_handle = libc::get_osfhandle(1);
+        let new_err_handle = libc::get_osfhandle(2);
+        if new_out_handle != INVALID_HANDLE_VALUE {
+            SetStdHandle(STD_OUTPUT_HANDLE, new_out_handle);
+        }
+        if new_err_handle != INVALID_HANDLE_VALUE {
+            SetStdHandle(STD_ERROR_HANDLE, new_err_handle);
         }
     }
-    let result = process::run_native_capture(input);
-    (result.stdout, result.stderr, result.exit_code)
+
+    // Drainer threads. Read via libc::read in a loop — going through
+    // File::from_raw_fd / Handle conversions on Windows is a maze of
+    // type incompatibilities; a small read loop is clearer.
+    let out_handle_t = std::thread::spawn(move || -> String {
+        let mut acc: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = unsafe {
+                libc::read(out_r, chunk.as_mut_ptr().cast(), chunk.len() as u32)
+            };
+            if n <= 0 { break; }
+            acc.extend_from_slice(&chunk[..n as usize]);
+        }
+        unsafe { libc::close(out_r); }
+        String::from_utf8_lossy(&acc).into_owned()
+    });
+    let err_handle_t = std::thread::spawn(move || -> String {
+        let mut acc: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let n = unsafe {
+                libc::read(err_r, chunk.as_mut_ptr().cast(), chunk.len() as u32)
+            };
+            if n <= 0 { break; }
+            acc.extend_from_slice(&chunk[..n as usize]);
+        }
+        unsafe { libc::close(err_r); }
+        String::from_utf8_lossy(&acc).into_owned()
+    });
+
+    let exit_code;
+    {
+        let mut output = StdOutput;
+        let owned_env = std::mem::take(env);
+        let mut eval = Evaluator::with_env(owned_env, &mut output);
+        let result = dispatch::dispatch_with_jobs(input, &mut eval, None);
+        exit_code = result.exit_code;
+        *env = eval.into_env();
+    }
+
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+
+    // Restore in reverse: handles first (so any further use of stdio
+    // by other code in this thread goes back to the real terminal),
+    // then the CRT fds. Closing the write ends drops the last ref to
+    // the pipe write-end, which signals EOF to the drainers.
+    unsafe {
+        SetStdHandle(STD_OUTPUT_HANDLE, saved_out_handle);
+        SetStdHandle(STD_ERROR_HANDLE, saved_err_handle);
+        libc::dup2(saved_out_fd, 1);
+        libc::dup2(saved_err_fd, 2);
+        libc::close(saved_out_fd);
+        libc::close(saved_err_fd);
+    }
+
+    let stdout = out_handle_t.join().unwrap_or_default();
+    let stderr = err_handle_t.join().unwrap_or_default();
+    (stdout, stderr, exit_code)
 }
 
 /// Apply output limit — spool if stdout exceeds 32KB.
