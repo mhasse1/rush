@@ -234,11 +234,6 @@ fn llm__exit_with_code_preserves_code() {
 }
 
 /// Audit: F3 — MCP server does NOT terminate when a tools/call runs `exit`.
-// #209 follow-up: on Windows the `echo still-alive` second call doesn't
-// produce captured stdout (same fd-redirect gap), so the assertion fails
-// even though the server itself survived the exit. Worth retesting once
-// the Windows capture path lands.
-#[cfg_attr(windows, ignore = "Windows fd-redirect parity for --mcp shell subprocess capture (#209 follow-up)")]
 #[test]
 fn mcp__exit_in_tool_does_not_kill_server() {
     let stdin = format!(
@@ -443,11 +438,6 @@ fn llm__same_command_across_processes_is_deterministic() {
 // ── as json: serialization completeness ─────────────────────────────
 
 /// `as json` must produce valid JSON for arrays of hashes.
-// #209 follow-up: the Windows --llm fallback path (run_dispatch_captured in
-// llm.rs, cfg(not(unix))) doesn't redirect process fd 1, so pipeline
-// operators like `| as json` (which emit via println! in pipeline.rs) don't
-// land in the captured stdout buffer. Tracked separately.
-#[cfg_attr(windows, ignore = "Windows fd-redirect parity for --llm pipeline ops (#209 follow-up)")]
 #[test]
 fn llm__as_json_array_of_hashes() {
     let stdin = "[{a: 1, b: 2}, {a: 3, b: 4}] | as json\n";
@@ -541,7 +531,6 @@ fn llm__oneline_if_end_not_chain_split() {
 
 /// `as json` produces valid JSON for nested hashes.
 /// Regression guard for F7 (was emitting `:name` instead of `name`).
-#[cfg_attr(windows, ignore = "Windows fd-redirect parity for --llm pipeline ops (#209 follow-up)")]
 #[test]
 fn llm__as_json_nested_hash() {
     let stdin = r#"{name: "x", meta: {count: 3}} | as json"#.to_string() + "\n";
@@ -681,11 +670,6 @@ fn mcp__lang_spec_resource_present() {
 /// should not outlive it as orphans. A simple check: run a shell
 /// command that prints output, then close stdin; by the time rush
 /// exits, the shell subprocess must be gone.
-// #209 follow-up: same root cause as the `as json` cases — shell child
-// processes inherit fd 1, and the Windows fallback path doesn't redirect
-// it. Echo output goes to the parent's actual stdout (JSON-RPC channel)
-// instead of the capture buffer.
-#[cfg_attr(windows, ignore = "Windows fd-redirect parity for --llm shell subprocess capture (#209 follow-up)")]
 #[test]
 fn llm__shell_subprocess_completes_before_rush_exits() {
     let stdin = "echo subprocess-output\n";
