@@ -266,7 +266,11 @@ fn llm__malformed_envelope_returns_well_formed_error() {
 /// Envelope missing required "cmd" field returns a well-formed error.
 #[test]
 fn llm__envelope_missing_cmd_returns_error() {
-    let stdin = r#"{"cwd":"/tmp"}"#.to_string() + "\n";
+    // Use a guaranteed-to-exist cwd so the cwd validation passes and we
+    // actually probe the missing-cmd path. `/tmp` was hardcoded which
+    // fails on Windows CI runners (#303).
+    let cwd = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+    let stdin = format!(r#"{{"cwd":"{cwd}"}}"#) + "\n";
     let (objs, _stderr, _code) = drive(&["--llm"], &stdin);
     let error_result = &objs[1];
     assert_eq!(error_result["status"], "error");
