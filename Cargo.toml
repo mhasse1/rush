@@ -1,5 +1,15 @@
 [workspace]
-members = ["crates/rush-core", "crates/rush-cli", "crates/rush-ps-bridge", "crates/rush-agent", "crates/rush-line"]
+members = [
+    "crates/rush-core",
+    "crates/rush-cli",
+    "crates/rush-ps-bridge",
+    "crates/rush-agent",
+    "crates/rush-line",
+    # Toolkit binaries — extracted from rush-core so any shell can drive them.
+    # Pivot rationale: ship the AI/MCP/SSH/objectify value as standalone
+    # CLIs; let zsh/bash own the line editor. See chat log 2026-06-29.
+    "crates/ai",
+]
 resolver = "2"
 
 [workspace.package]

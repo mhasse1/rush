@@ -1,0 +1,16 @@
+[package]
+name = "ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Query an LLM from any shell — thin CLI over rush-core::ai"
+
+[dependencies]
+rush-core = { path = "../rush-core" }
+
+[[bin]]
+name = "ai"
+path = "src/main.rs"
+
+[lints]
+workspace = true
