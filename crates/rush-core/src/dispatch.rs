@@ -404,6 +404,7 @@ pub fn dispatch_with_jobs_and_builtins(
                             model.as_deref(),
                             &prompt,
                             Some(&upstream.stdout),
+                            &ai::build_system_prompt(),
                         ) {
                             Ok(_) => 0,
                             Err(e) => {

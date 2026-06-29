@@ -60,11 +60,14 @@ fn main() {
         std::process::exit(2);
     }
 
+    // Generic (shell-agnostic) system prompt — no rush-isms leak
+    // into responses for users coming from zsh / bash / fish.
     if let Err(e) = rush_core::ai::execute(
         provider.as_deref(),
         model.as_deref(),
         &prompt,
         piped.as_deref(),
+        &rush_core::ai::build_generic_system_prompt(),
     ) {
         eprintln!("ai: {e}");
         std::process::exit(1);

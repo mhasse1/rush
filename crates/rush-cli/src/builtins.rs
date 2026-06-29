@@ -1647,7 +1647,13 @@ fn handle_ai(args: &str) {
         eprintln!("usage: ai \"question\"");
         return;
     }
-    match rush_core::ai::execute(provider.as_deref(), model.as_deref(), &prompt, None) {
+    match rush_core::ai::execute(
+        provider.as_deref(),
+        model.as_deref(),
+        &prompt,
+        None,
+        &rush_core::ai::build_system_prompt(),
+    ) {
         Ok(_response) => {
             // Response already printed via streaming
         }

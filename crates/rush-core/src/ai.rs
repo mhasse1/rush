@@ -27,7 +27,12 @@ pub fn builtin_providers() -> Vec<AiProvider> {
     vec![
         AiProvider {
             name: "anthropic".into(),
-            default_model: "claude-sonnet-4-20250514".into(),
+            // Anthropic dropped `-latest` aliases for Claude 4. The
+            // closest auto-rolling form is the family+minor alias
+            // (`claude-haiku-4-5`) — it tracks the current patch of
+            // that minor automatically; update this manually when a
+            // new minor ships (e.g. 4.5 → 4.6).
+            default_model: "claude-haiku-4-5".into(),
             api_key_env: "ANTHROPIC_API_KEY".into(),
             endpoint: "https://api.anthropic.com/v1/messages".into(),
             format: ProviderFormat::Anthropic,
@@ -63,7 +68,13 @@ pub fn get_provider(name: &str) -> Option<AiProvider> {
         .find(|p| p.name.eq_ignore_ascii_case(name))
 }
 
-/// Build the system prompt for AI requests.
+/// Build the rush-flavored system prompt — injects the Rush language
+/// spec so the assistant suggests rush idioms.
+///
+/// Only used by callers that want the rush context (the rush built-in
+/// `ai` command, the agent loop). The standalone `ai` binary built
+/// for any-shell use should pass `build_generic_system_prompt()` (or
+/// an empty string) to `execute()` instead.
 pub fn build_system_prompt() -> String {
     let cwd = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
@@ -84,6 +95,24 @@ pub fn build_system_prompt() -> String {
     )
 }
 
+/// Build a shell-agnostic system prompt for the standalone `ai`
+/// binary. Carries minimal context (OS/arch/cwd) so suggestions
+/// match the host, without leaking Rush-flavor onto a zsh/bash user.
+pub fn build_generic_system_prompt() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    format!(
+        "You are a helpful AI assistant invoked from the command line.\n\
+         OS: {os}/{arch}\n\
+         CWD: {cwd}\n\
+         Be concise. When showing code or commands, use markdown fenced code blocks."
+    )
+}
+
 /// Build the user message, optionally including piped input.
 pub fn build_user_message(prompt: &str, piped_input: Option<&str>) -> String {
     if let Some(input) = piped_input {
@@ -95,11 +124,17 @@ pub fn build_user_message(prompt: &str, piped_input: Option<&str>) -> String {
 
 /// Execute an AI request with streaming output to stdout.
 /// Returns the full response text.
+///
+/// `system` is the assistant's system prompt — callers control the
+/// flavor. The rush built-in `ai` passes `build_system_prompt()`
+/// (rush language spec injected); the standalone `ai` binary passes
+/// `build_generic_system_prompt()` (no rush-isms).
 pub fn execute(
     provider_name: Option<&str>,
     model_override: Option<&str>,
     prompt: &str,
     piped_input: Option<&str>,
+    system: &str,
 ) -> Result<String, String> {
     let provider_name = provider_name.unwrap_or("anthropic");
     let provider = get_provider(provider_name)
@@ -120,10 +155,9 @@ pub fn execute(
         String::new()
     };
 
-    let system = build_system_prompt();
     let user_msg = build_user_message(prompt, piped_input);
 
-    stream_request(&provider, &model, &api_key, &system, &user_msg)
+    stream_request(&provider, &model, &api_key, system, &user_msg)
 }
 
 /// Make the streaming HTTP request and print tokens as they arrive.

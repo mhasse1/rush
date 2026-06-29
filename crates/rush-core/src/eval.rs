@@ -1952,7 +1952,13 @@ impl<'a> Evaluator<'a> {
             "ai" => {
                 let prompt = args.iter().map(|v| v.to_rush_string()).collect::<Vec<_>>().join(" ");
                 let (prompt, provider, model) = crate::ai::parse_ai_args(&prompt);
-                match crate::ai::execute(provider.as_deref(), model.as_deref(), &prompt, None) {
+                match crate::ai::execute(
+                    provider.as_deref(),
+                    model.as_deref(),
+                    &prompt,
+                    None,
+                    &crate::ai::build_system_prompt(),
+                ) {
                     Ok(response) => return Ok(Value::String(response)),
                     Err(e) => {
                         self.output.warn(&format!("ai: {e}"));
