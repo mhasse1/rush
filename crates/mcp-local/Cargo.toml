@@ -1,0 +1,16 @@
+[package]
+name = "mcp-local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Local MCP server — exposes the host shell to AI agents over JSON-RPC stdio"
+
+[dependencies]
+rush-core = { path = "../rush-core" }
+
+[[bin]]
+name = "mcp-local"
+path = "src/main.rs"
+
+[lints]
+workspace = true

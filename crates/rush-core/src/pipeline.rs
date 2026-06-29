@@ -449,6 +449,21 @@ fn apply_from(input: Value, args: &[String]) -> Value {
     }
 }
 
+/// Parse columnar text (first line = headers, subsequent lines = records)
+/// into a JSON array of objects. Exposed for the standalone `objectify`
+/// binary; the in-pipeline `apply_objectify` calls the same logic via
+/// `apply_objectify`.
+///
+/// Header columns are whitespace-split. The last column captures all
+/// remaining text on each row (handles `ps`'s `COMMAND`, `docker`'s
+/// `STATUS`, etc.). Values that parse as int or float come through as
+/// JSON numbers; everything else is a string.
+pub fn objectify_text_to_json(text: &str) -> String {
+    let value = apply_objectify(Value::String(text.to_string()));
+    let json = value_to_json(&value);
+    serde_json::to_string(&json).unwrap_or_else(|_| "[]".to_string())
+}
+
 fn apply_objectify(input: Value) -> Value {
     // If already objectified (array of hashes), pass through
     if let Value::Array(ref arr) = input {

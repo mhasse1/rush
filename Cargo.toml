@@ -9,6 +9,9 @@ members = [
     # Pivot rationale: ship the AI/MCP/SSH/objectify value as standalone
     # CLIs; let zsh/bash own the line editor. See chat log 2026-06-29.
     "crates/ai",
+    "crates/mcp-local",
+    "crates/mcp-ssh",
+    "crates/objectify",
 ]
 resolver = "2"
 

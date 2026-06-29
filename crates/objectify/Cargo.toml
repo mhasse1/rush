@@ -1,0 +1,16 @@
+[package]
+name = "objectify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Turn columnar shell output (ps, ls -la, df, ...) into a JSON array of records"
+
+[dependencies]
+rush-core = { path = "../rush-core" }
+
+[[bin]]
+name = "objectify"
+path = "src/main.rs"
+
+[lints]
+workspace = true
