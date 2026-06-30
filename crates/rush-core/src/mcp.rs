@@ -475,8 +475,28 @@ mod tests {
     fn resources_list() {
         let result = handle_resources_list().unwrap();
         let resources = result["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 1);
-        assert_eq!(resources[0]["uri"], "rush://lang-spec");
+        // Both rush://lang-spec (legacy) and toolkit://overview must be
+        // advertised so connecting LLMs can pick whichever family
+        // applies to their session.
+        assert_eq!(resources.len(), 2);
+        let uris: Vec<&str> = resources
+            .iter()
+            .map(|r| r["uri"].as_str().unwrap())
+            .collect();
+        assert!(uris.contains(&"rush://lang-spec"));
+        assert!(uris.contains(&"toolkit://overview"));
+    }
+
+    #[test]
+    fn resources_read_toolkit_overview() {
+        let params = json!({"uri": "toolkit://overview"});
+        let result = handle_resources_read(Some(&params)).unwrap();
+        let text = result["contents"][0]["text"].as_str().unwrap();
+        // Sanity check that include_str! actually pulled the markdown.
+        assert!(text.contains("# Toolkit Overview"));
+        assert!(text.contains("objectify"));
+        assert!(text.contains("`ai`"));
+        assert!(text.len() > 500);
     }
 
     #[test]
