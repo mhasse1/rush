@@ -265,7 +265,36 @@ fn write_file_ssh(host: &str, path: &str, content: &str, encoding: Option<&str>,
 
 // ── MCP Server ──────────────────────────────────────────────────────
 
+/// Rush-flavored SSH-gateway instructions (legacy `rush --mcp-ssh`).
+const RUSH_INSTRUCTIONS: &str = "Rush SSH gateway. Execute commands on remote hosts via SSH. All tools require a 'host' parameter. If Rush is installed on the remote, commands run in a persistent session with JSON protocol.";
+
+/// Toolkit-flavored SSH-gateway instructions (standalone `mcp-ssh`).
+/// Tells the LLM the gateway is shell-agnostic and what helpers it can
+/// expect on the remote host if the toolkit is deployed there.
+pub const TOOLKIT_INSTRUCTIONS: &str = "\
+SSH gateway. Each tool call carries a `host` parameter; commands run on that remote host \
+through a per-host SSH connection (reused across calls within a session). \
+The remote shell is whatever the user has configured (zsh, bash, fish, PowerShell). \
+If the toolkit is installed on the remote, `objectify`, `ai`, and `jq` are available there \
+for structured pipelines (e.g. `ssh host \"ps aux | objectify\" | jq '...'`). \
+Otherwise treat the remote as a plain shell.";
+
+use std::sync::OnceLock;
+static INSTRUCTIONS_OVERRIDE: OnceLock<&'static str> = OnceLock::new();
+
+/// Run the SSH gateway with the rush-flavored instructions (legacy
+/// `rush --mcp-ssh` callers).
 pub fn run() {
+    run_with_instructions(RUSH_INSTRUCTIONS);
+}
+
+/// Run the SSH gateway with caller-supplied instructions.
+pub fn run_with_instructions(instructions: &'static str) {
+    INSTRUCTIONS_OVERRIDE.set(instructions).ok();
+    run_inner();
+}
+
+fn run_inner() {
     eprintln!("[rush-ssh] Rush SSH gateway v{VERSION} starting");
 
     let stdin = std::io::stdin();
@@ -296,7 +325,7 @@ pub fn run() {
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {}, "resources": {} },
                 "serverInfo": { "name": "rush-ssh", "version": VERSION },
-                "instructions": "Rush SSH gateway. Execute commands on remote hosts via SSH. All tools require a 'host' parameter. If Rush is installed on the remote, commands run in a persistent session with JSON protocol."
+                "instructions": INSTRUCTIONS_OVERRIDE.get().copied().unwrap_or(RUSH_INSTRUCTIONS)
             })),
             "tools/list" => Ok(tools_list()),
             "tools/call" => handle_tools_call(msg.get("params"), &mut sessions, &mut raw_hosts),

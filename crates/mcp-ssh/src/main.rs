@@ -8,10 +8,10 @@
 //! reuses) a per-host SSH connection and runs the requested command
 //! there. Pairs with `mcp-local` (same wire protocol, local target).
 //!
-//! All routing + connection-pool logic lives in `rush_core::mcp_ssh`;
-//! this main is just the binary entry point so any agent can launch
-//! the gateway without going through `rush --mcp-ssh`.
+//! Uses toolkit-flavored handshake instructions so connecting LLMs
+//! are taught that the remote shell is whatever the user configured
+//! (zsh/bash/etc.) and which toolkit helpers may be available there.
 
 fn main() {
-    rush_core::mcp_ssh::run();
+    rush_core::mcp_ssh::run_with_instructions(rush_core::mcp_ssh::TOOLKIT_INSTRUCTIONS);
 }

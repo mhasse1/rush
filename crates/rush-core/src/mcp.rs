@@ -12,7 +12,9 @@ use crate::llm::{self, LlmSession};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const INSTRUCTIONS: &str = "\
+/// Rush-flavored MCP instructions. Used when this server is launched
+/// inside a rush shell session (via `rush --mcp`).
+const RUSH_INSTRUCTIONS: &str = "\
 Rush is a Unix-style shell with clean, intent-driven syntax. \
 Supports variables (x = 42), string interpolation (\"hello #{name}\"), \
 arrays ([1,2,3]), hashes ({a: 1}), control flow (if/unless/while/for-in), \
@@ -22,10 +24,45 @@ Rush is a command executor here, not a REPL — bare expressions (y.sum, x + 1) 
 evaluate but do not write to stdout. Wrap values you want returned with puts or print. \
 Read the rush://lang-spec resource for the full language specification.";
 
+/// Toolkit-flavored MCP instructions. Used when this server is the
+/// standalone `mcp-local` binary, i.e. the user is not necessarily
+/// in a rush shell. Teaches the LLM the toolkit family idiom rather
+/// than rush-the-language.
+pub const TOOLKIT_INSTRUCTIONS: &str = "\
+Local shell gateway. Each `shell_execute` runs a command in a persistent shell session \
+on this host (cwd, env, and shell state persist across calls). \
+The host has a small toolkit of structured-data helpers on PATH that compose with standard \
+Unix commands: \n\
+  - `objectify` — read columnar stdin (e.g. ps, df, ls -la, docker ps) and emit a JSON \
+array of objects. Pair with `jq` for filter/select/sort/aggregate. \n\
+  - `ai` — query an LLM (Anthropic / OpenAI / Gemini / Ollama). `ai \"question\"` or \
+`cat file | ai \"summarize\"`. Flags: `-p provider`, `-m model`. \n\
+  - `jq` — JSON query / transform. Use after `objectify` for structured pipelines. \n\
+Example: `ps aux | objectify | jq '.[] | select(.\"%CPU\" > 5)'` returns processes using \
+more than 5% CPU as structured records. \n\
+For file operations, prefer standard tools (cat, head, tail, wc) — they're always available \
+and the LLM agent should already know them.";
+
 use crate::lang_spec::LANG_SPEC;
 
-/// Run the MCP server on stdin/stdout.
+/// Run the MCP server with the rush-flavored instructions (legacy
+/// `rush --mcp` callers).
 pub fn run() {
+    run_with_instructions(RUSH_INSTRUCTIONS);
+}
+
+/// Run the MCP server with caller-supplied instructions. Lets the
+/// toolkit binary (`mcp-local`) advertise the toolkit family
+/// (objectify / ai / jq) while `rush --mcp` keeps teaching rush syntax.
+pub fn run_with_instructions(instructions: &'static str) {
+    INSTRUCTIONS_OVERRIDE.set(instructions).ok();
+    run_inner();
+}
+
+use std::sync::OnceLock;
+static INSTRUCTIONS_OVERRIDE: OnceLock<&'static str> = OnceLock::new();
+
+fn run_inner() {
     // Machine-friendly env
     unsafe {
         std::env::set_var("NO_COLOR", "1");
@@ -109,7 +146,7 @@ fn handle_initialize() -> Result<JsonValue, (i32, String)> {
             "name": "rush-local",
             "version": VERSION
         },
-        "instructions": INSTRUCTIONS
+        "instructions": INSTRUCTIONS_OVERRIDE.get().copied().unwrap_or(RUSH_INSTRUCTIONS)
     }))
 }
 
