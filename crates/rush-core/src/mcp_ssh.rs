@@ -329,11 +329,16 @@ fn run_inner() {
             })),
             "tools/list" => Ok(tools_list()),
             "tools/call" => handle_tools_call(msg.get("params"), &mut sessions, &mut raw_hosts),
-            "resources/list" => Ok(json!({ "resources": [{ "uri": "rush://lang-spec", "name": "Rush Language Specification", "mimeType": "text/yaml" }] })),
+            "resources/list" => Ok(json!({ "resources": [
+                { "uri": "rush://lang-spec", "name": "Rush Language Specification", "mimeType": "text/yaml" },
+                { "uri": "toolkit://overview", "name": "Toolkit Overview (ai / objectify / mcp-local / mcp-ssh)", "mimeType": "text/markdown" }
+            ] })),
             "resources/read" => {
                 let uri = msg.get("params").and_then(|p| p.get("uri")).and_then(|u| u.as_str());
                 if uri == Some("rush://lang-spec") {
                     Ok(json!({ "contents": [{ "uri": "rush://lang-spec", "mimeType": "text/yaml", "text": include_str!("../../../docs/rush-lang-spec.yaml") }] }))
+                } else if uri == Some("toolkit://overview") {
+                    Ok(json!({ "contents": [{ "uri": "toolkit://overview", "mimeType": "text/markdown", "text": include_str!("../../../docs/toolkit-overview.md") }] }))
                 } else {
                     Err((-32602, format!("Unknown resource: {}", uri.unwrap_or("?"))))
                 }

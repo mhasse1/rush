@@ -45,6 +45,11 @@ and the LLM agent should already know them.";
 
 use crate::lang_spec::LANG_SPEC;
 
+/// Long-form reference for the toolkit family. Served as the
+/// `toolkit://overview` MCP resource so an LLM can read the full guide
+/// on demand without bloating every `initialize` handshake.
+pub const TOOLKIT_OVERVIEW: &str = include_str!("../../../docs/toolkit-overview.md");
+
 /// Run the MCP server with the rush-flavored instructions (legacy
 /// `rush --mcp` callers).
 pub fn run() {
@@ -318,11 +323,18 @@ fn handle_tools_call(
 
 fn handle_resources_list() -> Result<JsonValue, (i32, String)> {
     Ok(json!({
-        "resources": [{
-            "uri": "rush://lang-spec",
-            "name": "Rush Language Specification",
-            "mimeType": "text/yaml"
-        }]
+        "resources": [
+            {
+                "uri": "rush://lang-spec",
+                "name": "Rush Language Specification",
+                "mimeType": "text/yaml"
+            },
+            {
+                "uri": "toolkit://overview",
+                "name": "Toolkit Overview (ai / objectify / mcp-local / mcp-ssh)",
+                "mimeType": "text/markdown"
+            }
+        ]
     }))
 }
 
@@ -334,17 +346,23 @@ fn handle_resources_read(params: Option<&JsonValue>) -> Result<JsonValue, (i32, 
         .and_then(|u| u.as_str())
         .ok_or((-32602, "Missing uri parameter".to_string()))?;
 
-    if uri != "rush://lang-spec" {
-        return Err((-32602, format!("Unknown resource: {uri}")));
+    match uri {
+        "rush://lang-spec" => Ok(json!({
+            "contents": [{
+                "uri": "rush://lang-spec",
+                "mimeType": "text/yaml",
+                "text": LANG_SPEC
+            }]
+        })),
+        "toolkit://overview" => Ok(json!({
+            "contents": [{
+                "uri": "toolkit://overview",
+                "mimeType": "text/markdown",
+                "text": TOOLKIT_OVERVIEW
+            }]
+        })),
+        _ => Err((-32602, format!("Unknown resource: {uri}"))),
     }
-
-    Ok(json!({
-        "contents": [{
-            "uri": "rush://lang-spec",
-            "mimeType": "text/yaml",
-            "text": LANG_SPEC
-        }]
-    }))
 }
 
 // ── JSON-RPC helpers ────────────────────────────────────────────────
